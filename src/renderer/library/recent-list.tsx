@@ -62,31 +62,41 @@ const CaptureRow = ({ capture }: { readonly capture: CaptureSummary }) => (
   </Item>
 );
 
+const Heading = () => (
+  <h1 className="font-heading text-2xl font-semibold">Recent captures</h1>
+);
+
 export const RecentList = () => {
   const captures = route.useLoaderData();
 
   if (captures.length === 0) {
     return (
-      <Empty>
-        <EmptyHeader>
-          <EmptyMedia variant="icon">
-            <HugeiconsIcon icon={PinLocation01Icon} />
-          </EmptyMedia>
-          <EmptyTitle>No captures yet</EmptyTitle>
-          <EmptyDescription>
-            Point at something in your work and press {shortcutLabel(isMac)}.
-            Saved captures appear here.
-          </EmptyDescription>
-        </EmptyHeader>
-      </Empty>
+      <>
+        <Heading />
+        <Empty>
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <HugeiconsIcon icon={PinLocation01Icon} />
+            </EmptyMedia>
+            <EmptyTitle>No captures yet</EmptyTitle>
+            <EmptyDescription>
+              Point at something in your work and press {shortcutLabel(isMac)}.
+              Saved captures appear here.
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      </>
     );
   }
 
   return (
-    <ItemGroup>
-      {captures.map((capture) => (
-        <CaptureRow capture={capture} key={capture.id} />
-      ))}
-    </ItemGroup>
+    <>
+      <Heading />
+      <ItemGroup>
+        {captures.map((capture) => (
+          <CaptureRow capture={capture} key={capture.id} />
+        ))}
+      </ItemGroup>
+    </>
   );
 };

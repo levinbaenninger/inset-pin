@@ -201,17 +201,6 @@ const SavedCaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
           {sourceText(capture.sourceLabel)} · {viaText(capture.invokedVia)}
         </p>
       </section>
-      <figure className="flex flex-col gap-2">
-        <SavedImage
-          alt="The approved crop with the pin on the point that matters"
-          image={capture.image}
-          pin={capture.pin}
-          size="full"
-        />
-        <figcaption className="text-muted-foreground text-xs">
-          The saved crop. Copy it, or drag it into another app with Drag image.
-        </figcaption>
-      </figure>
       <div className="flex flex-wrap items-center gap-2">
         <Button
           disabled={editing}
@@ -290,6 +279,17 @@ const SavedCaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
           {status}
         </p>
       </div>
+      <figure className="flex flex-col gap-2">
+        <SavedImage
+          alt="The approved crop with the pin on the point that matters"
+          image={capture.image}
+          pin={capture.pin}
+          size="full"
+        />
+        <figcaption className="text-muted-foreground text-xs">
+          The saved crop. Copy it, or drag it into another app with Drag image.
+        </figcaption>
+      </figure>
     </article>
   );
 };
@@ -320,6 +320,7 @@ export const CapturePage = () => {
       <div>
         <BackLink />
       </div>
+      <h1 className="sr-only">{detail.title}</h1>
       <SavedCaptureView
         capture={detail}
         key={`${detail.id}:${detail.updatedAt}`}
