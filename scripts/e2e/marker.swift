@@ -6,14 +6,19 @@ guard args.count == 4, let x = Double(args[1]), let y = Double(args[2]), let siz
   exit(64)
 }
 
+final class KeyableWindow: NSWindow {
+  override var canBecomeKey: Bool { true }
+  override var canBecomeMain: Bool { true }
+}
+
 let app = NSApplication.shared
 app.setActivationPolicy(.regular)
 
 let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
 let frame = NSRect(x: x - size / 2, y: primaryHeight - y - size / 2, width: size, height: size)
-let window = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
+let window = KeyableWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
 window.backgroundColor = NSColor(srgbRed: 1, green: 0, blue: 1, alpha: 1)
-window.level = .normal
+window.level = .floating
 window.isOpaque = true
 window.hasShadow = false
 window.makeKeyAndOrderFront(nil)
