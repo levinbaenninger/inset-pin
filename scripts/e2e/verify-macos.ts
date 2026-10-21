@@ -87,7 +87,18 @@ const frontmost = () =>
 const shortcut = () =>
   systemEvents('keystroke "p" using {command down, option down}');
 
-const typeText = (text: string) => systemEvents(`keystroke "${text}"`);
+/** A non-activating panel takes keys while the previous app stays frontmost, so only these two are safe. */
+const typeText = async (text: string) => {
+  const front = frontmost();
+
+  if (front !== "marker" && front !== processName) {
+    throw new Error(`refusing to type while ${front} is frontmost`);
+  }
+
+  systemEvents(`keystroke "${text}"`);
+  await delay(150);
+};
+
 const escape = () => systemEvents("key code 53");
 const commandEnter = () => systemEvents("key code 36 using {command down}");
 
@@ -269,7 +280,7 @@ const checkDismissAndRestore = async ({
   draftId,
   workApp,
 }: Awaited<ReturnType<typeof checkFirstPanel>>) => {
-  typeText("Total ignores discount");
+  await typeText("Total ignores discount");
   await delay(200);
 
   let mark = events().length;
@@ -304,7 +315,7 @@ const checkDismissAndRestore = async ({
       .some((e) => e.event === "capture")
   );
 
-  typeText(" row");
+  await typeText(" row");
   await delay(200);
   mark = events().length;
   pointer("click", marker.x, marker.y);
@@ -390,7 +401,7 @@ const checkSavedRecord = () => {
 
 const checkDiscard = async () => {
   await openPanel("discard flow");
-  typeText("throwaway");
+  await typeText("throwaway");
 
   const mark = events().length;
 
@@ -405,7 +416,7 @@ const checkDiscard = async () => {
 
 const checkFailedWrite = async () => {
   await openPanel("failed write");
-  typeText("Retry me");
+  await typeText("Retry me");
 
   let mark = events().length;
 
@@ -456,7 +467,7 @@ const checkQuitWithDraft = async (app: ChildProcess) => {
 
   const draft = await openPanel("quit with draft");
 
-  typeText("Keep me");
+  await typeText("Keep me");
   await delay(200);
   escape();
   await delay(300);
