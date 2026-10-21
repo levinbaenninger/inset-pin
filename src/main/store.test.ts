@@ -38,6 +38,12 @@ const record: CaptureRecordV1 = {
   updatedAt: "2026-10-21T18:40:31.002Z",
 };
 
+/** A retry of the same draft stamps a new updatedAt. */
+const retried: CaptureRecordV1 = {
+  ...record,
+  updatedAt: "2026-10-21T18:45:00.000Z",
+};
+
 type Op = "mkdir" | "readdir" | "readFile" | "write" | "rename" | "rm";
 
 type FailWhen = (op: Op, target: string) => boolean;
@@ -237,18 +243,34 @@ describe(openCaptureStore, () => {
     ]);
   });
 
-  it("treats a second publish of the same id as success with one directory", async () => {
+  it("treats a second publish of the same capture as success with one directory", async () => {
+    const store = await open();
+
+    await store.publish(record, PNG);
+
+    await expect(store.publish(retried, PNG)).resolves.toStrictEqual({
+      ok: true,
+      value: record,
+    });
+    await expect(listDir()).resolves.toStrictEqual([".staging", ".trash", ID]);
+  });
+
+  it("refuses a second publish of the same id with a different thought", async () => {
     const store = await open();
 
     await store.publish(record, PNG);
 
     await expect(
-      store.publish({ ...record, thought: "other" }, PNG)
+      store.publish({ ...retried, thought: "Edited before the retry" }, PNG)
     ).resolves.toStrictEqual({
-      ok: true,
-      value: record,
+      error: "writeFailed",
+      message: "Another entry already uses this capture id.",
+      ok: false,
     });
-    await expect(listDir()).resolves.toStrictEqual([".staging", ".trash", ID]);
+    expect(store.list()).toStrictEqual([{ id: ID, kind: "ok", record }]);
+    await expect(readText(ID, "capture.json")).resolves.toBe(
+      JSON.stringify(record, null, 2)
+    );
   });
 
   it("adopts an identical entry that already exists at the final path", async () => {
@@ -256,15 +278,35 @@ describe(openCaptureStore, () => {
 
     await seed(ID, JSON.stringify(record));
 
-    await expect(
-      store.publish({ ...record, thought: "retry" }, PNG)
-    ).resolves.toStrictEqual({
+    await expect(store.publish(retried, PNG)).resolves.toStrictEqual({
       ok: true,
       value: record,
     });
     expect(store.list()).toStrictEqual([{ id: ID, kind: "ok", record }]);
     await expect(listDir(".staging")).resolves.toStrictEqual([]);
   });
+
+  it.each<[string, Partial<CaptureRecordV1>]>([
+    ["thought", { thought: "Edited before the retry" }],
+    ["pin", { pin: { x: 241, y: 100 } }],
+    ["crop size", { image: { ...record.image, widthPx: 1358 } }],
+  ])(
+    "keeps the draft when the entry at the final path has a different %s",
+    async (_label, change) => {
+      const store = await open();
+
+      await seed(ID, JSON.stringify(record));
+
+      await expect(
+        store.publish({ ...retried, ...change }, PNG)
+      ).resolves.toMatchObject({ error: "writeFailed", ok: false });
+      expect(store.list()).toStrictEqual([]);
+      await expect(readText(ID, "capture.json")).resolves.toBe(
+        JSON.stringify(record)
+      );
+      await expect(listDir(".staging")).resolves.toStrictEqual([]);
+    }
+  );
 
   it("never rewrites or removes an entry from a newer version", async () => {
     const foreignJson = `{"schemaVersion":2,"id":"${FOREIGN_ID}"}`;

@@ -132,6 +132,14 @@ const failure = <T>(error: StoreError, message: string): StoreResult<T> => ({
 
 const success = <T>(value: T): StoreResult<T> => ({ ok: true, value });
 
+/** A retry of the same draft: the times may differ, the content may not. */
+const sameCapture = (a: CaptureRecordV1, b: CaptureRecordV1): boolean =>
+  a.thought === b.thought &&
+  a.pin.x === b.pin.x &&
+  a.pin.y === b.pin.y &&
+  a.image.widthPx === b.image.widthPx &&
+  a.image.heightPx === b.image.heightPx;
+
 const newestFirst = (a: StoredEntry, b: StoredEntry): number => {
   const timeA = a.kind === "ok" ? a.record.capturedAt : "";
   const timeB = b.kind === "ok" ? b.record.capturedAt : "";
@@ -270,13 +278,15 @@ export const openCaptureStore = async (
     notify();
   };
 
-  /** A same-id v1 entry already at the final path counts as this publish. */
+  /** A same-id v1 entry already at the final path counts as this publish if it holds the same capture. */
   const adoptExisting = async (
-    id: CaptureId
+    record: CaptureRecordV1
   ): Promise<CaptureRecordV1 | null> => {
-    const entry = await readEntry(id);
+    const entry = await readEntry(record.id);
 
-    return entry?.kind === "ok" ? entry.record : null;
+    return entry?.kind === "ok" && sameCapture(entry.record, record)
+      ? entry.record
+      : null;
   };
 
   const publishNow = async (
@@ -285,15 +295,10 @@ export const openCaptureStore = async (
   ): Promise<StoreResult<CaptureRecordV1>> => {
     const cached = cache.get(record.id);
 
-    if (cached?.kind === "ok") {
-      return success(cached.record);
-    }
-
     if (cached !== undefined) {
-      return failure(
-        "writeFailed",
-        "Another entry already uses this capture id."
-      );
+      return cached.kind === "ok" && sameCapture(cached.record, record)
+        ? success(cached.record)
+        : failure("writeFailed", "Another entry already uses this capture id.");
     }
 
     const parsed = CaptureRecordV1Schema.safeParse(record);
@@ -315,7 +320,7 @@ export const openCaptureStore = async (
     } catch (error) {
       await removeQuietly(staging);
 
-      const adopted = await adoptExisting(record.id);
+      const adopted = await adoptExisting(record);
 
       if (adopted === null) {
         return failure("writeFailed", errorMessage(error));
