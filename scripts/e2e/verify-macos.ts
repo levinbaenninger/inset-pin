@@ -31,6 +31,8 @@ const bin = path.join(work, "bin");
 const userData = path.join(work, "userData");
 const logFile = path.join(work, "events.jsonl");
 const marker = { size: 160, x: 1200, y: 700 };
+const markerBundleId = "ch.inset.e2e.marker";
+const markerApp = path.join(bin, "marker.app");
 const away = { x: 600, y: 400 };
 const thought = "Total ignores discount row";
 
@@ -127,6 +129,21 @@ const windowText = () =>
       try { return String(e.value() ?? "") + " " + String(e.name() ?? ""); } catch { return ""; }
     }).join(" ");`);
 
+/** Chromium builds its accessibility tree on the first query, so the first read can come back empty. */
+const windowShows = async (text: string, attempts = 5): Promise<boolean> => {
+  if (windowText().includes(text)) {
+    return true;
+  }
+
+  if (attempts <= 1) {
+    return false;
+  }
+
+  await delay(500);
+
+  return await windowShows(text, attempts - 1);
+};
+
 const trayItem = (item: string) =>
   osa(
     `tell application "System Events" to tell process "${processName}" to click menu bar item 1 of menu bar 2`,
@@ -205,6 +222,7 @@ const exited = async (child: ChildProcess) => {
 };
 
 const focusMarker = async () => {
+  osa(`tell application id "${markerBundleId}" to activate`);
   pointer("click", marker.x, marker.y);
   await delay(300);
 };
@@ -452,7 +470,7 @@ const checkLibrary = async () => {
   await delay(1500);
   record(
     "library lists the saved thought after restart",
-    windowText().includes(thought)
+    await windowShows(thought)
   );
   mark = events().length;
   closeWindow();
@@ -496,15 +514,30 @@ const checkQuitWithDraft = async (app: ChildProcess) => {
   );
 };
 
+/** macOS only lets a bundled app become frontmost, so the marker gets a minimal bundle. */
 const buildHelpers = () => {
-  mkdirSync(bin, { recursive: true });
+  mkdirSync(path.join(markerApp, "Contents/MacOS"), { recursive: true });
+  writeFileSync(
+    path.join(markerApp, "Contents/Info.plist"),
+    `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>${markerBundleId}</string>
+<key>CFBundleName</key><string>marker</string>
+<key>CFBundleExecutable</key><string>marker</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+</dict></plist>`
+  );
 
-  for (const name of ["pointer", "marker", "pixel"]) {
+  for (const [name, output] of [
+    ["pointer", path.join(bin, "pointer")],
+    ["marker", path.join(markerApp, "Contents/MacOS/marker")],
+    ["pixel", path.join(bin, "pixel")],
+  ] as const) {
     execFileSync("swiftc", [
       "-O",
       path.join(import.meta.dirname, `${name}.swift`),
       "-o",
-      path.join(bin, name),
+      output,
     ]);
   }
 };
@@ -516,8 +549,8 @@ const main = async () => {
     execFileSync("pnpm", ["build"], { cwd: root, stdio: "ignore" });
   }
 
-  const markerApp = spawn(
-    path.join(bin, "marker"),
+  const markerProcess = spawn(
+    path.join(markerApp, "Contents/MacOS/marker"),
     [String(marker.x), String(marker.y), String(marker.size)],
     { stdio: "ignore" }
   );
@@ -550,7 +583,7 @@ const main = async () => {
   await checkFailedWrite();
   await checkLibrary();
   await checkQuitWithDraft(app);
-  markerApp.kill();
+  markerProcess.kill();
 
   writeFileSync(
     path.join(work, "results.json"),
