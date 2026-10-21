@@ -1,0 +1,269 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  clampPin,
+  defaultCrop,
+  fitPreview,
+  imageToPreview,
+  normalizeGeometry,
+  pinInCrop,
+  pixelsPerDip,
+  placePopover,
+  previewToImage,
+  pt,
+  rect,
+  scaleCrop,
+  screenToImage,
+  size,
+} from "./geometry";
+import type { Point } from "./geometry";
+
+const retina = size<"image">(2880, 1800);
+
+describe(screenToImage, () => {
+  it("maps a 2x display by the actual image size", () => {
+    expect(
+      screenToImage(pt(720, 450), rect(0, 0, 1440, 900), retina)
+    ).toStrictEqual({
+      x: 1440,
+      y: 900,
+    });
+  });
+
+  it("handles a display with a negative origin", () => {
+    expect(
+      screenToImage(
+        pt(-1000, 300),
+        rect(-1920, 0, 1920, 1080),
+        size(1920, 1080)
+      )
+    ).toStrictEqual({ x: 920, y: 300 });
+  });
+
+  it("handles mixed scale with a negative vertical origin", () => {
+    expect(
+      screenToImage(
+        pt(3520, 140),
+        rect(2560, -400, 1920, 1080),
+        size(2400, 1350)
+      )
+    ).toStrictEqual({ x: 1200, y: 675 });
+  });
+
+  it("uses the delivered image size, not bounds × scaleFactor", () => {
+    expect(
+      screenToImage(pt(640, 400), rect(0, 0, 1280, 800), size(1280, 800))
+    ).toStrictEqual({ x: 640, y: 400 });
+  });
+
+  it("clamps the right and bottom edge to the last pixel", () => {
+    expect(
+      screenToImage(pt(1440, 900), rect(0, 0, 1440, 900), retina)
+    ).toStrictEqual({ x: 2879, y: 1799 });
+  });
+
+  it("floors fractional DIP points", () => {
+    expect(
+      screenToImage(pt(100.5, 50.25), rect(0, 0, 1440, 900), retina)
+    ).toStrictEqual({ x: 201, y: 100 });
+  });
+
+  it("keeps spaces apart at the type level", () => {
+    const screenPoint = pt<"screen">(1, 2);
+    // @ts-expect-error a screen point is not an image point
+    const imagePoint: Point<"image"> = screenPoint;
+
+    expect(imagePoint).toStrictEqual({ x: 1, y: 2 });
+  });
+});
+
+describe(pixelsPerDip, () => {
+  it("is the measured width ratio", () => {
+    expect(pixelsPerDip(rect(0, 0, 1920, 1080), size(2400, 1350))).toBe(1.25);
+  });
+});
+
+describe(defaultCrop, () => {
+  it("centres 480×300 DIP on the pin", () => {
+    expect(defaultCrop(pt(1440, 900), retina, 2)).toStrictEqual({
+      height: 600,
+      width: 960,
+      x: 960,
+      y: 600,
+    });
+  });
+
+  it("shifts into the image near the top-left and bottom-right edges", () => {
+    expect(defaultCrop(pt(50, 40), retina, 2)).toStrictEqual({
+      height: 600,
+      width: 960,
+      x: 0,
+      y: 0,
+    });
+    expect(defaultCrop(pt(2870, 1790), retina, 2)).toStrictEqual({
+      height: 600,
+      width: 960,
+      x: 1920,
+      y: 1200,
+    });
+  });
+
+  it("rounds the origin at a fractional scale", () => {
+    expect(defaultCrop(pt(1200, 675), size(2400, 1350), 1.25)).toStrictEqual({
+      height: 375,
+      width: 600,
+      x: 900,
+      y: 488,
+    });
+  });
+
+  it("shrinks only to an image smaller than the default", () => {
+    expect(defaultCrop(pt(100, 100), size(400, 250), 1)).toStrictEqual({
+      height: 250,
+      width: 400,
+      x: 0,
+      y: 0,
+    });
+  });
+});
+
+describe(scaleCrop, () => {
+  it("widens about the pin and keeps its relative position", () => {
+    const pin = pt<"image">(1200, 700);
+    const before = rect<"image">(960, 600, 960, 600);
+    const after = scaleCrop(before, pin, 2, retina, 2);
+
+    expect(after).toStrictEqual({ height: 1200, width: 1920, x: 720, y: 500 });
+    expect(pinInCrop(pin, before)).toStrictEqual({ x: 240, y: 100 });
+    expect(pinInCrop(pin, after)).toStrictEqual({ x: 480, y: 200 });
+    expect(240 / 960).toBe(480 / 1920);
+  });
+
+  it("keeps a pin near an edge on the same image detail after widening", () => {
+    const pin = pt<"image">(50, 40);
+    const after = scaleCrop(rect(0, 0, 960, 600), pin, 2, retina, 2);
+
+    expect(after).toStrictEqual({ height: 1200, width: 1920, x: 0, y: 0 });
+    expect(pinInCrop(pin, after)).toStrictEqual({ x: 50, y: 40 });
+  });
+
+  it("stops at the whole image", () => {
+    expect(
+      scaleCrop(rect(720, 500, 1920, 1200), pt(1200, 700), 2, retina, 2)
+    ).toStrictEqual({ height: 1800, width: 2880, x: 0, y: 0 });
+  });
+
+  it("stops tightening at 160×100 DIP", () => {
+    expect(
+      scaleCrop(rect(960, 600, 960, 600), pt(1200, 700), 0.25, retina, 2)
+    ).toStrictEqual({ height: 200, width: 320, x: 1120, y: 667 });
+  });
+});
+
+describe(clampPin, () => {
+  it("clamps into the crop", () => {
+    expect(clampPin(pt(5000, -3), rect(960, 600, 960, 600))).toStrictEqual({
+      x: 1919,
+      y: 600,
+    });
+  });
+});
+
+describe(normalizeGeometry, () => {
+  it("repairs an out-of-image crop and pulls the pin inside, idempotently", () => {
+    const once = normalizeGeometry(
+      { crop: rect(2800, 0, 960, 600), pin: pt(0, 0) },
+      retina,
+      2
+    );
+
+    expect(once).toStrictEqual({
+      crop: { height: 600, width: 960, x: 1920, y: 0 },
+      pin: { x: 1920, y: 0 },
+    });
+    expect(normalizeGeometry(once, retina, 2)).toStrictEqual(once);
+  });
+});
+
+describe("preview mapping", () => {
+  const crop = rect<"image">(960, 600, 960, 600);
+  const fit = fitPreview(crop, size(360, 240));
+
+  it("contain-fits the crop into the box", () => {
+    expect(fit).toStrictEqual({
+      box: { height: 225, width: 360 },
+      scale: 0.375,
+    });
+  });
+
+  it("maps preview to image and back", () => {
+    expect(previewToImage(pt(180, 112.5), crop, fit)).toStrictEqual({
+      x: 1440,
+      y: 900,
+    });
+    expect(imageToPreview(pt(1200, 700), crop, fit)).toStrictEqual({
+      x: 90,
+      y: 37.5,
+    });
+  });
+});
+
+describe(placePopover, () => {
+  const panel = size<"screen">(380, 300);
+  const workArea = rect<"screen">(0, 25, 1440, 875);
+
+  it("opens right of the anchor, a third above it", () => {
+    expect(placePopover(pt(200, 400), panel, workArea)).toStrictEqual({
+      height: 300,
+      width: 380,
+      x: 216,
+      y: 300,
+    });
+  });
+
+  it("flips left near the right edge", () => {
+    expect(placePopover(pt(1300, 400), panel, workArea)).toStrictEqual({
+      height: 300,
+      width: 380,
+      x: 904,
+      y: 300,
+    });
+  });
+
+  it("clamps to the bottom of the work area", () => {
+    expect(placePopover(pt(700, 860), panel, workArea)).toStrictEqual({
+      height: 300,
+      width: 380,
+      x: 716,
+      y: 600,
+    });
+  });
+
+  it("works on a display left of the primary", () => {
+    expect(
+      placePopover(pt(-100, 500), panel, rect(-1920, 0, 1920, 1040))
+    ).toStrictEqual({ height: 300, width: 380, x: -496, y: 400 });
+  });
+
+  it("clamps when neither side fits", () => {
+    expect(
+      placePopover(pt(300, 400), panel, rect(0, 0, 600, 800))
+    ).toStrictEqual({
+      height: 300,
+      width: 380,
+      x: 220,
+      y: 300,
+    });
+  });
+
+  it("cuts a panel taller than the work area to it", () => {
+    expect(placePopover(pt(200, 400), size(380, 1000), workArea)).toStrictEqual(
+      {
+        height: 875,
+        width: 380,
+        x: 216,
+        y: 25,
+      }
+    );
+  });
+});
