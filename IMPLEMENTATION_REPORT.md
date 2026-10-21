@@ -68,7 +68,7 @@ Negative display origins were not available physically. Unit tests cover them wi
 
 ### Real desktop runs (macOS, dev build)
 
-`scripts/e2e/verify-macos.ts dev` drove the built app from outside with real key presses and pointer events. It read real window bounds from the app's event log and checked the saved files. The last run passed 41 of 41 checks:
+`scripts/e2e/verify-macos.ts dev` drove the built app from outside with real key presses and pointer events. It read real window bounds from the app's event log and checked the saved files. The last run passed 47 of 47 checks:
 
 - Launch opens no window and does not take focus.
 - The shortcut captures before the panel appears. The panel was 380 × 414 DIP at (1216, 562), beside the point and not covering it. It was the only visible Inset window.
@@ -81,6 +81,9 @@ Negative display origins were not available physically. Unit tests cover them wi
 - A forced write failure keeps the panel open with the draft. A retry saves it.
 - **Recent captures…** opens the library only on request, and it lists the saved thought after the restart. `⌘W` closes it.
 - Quit with a draft shows the dialog. **Cancel** keeps the app and shows the same draft. **Discard** quits and saves nothing.
+- With the marker 60 DIP from the left screen edge, two clicks on **Widen context** grew the crop to 1921 × 1201 px. The pin pixel was still on the marker.
+- **New capture in 3 seconds** from the tray opened the panel at the pointer after the delay. The record stored `invokedVia: "trayDelayed"`, and its pin pixel was on the marker.
+- The marker app was quit before the library check, and the library still listed the saved thought.
 
 The desktop runs found two app defects, both fixed. `⌘W` did not close the library window. Content protection on the panel and the library hid both from screenshots and screen recordings, which the expo needs. The panel is hidden before every capture regardless, so the protection was removed.
 
@@ -100,9 +103,15 @@ Two independent reviews (Claude Opus and GPT Sol) read the full diff against the
 
 `electron-builder --mac --dir --arm64` produced an ad-hoc signed app (`codesign` reports `Signature=adhoc`, identifier `ch.inset.prototype.contextpin`). The asar contains only the built `out/` files and `package.json`, with no `node_modules`.
 
-`scripts/e2e/verify-macos.ts packaged` ran the same 41 checks against `release/mac-arm64/Inset Context Pin.app` and passed all of them. Focus return was observed with a separate marker app in front: focus went from the marker to the panel and back to the marker after Escape and after save.
+`scripts/e2e/verify-macos.ts packaged` ran the same 47 checks against `release/mac-arm64/Inset Context Pin.app` and passed all of them. Focus return was observed with a separate marker app in front: focus went from the marker to the panel and back to the marker after Escape and after save.
 
 A packaged app that the harness launches inherits screen access from the terminal host. The first-run grant of a downloaded app is therefore still untested (see below).
+
+### Continuous integration
+
+The first CI run on pull request #1 passed all four jobs: lint, typecheck, tests, and build on Ubuntu, then packaging on macOS and Windows runners. It produced `inset-context-pin-0.1.0-mac-arm64.dmg`, `-mac-x64.dmg`, and the matching zip files, plus `-win-x64.exe`, `-win-x64.zip`, and `-win-arm64.zip`. That run skipped code signing because electron-builder skips it for pull requests by default. CI now sets `CSC_FOR_PULL_REQUEST` so that pull request builds are ad-hoc signed like local builds.
+
+`release.yml` has not run yet. Its first run happens when a commit reaches `main`.
 
 ## What was not tested
 
@@ -111,7 +120,7 @@ A packaged app that the harness launches inherits screen access from the termina
 - **A second display during the desktop runs.** The pin-to-pixel check ran on the built-in display only. The spike covered two displays with mixed scale, but the full panel flow did not.
 - **Negative display origins** on real hardware.
 - **Permission refusal and the first-run grant.** The app shows a panel with **Open System Settings** and **Quit and Reopen** when macOS reports that screen access is missing. This path was not observed. Every test run launched the app from a terminal host that already had screen access, and macOS attributes the grant to that host. A packaged app opened from Finder asks for its own grant, and that first run is untested.
-- **Shortcut conflict.** Detection relies on `globalShortcut.register` returning false. No conflicting app was used.
+- **Shortcut conflict detection does not work across apps on macOS.** `scripts/e2e/hotkey-holder.swift` registered `⌥⌘P` through Carbon in a separate process. Electron's `globalShortcut.register` still returned true, so the tray kept showing "Capture under pointer: ⌥⌘P" instead of the conflict notice. The tray item **New capture in 3 seconds** is always present and was verified, so a participant whose shortcut is taken still has a working entry. The conflict notice appears only when Electron itself reports a failure.
 - **Copy image and file drag into a real receiving app.** Both are implemented and not verified with a receiving application.
 - **Screen readers.** The panel has labels and keyboard paths, but no screen reader test ran.
 - **The problem panel followed by a new capture.** When the problem panel is visible and the user presses the shortcut again, the app hides the panel and waits 150 ms before it captures. Whether that wait keeps the panel out of the image was not observed.
