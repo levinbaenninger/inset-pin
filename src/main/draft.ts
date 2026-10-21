@@ -160,6 +160,17 @@ const withContent = (state: DraftPhase, content: DraftContent): DraftPhase => ({
 const currentDraft = (state: DraftState, id: CaptureId): DraftPhase | null =>
   state.phase === "draft" && state.draft.id === id ? state : null;
 
+/** The current draft unless a save is running or the quit dialog is open; the panel cannot change it then. */
+const editableDraft = (state: DraftState, id: CaptureId): DraftPhase | null => {
+  const current = currentDraft(state, id);
+
+  return current === null ||
+    current.write.kind === "saving" ||
+    current.quit === "asking"
+    ? null
+    : current;
+};
+
 const onInvoked = (state: DraftState, invocation: Invocation): Step => {
   if (state.phase === "draft") {
     return state.surface === "shown"
@@ -215,13 +226,9 @@ const onSaveRequested = (
   id: CaptureId,
   content: DraftContent
 ): Step => {
-  const current = currentDraft(state, id);
+  const current = editableDraft(state, id);
 
-  if (
-    current === null ||
-    current.write.kind === "saving" ||
-    !canSaveThought(content.thought)
-  ) {
+  if (current === null || !canSaveThought(content.thought)) {
     return stay(state);
   }
 
@@ -284,11 +291,20 @@ const onQuitChoice = (state: DraftState, choice: QuitChoice): Step => {
     return stay(state);
   }
 
+  if (choice === "cancel") {
+    return to({ ...state, quit: "none" }, { type: "focus" });
+  }
+
+  // Never quit during a write: wait for it, and keep the draft if it fails.
+  if (state.write.kind === "saving") {
+    return stay({ ...state, quit: "afterSave" });
+  }
+
   if (choice === "discard") {
     return to(IDLE, { type: "quit" });
   }
 
-  if (choice === "save" && canSaveThought(state.draft.content.thought)) {
+  if (canSaveThought(state.draft.content.thought)) {
     const saving: DraftPhase = {
       ...state,
       quit: "afterSave",
@@ -323,9 +339,9 @@ export const step = (state: DraftState, event: DraftEvent): Step => {
     }
 
     case "edited": {
-      const current = currentDraft(state, event.id);
+      const current = editableDraft(state, event.id);
 
-      return current === null || current.write.kind === "saving"
+      return current === null
         ? stay(state)
         : stay(withContent(current, event.content));
     }
@@ -355,11 +371,7 @@ export const step = (state: DraftState, event: DraftEvent): Step => {
     }
 
     case "discarded": {
-      const current = currentDraft(state, event.id);
-
-      return current === null || current.write.kind === "saving"
-        ? stay(state)
-        : stay(IDLE);
+      return editableDraft(state, event.id) === null ? stay(state) : stay(IDLE);
     }
 
     case "quitHeld": {
@@ -536,13 +548,18 @@ const errorMessage = (cause: unknown): string =>
 
 type Dispatch = (event: DraftEvent) => void;
 
-/** What subscribers observe. Content edits change only the seed, which is read at mount. */
+/**
+ * What subscribers observe. Content edits change only the seed, which is
+ * read at mount. The quit phase counts so the panel gets a fresh view when
+ * the dialog closes, which ends the wait of a Save it sent meanwhile.
+ */
 const publicKey = (state: DraftState): string => {
   const view = viewOf(state);
 
   return JSON.stringify([
     view.kind === "draft" ? { ...view, seed: null } : view,
     trayOf(state),
+    state.phase === "draft" ? state.quit : null,
   ]);
 };
 
