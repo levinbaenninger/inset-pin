@@ -12,4 +12,23 @@ export default defineConfig({
   ignorePatterns: [...core.ignorePatterns, "src/renderer/components/ui/**"],
   jsPlugins: shadcn.jsPlugins,
   options: { typeAware: true },
+  overrides: [
+    {
+      files: ["src/shared/**"],
+      rules: {
+        "no-restricted-imports": [
+          "error",
+          {
+            paths: [
+              {
+                message:
+                  "src/shared is imported by every process; keep Electron out.",
+                name: "electron",
+              },
+            ],
+          },
+        ],
+      },
+    },
+  ],
 });
