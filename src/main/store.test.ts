@@ -48,7 +48,8 @@ interface FaultControl {
 
 let root = "";
 
-const relative = (target: string): string => target.replace(`${root}/`, "");
+const relative = (target: string): string =>
+  path.relative(root, target).split(path.sep).join("/");
 
 /** The real filesystem plus an operation log (root-relative) and injectable EIO faults. */
 const createFaultFs = () => {
