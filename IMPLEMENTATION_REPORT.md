@@ -57,7 +57,7 @@ Negative display origins were not available physically. Unit tests cover them wi
 
 ### Automated tests
 
-`pnpm test` runs 115 Vitest tests in 9 files. They cover:
+`pnpm test` runs 129 Vitest tests in 9 files. They cover:
 
 - Coordinate conversion with negative origins, mixed scale, and image sizes that differ from `bounds × scaleFactor`.
 - Default crop, widen, and tighten near image edges, with the pin staying on the same image pixel.
@@ -82,13 +82,27 @@ Negative display origins were not available physically. Unit tests cover them wi
 - **Recent captures…** opens the library only on request, and it lists the saved thought after the restart. `⌘W` closes it.
 - Quit with a draft shows the dialog. **Cancel** keeps the app and shows the same draft. **Discard** quits and saves nothing.
 
-The desktop runs found two defects, both fixed. `⌘W` did not close the library window, and the harness's own focus assumptions were wrong.
+The desktop runs found two app defects, both fixed. `⌘W` did not close the library window. Content protection on the panel and the library hid both from screenshots and screen recordings, which the expo needs. The panel is hidden before every capture regardless, so the protection was removed.
+
+### Code review
+
+Two independent reviews (Claude Opus and GPT Sol) read the full diff against the brief. They found no high-severity issue. These medium and low findings were fixed and have tests where a test is possible:
+
+- A failed start (for example an unwritable captures folder) now shows an error that names the folder and exits, instead of leaving an invisible process that holds the instance lock.
+- The panel stays inside the work area when its original display is gone.
+- While the quit dialog is open, the panel's own Save and Discard are ignored, and a save in progress finishes before the app quits.
+- The library locks the thought editor while it saves, and the "Thought saved." status stays visible.
+- A retried save adopts an existing record only when it holds the same capture.
+- The store syncs the `captures` folder after publishing a capture.
+- The crop preview measures the width it actually has.
 
 ### Packaged app (macOS)
 
 `electron-builder --mac --dir --arm64` produced an ad-hoc signed app (`codesign` reports `Signature=adhoc`, identifier `ch.inset.prototype.contextpin`). The asar contains only the built `out/` files and `package.json`, with no `node_modules`.
 
-PACKAGED_RESULTS
+`scripts/e2e/verify-macos.ts packaged` ran the same 41 checks against `release/mac-arm64/Inset Context Pin.app` and passed all of them. Focus return was observed with a separate marker app in front: focus went from the marker to the panel and back to the marker after Escape and after save.
+
+A packaged app that the harness launches inherits screen access from the terminal host. The first-run grant of a downloaded app is therefore still untested (see below).
 
 ## What was not tested
 
@@ -100,6 +114,8 @@ PACKAGED_RESULTS
 - **Shortcut conflict.** Detection relies on `globalShortcut.register` returning false. No conflicting app was used.
 - **Copy image and file drag into a real receiving app.** Both are implemented and not verified with a receiving application.
 - **Screen readers.** The panel has labels and keyboard paths, but no screen reader test ran.
+- **The problem panel followed by a new capture.** When the problem panel is visible and the user presses the shortcut again, the app hides the panel and waits 150 ms before it captures. Whether that wait keeps the panel out of the image was not observed.
+- **The startup error dialog.** The fix delegate saw the error message appear for an unwritable captures folder. Clicking OK, the exit code, and a working relaunch afterwards were not observed.
 
 ## Limitations and how they affect the experiment
 
