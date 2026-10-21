@@ -28,6 +28,8 @@ export interface StoreFs {
   readonly rename: (from: string, to: string) => Promise<void>;
   /** Recursive and forced. */
   readonly rm: (target: string) => Promise<void>;
+  /** Flushes a directory's entries, so a rename into it survives a crash. */
+  readonly syncDirectory: (target: string) => Promise<void>;
 }
 
 export const nodeStoreFs: StoreFs = {
@@ -41,6 +43,20 @@ export const nodeStoreFs: StoreFs = {
   },
   rm: async (target) => {
     await rm(target, { force: true, recursive: true });
+  },
+  syncDirectory: async (target) => {
+    // Node cannot open a directory for fsync on Windows.
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const handle = await open(target, "r");
+
+    try {
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
   },
   writeFileDurable: async (target, data) => {
     const handle = await open(target, "wx");
@@ -227,6 +243,14 @@ export const openCaptureStore = async (
     }
   };
 
+  const syncQuietly = async (dir: string): Promise<void> => {
+    try {
+      await fs.syncDirectory(dir);
+    } catch {
+      // Best effort: the entry is complete either way; only its survival of a power loss is at stake.
+    }
+  };
+
   const readEntry = async (name: string): Promise<StoredEntry | null> => {
     const id = CaptureIdSchema.safeParse(name);
 
@@ -331,6 +355,7 @@ export const openCaptureStore = async (
       return success(adopted);
     }
 
+    await syncQuietly(root);
     commit({ id: record.id, kind: "ok", record: parsed.data });
 
     return success(parsed.data);
