@@ -1,3 +1,5 @@
-import { contextBridge } from "electron";
+import { captureContract } from "@shared/contracts";
 
-contextBridge.exposeInMainWorld("inset", {});
+import { exposeContract } from "./expose";
+
+exposeContract(captureContract);

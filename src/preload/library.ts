@@ -1,3 +1,5 @@
-import { contextBridge } from "electron";
+import { libraryContract } from "@shared/contracts";
 
-contextBridge.exposeInMainWorld("inset", {});
+import { exposeContract } from "./expose";
+
+exposeContract(libraryContract);
