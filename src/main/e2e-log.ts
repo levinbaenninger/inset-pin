@@ -11,7 +11,8 @@ export type E2eEvent =
   | "saved"
   | "saveFailed"
   | "discarded"
-  | "libraryOpened";
+  | "libraryOpened"
+  | "libraryClosed";
 
 export interface E2eDetails {
   readonly bounds?: Rectangle;
