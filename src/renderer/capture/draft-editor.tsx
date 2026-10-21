@@ -31,11 +31,7 @@ export interface DraftEditorProps {
   readonly view: DraftView;
 }
 
-/**
- * The renderer is the only writer of draft content: every change goes to
- * main at once, so main has the latest copy on blur, quit or a crash. The
- * parent remounts this component on every show, seeded with main's copy.
- */
+/** Every change goes to main at once, so main has the latest copy on blur, quit or a crash. */
 export const DraftEditor = ({ view }: DraftEditorProps) => {
   const [content, setContent] = useState<DraftContent>(view.seed);
 

@@ -101,7 +101,7 @@ const updateThought = async (
 
 interface ThoughtEditorProps {
   readonly capture: SavedCapture;
-  /** Null means cancelled. The editor stays locked until this settles. */
+  /** Null means cancelled. */
   readonly onDone: (result: ActionResult | null) => Promise<void>;
 }
 

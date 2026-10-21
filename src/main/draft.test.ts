@@ -67,7 +67,6 @@ const typed = (thought: string): DraftContent => ({
   thought,
 });
 
-/** Folds events through the reducer and returns the last step. */
 const run = (state: DraftState, ...events: readonly DraftEvent[]): Step => {
   let last: Step = { effects: [], state };
 

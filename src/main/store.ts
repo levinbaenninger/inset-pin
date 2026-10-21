@@ -20,7 +20,7 @@ export interface StoreFs {
   readonly mkdir: (target: string) => Promise<void>;
   readonly readdir: (target: string) => Promise<string[]>;
   readonly readFile: (target: string) => Promise<Uint8Array>;
-  /** Exclusive create, write, fsync, close. */
+  /** Exclusive create, then fsync. */
   readonly writeFileDurable: (
     target: string,
     data: Uint8Array | string
@@ -70,7 +70,7 @@ export const nodeStoreFs: StoreFs = {
   },
 };
 
-/** INSET_FAIL_NEXT_WRITE: the next durable write fails once, for verifying the failed-save UI. */
+/** INSET_FAIL_NEXT_WRITE hook for verifying the failed-save UI. */
 export const failNextWrite = (fs: StoreFs): StoreFs => {
   let armed = true;
 
@@ -98,10 +98,9 @@ export type StoreResult<T> =
     };
 
 export interface CaptureStore {
-  /** From the cache, newest capture first. */
   readonly list: () => readonly StoredEntry[];
   readonly get: (id: CaptureId) => StoredEntry | undefined;
-  /** Main-process only (protocol, clipboard, drag); ok entries only. */
+  /** Main-process only (protocol, clipboard, drag). */
   readonly imageFile: (id: CaptureId) => string | null;
   readonly publish: (
     record: CaptureRecordV1,
@@ -112,7 +111,6 @@ export interface CaptureStore {
     thought: string
   ) => Promise<StoreResult<CaptureRecordV1>>;
   readonly remove: (id: CaptureId) => Promise<StoreResult<null>>;
-  /** Fires after each committed mutation. */
   readonly subscribe: (listener: () => void) => () => void;
 }
 
@@ -183,11 +181,9 @@ const settled = async <T>(run: Promise<T>): Promise<void> => {
 };
 
 /**
- * Directory-per-capture store under `root`. A capture is published by
- * renaming a fully written staging directory, so a listed entry is always
- * complete. Mutations run one at a time; the cache changes only after the
- * filesystem commit succeeded. The single-instance lock makes this process
- * the only writer, so the cache is authoritative.
+ * Publishing renames a fully written staging directory, so a listed entry is
+ * always complete. The cache changes only after the filesystem commit, and
+ * the single-instance lock makes it authoritative.
  */
 export const openCaptureStore = async (
   root: string,
@@ -201,7 +197,7 @@ export const openCaptureStore = async (
   const listeners = new Set<() => void>();
   let tail: Promise<void> = Promise.resolve();
 
-  /** Serialises mutations; the tail never rejects, so one failure never blocks the next task. */
+  /** The tail never rejects, so one failed task never blocks the next. */
   const enqueue = async <T>(task: () => Promise<T>): Promise<T> => {
     const run = after(tail, task);
 
@@ -247,7 +243,7 @@ export const openCaptureStore = async (
     try {
       await fs.syncDirectory(dir);
     } catch {
-      // Best effort: the entry is complete either way; only its survival of a power loss is at stake.
+      // Best effort: only the entry's survival of a power loss is at stake.
     }
   };
 
@@ -302,7 +298,6 @@ export const openCaptureStore = async (
     notify();
   };
 
-  /** A same-id v1 entry already at the final path counts as this publish if it holds the same capture. */
   const adoptExisting = async (
     record: CaptureRecordV1
   ): Promise<CaptureRecordV1 | null> => {

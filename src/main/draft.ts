@@ -30,7 +30,7 @@ export interface FramePixels {
   readonly cropPng: (crop: Rect<"image">) => Uint8Array;
 }
 
-/** The full-display capture. Memory only, never persisted. */
+/** Memory only, never persisted. */
 export interface CapturedFrame {
   readonly size: Size<"image">;
   readonly ppd: number;
@@ -48,7 +48,6 @@ export type Invocation =
       readonly anchor: Anchor;
       readonly at: Date;
     }
-  /** Tray "Show unsaved draft": never captures. */
   | { readonly kind: "reopen" };
 
 export type PointInvocation = Extract<Invocation, { kind: "point" }>;
@@ -61,7 +60,7 @@ export interface Draft {
   readonly via: PointVia;
   readonly anchor: Anchor;
   readonly frame: CapturedFrame;
-  /** The renderer's latest content, normalised against the frame. */
+  /** Always normalised against the frame. */
   readonly content: DraftContent;
 }
 
@@ -71,9 +70,7 @@ export type QuitChoice = "save" | "discard" | "cancel";
 
 export type DraftState =
   | { readonly phase: "idle" }
-  /** The surface is hidden by construction. */
   | { readonly phase: "capturing"; readonly invocation: PointInvocation }
-  /** Shown by construction. */
   | {
       readonly phase: "problem";
       readonly problem: CaptureProblem;
@@ -109,14 +106,12 @@ export type DraftEvent =
       readonly id: CaptureId;
       readonly message: string;
     }
-  /** Escape or blur. */
   | { readonly type: "dismissed" }
   | { readonly type: "discarded"; readonly id: CaptureId }
-  /** before-quit was prevented. */
   | { readonly type: "quitHeld" }
   | { readonly type: "quitChoice"; readonly choice: QuitChoice };
 
-/** Async I/O and one-shot actions only. Window visibility and the view are derived from state. */
+/** Window visibility and the view are derived from state, never emitted as effects. */
 export type Effect =
   | { readonly type: "capture"; readonly display: DisplaySnapshot }
   | { readonly type: "publish"; readonly draft: Draft }
@@ -160,7 +155,6 @@ const withContent = (state: DraftPhase, content: DraftContent): DraftPhase => ({
 const currentDraft = (state: DraftState, id: CaptureId): DraftPhase | null =>
   state.phase === "draft" && state.draft.id === id ? state : null;
 
-/** The current draft unless a save is running or the quit dialog is open; the panel cannot change it then. */
 const editableDraft = (state: DraftState, id: CaptureId): DraftPhase | null => {
   const current = currentDraft(state, id);
 
@@ -317,7 +311,7 @@ const onQuitChoice = (state: DraftState, choice: QuitChoice): Step => {
   return to({ ...state, quit: "none" }, { type: "focus" });
 };
 
-/** The whole draft lifecycle. Pure; unknown or stale events leave the state unchanged. */
+/** Pure; unknown or stale events leave the state unchanged. */
 export const step = (state: DraftState, event: DraftEvent): Step => {
   switch (event.type) {
     case "invoked": {
@@ -466,7 +460,7 @@ export const trayOf = (state: DraftState): TrayState => {
     : state.surface;
 };
 
-/** Quit gate. Meaningful means savable, so the dialog's Save is never a dead end. */
+/** Uses the savability rule, so the quit dialog's Save is never a dead end. */
 export const mayQuit = (state: DraftState): boolean =>
   !(
     state.phase === "draft" &&
@@ -497,7 +491,7 @@ export const toRecord = (draft: Draft, savedAt: Date): CaptureRecordV1 => {
 };
 
 export interface DraftSurface {
-  /** Shows beside the anchor once the renderer reports its height for this surface key. */
+  /** Waits briefly for the renderer's height report for this surface key before showing. */
   readonly show: (anchor: Anchor, surfaceKey: string) => void;
   readonly hide: () => void;
   readonly focus: () => void;
@@ -529,17 +523,11 @@ export interface DraftController {
   readonly save: (id: CaptureId, content: DraftContent) => void;
   readonly dismiss: () => void;
   readonly discard: (id: CaptureId) => void;
-  /**
-   * For before-quit. 'hold' means the caller must prevent the quit; the
-   * controller has started (or is already running) the Save/Discard/Cancel
-   * flow. Not a predicate: it dispatches.
-   */
+  /** Dispatches, so not a predicate; "hold" means the caller must prevent the quit. */
   readonly holdQuitIfNeeded: () => "allow" | "hold";
   readonly view: () => CaptureView;
   readonly tray: () => TrayState;
-  /** The current draft's frame only; serves inset://draft/<id>. */
   readonly frame: (id: CaptureId) => CapturedFrame | null;
-  /** Fires when the view (ignoring the seed) or the tray state changes. */
   readonly subscribe: (listener: () => void) => () => void;
 }
 
@@ -549,9 +537,8 @@ const errorMessage = (cause: unknown): string =>
 type Dispatch = (event: DraftEvent) => void;
 
 /**
- * What subscribers observe. Content edits change only the seed, which is
- * read at mount. The quit phase counts so the panel gets a fresh view when
- * the dialog closes, which ends the wait of a Save it sent meanwhile.
+ * The seed is left out because the panel reads it only at mount; the quit
+ * phase counts so closing the dialog ends the wait of a Save sent meanwhile.
  */
 const publicKey = (state: DraftState): string => {
   const view = viewOf(state);

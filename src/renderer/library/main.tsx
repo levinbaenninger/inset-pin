@@ -11,7 +11,6 @@ import { router } from "./router";
 
 followSystemTheme();
 
-// The store pushes after every committed change; loaders refetch from main's cache.
 libraryBridge().on("changed", () => {
   void router.invalidate();
 });

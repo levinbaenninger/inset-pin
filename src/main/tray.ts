@@ -12,7 +12,7 @@ export interface TrayOptions {
   readonly draftState: () => TrayState;
   readonly subscribe: (listener: () => void) => () => void;
   readonly showDraft: () => void;
-  /** Called after the delay, so the user can put the pointer back over their work first. */
+  /** Called after the delay, so the user can move the pointer back over their work. */
   readonly captureNow: () => void;
   readonly openLibrary: () => void;
   readonly quit: () => void;

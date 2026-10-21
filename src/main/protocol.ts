@@ -24,7 +24,7 @@ export const registerInsetScheme = (): void => {
 
 export interface ProtocolSources {
   readonly rendererRoot: string;
-  /** JPEG of the current draft's frame; null for any other id. */
+  /** Null for any id but the current draft's. */
   readonly draftPreview: (id: CaptureId) => Uint8Array | null;
   readonly captureImageFile: (id: CaptureId) => string | null;
 }
@@ -75,11 +75,7 @@ const serveAppFile = async (
   }
 };
 
-/**
- * inset://app serves the renderer bundle; inset://draft and inset://capture
- * serve images by validated id only. Image bytes are read into memory so no
- * file handle stays open (Windows renames fail while one is).
- */
+/** Image bytes are read into memory because Windows renames fail while a file handle is open. */
 export const handleInsetProtocol = (sources: ProtocolSources): void => {
   const root = path.resolve(sources.rendererRoot);
 

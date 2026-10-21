@@ -28,11 +28,6 @@ const parseImageId = (segments: readonly string[]): CaptureId | null => {
   return rest.length === 0 && id.success ? id.data : null;
 };
 
-/**
- * The only accepted inset:// shapes: app bundle files, the current draft
- * preview and saved crops, each addressed by a validated id. No queries,
- * fragments, credentials, ports, dot segments or extra path segments.
- */
 export const parseInsetUrl = (raw: string): InsetRequest | null => {
   if (UNSAFE_RAW.test(raw)) {
     return null;
@@ -72,7 +67,7 @@ export const parseInsetUrl = (raw: string): InsetRequest | null => {
   return url.host === "capture" ? { id, kind: "captureImage" } : null;
 };
 
-/** `scheme://host[:port]`; works for custom schemes, whose WHATWG origin is "null". */
+/** Built by hand because the WHATWG origin of a custom scheme is "null". */
 export const originOf = (raw: string): string | null => {
   const url = URL.parse(raw);
 

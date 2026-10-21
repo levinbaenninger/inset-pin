@@ -2,11 +2,7 @@ import { eventChannel, methodChannel } from "@shared/ipc";
 import type { Contract } from "@shared/ipc";
 import { contextBridge, ipcRenderer } from "electron";
 
-/**
- * Exposes exactly one contract under its window global: one function per
- * declared method and `on` for declared events. No channel can be named by
- * the page.
- */
+/** The page can call only declared methods and events; it can never name a channel. */
 export const exposeContract = (contract: Contract): void => {
   const methods = Object.fromEntries(
     Object.entries(contract.methods).map(([name, spec]) => {

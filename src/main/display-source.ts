@@ -8,7 +8,6 @@ interface RectLike {
   readonly height: number;
 }
 
-/** The fields of an Electron Display the app reads. */
 export interface DisplayLike {
   readonly id: number;
   readonly label: string;
@@ -28,21 +27,13 @@ export const snapshotDisplay = (display: DisplayLike): DisplaySnapshot => ({
   workArea: toScreenRect(display.workArea),
 });
 
-/**
- * getSources scales every screen to fit this size, so asking for the target
- * display's own pixel size yields full resolution for it. The real size is
- * read from the image afterwards.
- */
+/** getSources scales every screen to fit this size, so the display's own pixel size yields full resolution. */
 export const thumbnailSizeFor = (display: DisplaySnapshot): Size<"image"> => ({
   height: Math.round(display.bounds.height * display.scaleFactor),
   width: Math.round(display.bounds.width * display.scaleFactor),
 });
 
-/**
- * Index of the source showing the display: one exact display_id match, or
- * the only source when there is only one display (some systems report an
- * empty id). Never "the first source" of several.
- */
+/** Takes the only source for the only display because some systems report an empty display_id; never the first of several. */
 export const matchSource = (
   sources: readonly { readonly display_id: string }[],
   displayId: number,

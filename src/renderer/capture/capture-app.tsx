@@ -8,7 +8,6 @@ import { ProblemPanel } from "./problem-panel";
 
 const api = captureBridge();
 
-/** Main pushes every view change; the first view is fetched once at load. */
 const useCaptureView = (): CaptureView => {
   const [view, setView] = useState<CaptureView>({ kind: "none" });
 
@@ -59,11 +58,7 @@ const observeHeight = (
   };
 };
 
-/**
- * Reports the content height for each shown surface and on every resize.
- * Main reveals the panel on the report for the surface it is about to show,
- * so the panel opens at its final size.
- */
+/** Main reveals the panel on the report for its surface key, so the panel opens at its final size. */
 const useReportedHeight = (surfaceKey: string | null) => {
   const ref = useRef<HTMLElement>(null);
 
@@ -83,7 +78,7 @@ export const CaptureApp = () => {
   const surfaceKey = view.kind === "none" ? null : view.surfaceKey;
   const ref = useReportedHeight(surfaceKey);
 
-  // Keyed by surface key: every show mounts fresh from main's latest content and focuses the thought.
+  // Keyed by surface key so every show mounts fresh from main's latest content.
   return (
     <main className="bg-background text-foreground" ref={ref}>
       {view.kind === "draft" ? (

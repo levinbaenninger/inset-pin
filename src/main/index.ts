@@ -56,7 +56,7 @@ const logRejected = (channel: string, reason: string): void => {
 const errorMessage = (cause: unknown): string =>
   cause instanceof Error ? cause.message : "Unknown error";
 
-/** A startup step that failed, explained so the user can act on it. */
+/** Its message is shown to the user, so it must say how to act on it. */
 class StartupError extends Error {
   override readonly name = "StartupError";
 }

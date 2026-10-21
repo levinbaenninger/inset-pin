@@ -52,7 +52,6 @@ const draftItems = (draft: TrayState): readonly TrayItem[] => {
   return [];
 };
 
-/** The tray menu as data, derived from the draft and shortcut state. */
 export const trayMenu = (model: TrayModel): readonly TrayItem[] => {
   const shortcut = shortcutLabel(model.isMac);
   const canCapture = model.draft === "none" && !model.countdownPending;

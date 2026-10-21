@@ -9,13 +9,10 @@ import type { MessageBoxOptions, Rectangle, WebContents } from "electron";
 import type { Anchor, DraftSurface, QuitChoice } from "./draft";
 import { harden, secureWebPreferences } from "./window-security";
 
-/** First guess before the renderer reports its real content height. */
 const INITIAL_HEIGHT = 320;
-
-/** Upper bound on waiting for the renderer's height before showing anyway. */
 const HEIGHT_WAIT_MS = 250;
 
-/** Time for the compositor to drop the hidden panel before a capture. Not measured; see report. */
+/** Lets the compositor drop the hidden panel before a capture; not measured, see report. */
 const HIDE_SETTLE_MS = 150;
 const QUIT_CHOICES: readonly QuitChoice[] = ["save", "discard", "cancel"];
 
@@ -37,7 +34,7 @@ export interface CaptureSurface extends DraftSurface {
   readonly onDismissRequest: (listener: () => void) => void;
   readonly onShown: (listener: (bounds: Rectangle) => void) => void;
   readonly onHidden: (listener: () => void) => void;
-  /** After the quit gate allowed quitting, let the window close instead of dismissing. */
+  /** Once quitting is allowed, close the window instead of dismissing it. */
   readonly allowClose: () => void;
 }
 
@@ -57,7 +54,6 @@ const noopBounds = (_bounds: Rectangle): void => undefined;
 const backgroundColor = (): string =>
   nativeTheme.shouldUseDarkColors ? "#0a0a0a" : "#ffffff";
 
-/** The display of the original point if still attached, else the nearest one. */
 const workAreaFor = (anchor: Anchor): Rect<"screen"> => {
   const display =
     screen
@@ -70,11 +66,7 @@ const workAreaFor = (anchor: Anchor): Rect<"screen"> => {
   return rect(x, y, width, height);
 };
 
-/**
- * The capture panel: one small frameless window, created hidden at launch
- * and reused. It is shown beside the anchor only after the renderer has
- * reported its content height, so it opens at its final size.
- */
+/** Waits briefly for the renderer's content height before showing, so the panel opens at its final size. */
 export const createCaptureSurface = (
   options: SurfaceOptions
 ): CaptureSurface => {
@@ -100,7 +92,6 @@ export const createCaptureSurface = (
   let anchor: Anchor | null = null;
   let contentHeight = INITIAL_HEIGHT;
   let revealTimer: NodeJS.Timeout | undefined;
-  /** The surface key a pending show waits for; null when nothing is pending. */
   let pendingKey: string | null = null;
   const pending = new EventTarget();
   let hiddenAt = 0;
@@ -135,18 +126,13 @@ export const createCaptureSurface = (
     pending.dispatchEvent(new Event("settled"));
   };
 
-  /** Resolves once a scheduled show has happened or was cancelled; bounded by HEIGHT_WAIT_MS. */
   const pendingSettled = async (): Promise<void> => {
     if (pendingKey !== null) {
       await once(pending, "settled");
     }
   };
 
-  /**
-   * Windows leaves the panel clickable behind a parentless dialog, so the
-   * panel owns it there. macOS already runs a parentless alert app-modal,
-   * and a parent would turn it into a sheet on the frameless panel.
-   */
+  /** Windows leaves the panel clickable behind a parentless dialog; on macOS a parent would turn the app-modal alert into a sheet. */
   const quitDialogParent = async (): Promise<BrowserWindow | null> => {
     if (isMac) {
       return null;

@@ -5,7 +5,7 @@ import type { PageName } from "@shared/inset-url";
 import { app, session } from "electron";
 import type { WebContents, WebPreferences } from "electron";
 
-/** Production pages come from inset://app with this header (see protocol.ts). */
+/** Sent by protocol.ts with every inset://app page. */
 export const APP_CSP = [
   "default-src 'self'",
   "script-src 'self'",
@@ -31,7 +31,7 @@ const DEV_CSP = [
   "base-uri 'none'",
 ].join("; ");
 
-/** electron-vite's dev server; ignored in a packaged app so the env cannot redirect it. */
+/** Ignored in a packaged app so the environment cannot redirect it. */
 const devServerUrl = (): string | null => {
   const url = process.env.ELECTRON_RENDERER_URL;
 
@@ -66,7 +66,6 @@ export const secureWebPreferences = (preload: string): WebPreferences => ({
   webSecurity: true,
 });
 
-/** No popups, navigation or webviews: each window shows exactly its own page. */
 export const harden = (contents: WebContents, name: string): void => {
   contents.setWindowOpenHandler(() => ({ action: "deny" }));
   contents.on("will-navigate", (event) => {
@@ -92,7 +91,6 @@ export const harden = (contents: WebContents, name: string): void => {
   }
 };
 
-/** Deny every permission request; CSP for development pages (production sets it in protocol.ts). */
 export const secureSession = (): void => {
   session.defaultSession.setPermissionRequestHandler(
     (_contents, _permission, respond) => {

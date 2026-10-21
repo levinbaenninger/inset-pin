@@ -18,7 +18,7 @@ export const THOUGHT_MAX = 10_000;
 export const TITLE_MAX = 80;
 export const UNTITLED = "Untitled capture";
 
-/** The single savability rule: Save button, reducer, quit gate and library edit. */
+/** The one savability rule, shared by the Save button, reducer, quit gate and library edit. */
 export const canSaveThought = (thought: string): boolean =>
   thought.trim().length > 0;
 
@@ -103,11 +103,7 @@ export const JsonTextSchema = z
     }
   });
 
-/**
- * Classifies one capture directory. A name that is not a lowercase UUID is
- * not an entry. The version is probed before the v1 parse, so a newer record
- * is never reported as damaged.
- */
+/** The version is probed before the v1 parse, so a newer record is never reported as damaged. */
 export const parseStoredEntry = (
   dirName: string,
   json: string
@@ -159,7 +155,7 @@ export const parseStoredEntry = (
   return { id: id.data, kind: "ok", record: record.data };
 };
 
-/** First non-blank line, whitespace collapsed, at most TITLE_MAX characters. Never stored. */
+/** Never stored. */
 export const deriveTitle = (thought: string): string => {
   const line = thought
     .split(LINE_BREAK)

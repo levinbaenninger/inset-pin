@@ -12,7 +12,6 @@ const dateTime = new Intl.DateTimeFormat(undefined, {
 export const formatCaptureTime = (iso: string): string =>
   dateTime.format(new Date(iso));
 
-/** Factual only: the display's own name, or nothing. */
 export const sourceText = (label: string | null): string =>
   label ?? "Screen capture";
 
