@@ -38,6 +38,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
+import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { libraryBridge } from "@/shared/bridge";
 import { useLocalKeys } from "@/shared/keys";
@@ -81,9 +82,27 @@ const Unavailable = ({
   </Empty>
 );
 
+const NOT_SAVED: ActionResult = {
+  message: "The thought could not be saved. Try again.",
+  ok: false,
+};
+
+/** Never rejects, so the editor always unlocks. */
+const updateThought = async (
+  id: SavedCapture["id"],
+  thought: string
+): Promise<ActionResult> => {
+  try {
+    return await api.updateThought({ id, thought });
+  } catch {
+    return NOT_SAVED;
+  }
+};
+
 interface ThoughtEditorProps {
   readonly capture: SavedCapture;
-  readonly onDone: (result: ActionResult | null) => void;
+  /** Null means cancelled. The editor stays locked until this settles. */
+  readonly onDone: (result: ActionResult | null) => Promise<void>;
 }
 
 const ThoughtEditor = ({ capture, onDone }: ThoughtEditorProps) => {
@@ -91,22 +110,22 @@ const ThoughtEditor = ({ capture, onDone }: ThoughtEditorProps) => {
   const [saving, setSaving] = useState(false);
   const savable = canSaveThought(thought) && !saving;
 
+  // The field and Cancel stay locked until the save settles, so no edit is silently dropped.
   const save = useCallback(async (): Promise<void> => {
     if (!savable) {
       return;
     }
 
     setSaving(true);
-
-    const result = await api.updateThought({ id: capture.id, thought });
-
+    await onDone(await updateThought(capture.id, thought));
     setSaving(false);
-    onDone(result);
   }, [capture.id, onDone, savable, thought]);
 
   const cancel = useCallback((): void => {
-    onDone(null);
-  }, [onDone]);
+    if (!saving) {
+      void onDone(null);
+    }
+  }, [onDone, saving]);
 
   const saveNow = useCallback((): void => {
     void save();
@@ -130,13 +149,21 @@ const ThoughtEditor = ({ capture, onDone }: ThoughtEditorProps) => {
         onChange={(event) => {
           setThought(event.target.value);
         }}
+        readOnly={saving}
         value={thought}
       />
       <div className="flex justify-end gap-2">
-        <Button onClick={cancel} size="sm" type="button" variant="ghost">
+        <Button
+          disabled={saving}
+          onClick={cancel}
+          size="sm"
+          type="button"
+          variant="ghost"
+        >
           Cancel
         </Button>
         <Button disabled={!savable} size="sm" type="submit">
+          {saving ? <Spinner data-icon="inline-start" /> : null}
           Save thought
         </Button>
       </div>
@@ -164,14 +191,24 @@ const SavedCaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
   };
 
   const finishEdit = useCallback(
-    (result: ActionResult | null): void => {
-      if (result === null || result.ok) {
+    async (result: ActionResult | null): Promise<void> => {
+      if (result === null) {
         setEditing(false);
-        setStatus(result === null ? "" : "Thought saved.");
-        void router.invalidate();
-      } else {
-        setStatus(result.message);
+        setStatus("");
+
+        return;
       }
+
+      if (!result.ok) {
+        setStatus(result.message);
+
+        return;
+      }
+
+      // Leave the editor only once the new thought is loaded, so the old one never flashes.
+      await router.invalidate();
+      setEditing(false);
+      setStatus("Thought saved.");
     },
     [router]
   );
@@ -321,10 +358,8 @@ export const CapturePage = () => {
         <BackLink />
       </div>
       <h1 className="sr-only">{detail.title}</h1>
-      <SavedCaptureView
-        capture={detail}
-        key={`${detail.id}:${detail.updatedAt}`}
-      />
+      {/* Keyed by id only: a refresh after an edit keeps the status line and its announcement. */}
+      <SavedCaptureView capture={detail} key={detail.id} />
     </div>
   );
 };
