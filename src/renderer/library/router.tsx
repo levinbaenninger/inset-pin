@@ -17,7 +17,6 @@ const api = libraryBridge();
 const RootLayout = () => (
   <div className="bg-background text-foreground min-h-svh">
     <main className="mx-auto flex max-w-3xl flex-col gap-6 px-6 py-8">
-      <h1 className="font-heading text-2xl font-semibold">Recent captures</h1>
       <Outlet />
     </main>
   </div>
