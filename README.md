@@ -81,7 +81,7 @@ To build installers on your machine, run `pnpm package:mac` on macOS or `pnpm pa
 
 ### Verify on the real macOS desktop
 
-`scripts/e2e/verify-macos.ts` drives the real app from outside. It presses the global shortcut over a marker window and checks the panel size and position. It also checks draft retention, focus return, the saved pin pixel, failed writes, restarts, the library, and the quit dialog. It reads the app's own event log and real window bounds.
+`scripts/e2e/verify-macos.ts` drives the real app from outside. It presses the global shortcut over a marker window and checks the panel size and position. It also checks draft retention, focus return, the saved pin pixel, widening near a screen edge, the tray fallback, failed writes, restarts, the library, and the quit dialog. It reads the app's own event log and real window bounds.
 
 ```sh
 node scripts/e2e/verify-macos.ts dev       # builds, then tests out/ with Electron
@@ -92,7 +92,7 @@ The script takes over the mouse and keyboard for about a minute. The terminal ne
 
 ## Release
 
-`.github/workflows/release.yml` publishes builds to GitHub Releases.
+`.github/workflows/release.yml` publishes builds to GitHub Releases. It has not run yet. Its first run happens when this branch reaches `main`.
 
 - A push to `main` replaces the **Preview build** prerelease with fresh macOS and Windows builds.
 - A tag such as `v0.2.0` publishes a versioned release. The tag must match `version` in `package.json`.
