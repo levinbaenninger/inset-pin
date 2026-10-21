@@ -256,6 +256,18 @@ describe(placePopover, () => {
     });
   });
 
+  it("stays inside the work area for an anchor left of it", () => {
+    expect(
+      placePopover(pt(-1000, 400), panel, rect(0, 0, 1440, 900))
+    ).toStrictEqual({ height: 300, width: 380, x: 0, y: 300 });
+  });
+
+  it("stays inside the work area for an anchor right of it", () => {
+    expect(
+      placePopover(pt(3000, 400), panel, rect(0, 0, 1440, 900))
+    ).toStrictEqual({ height: 300, width: 380, x: 1060, y: 300 });
+  });
+
   it("cuts a panel taller than the work area to it", () => {
     expect(placePopover(pt(200, 400), size(380, 1000), workArea)).toStrictEqual(
       {
