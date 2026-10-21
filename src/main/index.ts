@@ -165,8 +165,8 @@ const start = async (): Promise<void> => {
         app.relaunch();
         app.quit();
       },
-      reportHeight: (px) => {
-        surface.setContentHeight(px);
+      reportHeight: ({ height, surfaceKey }) => {
+        surface.setContentHeight(height, surfaceKey);
       },
       save: ({ content, id }) => {
         draft.save(id, content);
