@@ -44,7 +44,7 @@ const retried: CaptureRecordV1 = {
   updatedAt: "2026-10-21T18:45:00.000Z",
 };
 
-type Op = "mkdir" | "readdir" | "readFile" | "write" | "rename" | "rm";
+type Op = "mkdir" | "readdir" | "readFile" | "write" | "rename" | "rm" | "sync";
 
 type FailWhen = (op: Op, target: string) => boolean;
 
@@ -55,7 +55,7 @@ interface FaultControl {
 let root = "";
 
 const relative = (target: string): string =>
-  path.relative(root, target).split(path.sep).join("/");
+  path.relative(root, target).split(path.sep).join("/") || ".";
 
 /** The real filesystem plus an operation log (root-relative) and injectable EIO faults. */
 const createFaultFs = () => {
@@ -102,6 +102,11 @@ const createFaultFs = () => {
     rm: async (target) => {
       await guard("rm", target, async () => {
         await nodeStoreFs.rm(target);
+      });
+    },
+    syncDirectory: async (target) => {
+      await guard("sync", target, async () => {
+        await nodeStoreFs.syncDirectory(target);
       });
     },
     writeFileDurable: async (target, data) => {
@@ -421,6 +426,7 @@ describe(openCaptureStore, () => {
       `write .staging/${ID}.n1/crop.png`,
       `write .staging/${ID}.n1/capture.json`,
       `rename ${ID}`,
+      "sync .",
       `write ${ID}/capture.json.n2.tmp`,
       `rename ${ID}/capture.json`,
       `rename .trash/${ID}.n3`,
@@ -428,6 +434,32 @@ describe(openCaptureStore, () => {
     ]);
     expect(store.list()).toStrictEqual([]);
     await expect(listDir()).resolves.toStrictEqual([".staging", ".trash"]);
+  });
+
+  it("flushes the captures directory right after publishing", async () => {
+    const fault = createFaultFs();
+    const store = await open(fault.fs);
+
+    fault.log.length = 0;
+    await store.publish(record, PNG);
+
+    expect(fault.log.slice(-2)).toStrictEqual([`rename ${ID}`, "sync ."]);
+    await expect(nodeStoreFs.syncDirectory(root)).resolves.toBeUndefined();
+  });
+
+  it("still publishes when the directory flush fails", async () => {
+    const fault = createFaultFs();
+    const store = await open(fault.fs);
+
+    fault.control.failWhen = (op) => op === "sync";
+
+    await expect(store.publish(record, PNG)).resolves.toStrictEqual({
+      ok: true,
+      value: record,
+    });
+    await expect(reopenList()).resolves.toStrictEqual([
+      { id: ID, kind: "ok", record },
+    ]);
   });
 
   it("retries a rename blocked by a transient lock", async () => {
