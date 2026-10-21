@@ -1,14 +1,27 @@
+import "@/shared/zod-jitless";
+import "@/styles.css";
+import { RouterProvider } from "@tanstack/react-router";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
-import "@/styles.css";
+import { libraryBridge } from "@/shared/bridge";
+import { followSystemTheme } from "@/shared/theme";
+
+import { router } from "./router";
+
+followSystemTheme();
+
+// The store pushes after every committed change; loaders refetch from main's cache.
+libraryBridge().on("changed", () => {
+  void router.invalidate();
+});
 
 const root = document.querySelector("#root");
 
-if (root) {
+if (root !== null) {
   createRoot(root).render(
     <StrictMode>
-      <main>Recent captures</main>
+      <RouterProvider router={router} />
     </StrictMode>
   );
 }
