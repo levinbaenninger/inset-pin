@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import {
@@ -30,7 +30,10 @@ const work = mkdtempSync(path.join(tmpdir(), "inset-e2e-"));
 const bin = path.join(work, "bin");
 const userData = path.join(work, "userData");
 const logFile = path.join(work, "events.jsonl");
-const marker = { size: 160, x: 1200, y: 700 };
+const homeMarker = { size: 160, x: 1200, y: 700 };
+const edgeMarker = { size: 80, x: 60, y: 600 };
+let marker = homeMarker;
+let markerProcess: ChildProcess | undefined;
 const markerBundleId = "ch.inset.e2e.marker";
 const markerApp = path.join(bin, "marker.app");
 const away = { x: 600, y: 400 };
@@ -111,29 +114,41 @@ const pointer = (action: "move" | "click", x: number, y: number) =>
 
 const processElements = `Application("System Events").processes.byName(${JSON.stringify(processName)}).windows().flatMap((w) => w.entireContents())`;
 
-const clickButton = (title: string) => {
-  const [x = 0, y = 0] = jxa(`const hit = ${processElements}.find((e) => {
+/** Chromium exposes web content to accessibility clients only after AXManualAccessibility is set. */
+const enableWebAccessibility = () =>
+  jxa(`const p = Application("System Events").processes.byName(${JSON.stringify(processName)});
+    try { p.attributes.byName("AXManualAccessibility").value = true; } catch {}
+    "ok";`);
+
+const buttonCentre = (title: string) =>
+  jxa(`const hit = ${processElements}.find((e) => {
       try { return e.role() === "AXButton" && e.name() === ${JSON.stringify(title)}; } catch { return false; }
     });
-    if (!hit) throw new Error("button not found");
-    const [x, y] = hit.position(); const [w, h] = hit.size();
-    Math.round(x + w / 2) + " " + Math.round(y + h / 2);`)
-    .split(" ")
-    .map(Number);
+    hit ? (() => { const [x, y] = hit.position(); const [w, h] = hit.size(); return Math.round(x + w / 2) + " " + Math.round(y + h / 2); })() : "";`);
 
-  pointer("click", x, y);
+const clickButton = async (title: string, attempts = 10): Promise<void> => {
+  const found = buttonCentre(title);
+
+  if (found !== "") {
+    const [x = 0, y = 0] = found.split(" ").map(Number);
+
+    pointer("click", x, y);
+
+    return;
+  }
+
+  if (attempts <= 1) {
+    throw new Error(`button not found: ${title}`);
+  }
+
+  await delay(500);
+  await clickButton(title, attempts - 1);
 };
 
 const windowText = () =>
   jxa(`${processElements}.map((e) => {
       try { return String(e.value() ?? "") + " " + String(e.name() ?? ""); } catch { return ""; }
     }).join(" ");`);
-
-/** Chromium exposes web content to accessibility clients only after AXManualAccessibility is set. */
-const enableWebAccessibility = () =>
-  jxa(`const p = Application("System Events").processes.byName(${JSON.stringify(processName)});
-    try { p.attributes.byName("AXManualAccessibility").value = true; } catch {}
-    "ok";`);
 
 const windowShows = async (text: string, attempts = 10): Promise<boolean> => {
   if (windowText().includes(text)) {
@@ -224,6 +239,17 @@ const exited = async (child: ChildProcess) => {
   ]);
 
   return outcome;
+};
+
+const startMarker = async (at: typeof homeMarker) => {
+  markerProcess?.kill();
+  marker = at;
+  markerProcess = spawn(
+    path.join(markerApp, "Contents/MacOS/marker"),
+    [String(at.x), String(at.y), String(at.size)],
+    { stdio: "ignore" }
+  );
+  await delay(800);
 };
 
 const focusMarker = async () => {
@@ -380,22 +406,14 @@ const checkSave = async () => {
   );
 };
 
-const checkSavedRecord = () => {
-  const [captureId] = savedCaptures();
-
-  if (captureId === undefined) {
-    record("record persisted", false, "none");
-
-    return;
-  }
-
+const inspectRecord = (captureId: string) => {
   const dir = path.join(userData, "captures", captureId);
 
   const stored = CaptureRecordV1Schema.parse(
     JSON.parse(readFileSync(path.join(dir, "capture.json"), "utf-8"))
   );
 
-  const [width, height, red = 0, green = 255, blue = 0] = execFileSync(
+  const [width = 0, height = 0, red = 0, green = 255, blue = 0] = execFileSync(
     path.join(bin, "pixel"),
     [path.join(dir, "crop.png"), String(stored.pin.x), String(stored.pin.y)],
     { encoding: "utf-8" }
@@ -403,6 +421,24 @@ const checkSavedRecord = () => {
     .trim()
     .split(" ")
     .map(Number);
+
+  return {
+    height,
+    onMarker: red > 200 && green < 90 && blue > 200,
+    rgb: `rgb(${red},${green},${blue})`,
+    stored,
+    width,
+  };
+};
+
+const checkSavedRecord = (captureId: string | undefined) => {
+  if (captureId === undefined || !savedCaptures().includes(captureId)) {
+    record("record persisted", false, "none");
+
+    return;
+  }
+
+  const { height, onMarker, rgb, stored, width } = inspectRecord(captureId);
 
   record("record persisted", true, captureId);
   record(
@@ -415,11 +451,72 @@ const checkSavedRecord = () => {
     width === stored.image.widthPx && height === stored.image.heightPx,
     `${width}x${height} @ ${stored.image.pixelsPerDip}x`
   );
+  record("pin lands on the marker detail", onMarker, rgb);
+};
+
+const checkEdgeWiden = async () => {
+  await startMarker(edgeMarker);
+  await focusMarker();
+  await openPanel("point near the screen edge");
+  await typeText("Edge detail");
+  await clickButton("Widen context");
+  await delay(300);
+  await clickButton("Widen context");
+  await delay(300);
+
+  const mark = events().length;
+
+  commandEnter();
+
+  const saved = await waitFor("saved", mark);
+
+  if (saved?.draftId === undefined) {
+    record("edge capture saves", false);
+
+    return;
+  }
+
+  const { onMarker, rgb, stored } = inspectRecord(saved.draftId);
+
   record(
-    "pin lands on the marker detail",
-    red > 200 && green < 90 && blue > 200,
-    `rgb(${red},${green},${blue})`
+    "widening near the edge enlarges the crop",
+    stored.image.widthPx > 960,
+    `${stored.image.widthPx}x${stored.image.heightPx}`
   );
+  record("pin stays on the edge detail after widening", onMarker, rgb);
+  await startMarker(homeMarker);
+};
+
+const checkTrayFallback = async () => {
+  await focusMarker();
+
+  const mark = events().length;
+
+  trayItem("New capture in 3 seconds");
+  pointer("move", marker.x, marker.y);
+
+  const shown = await waitFor("panelShown", mark);
+
+  record("tray fallback opens the panel after the delay", shown !== undefined);
+  await typeText("Via tray");
+  commandEnter();
+
+  const saved = await waitFor("saved", mark);
+
+  if (saved?.draftId === undefined) {
+    record("tray fallback saves", false);
+
+    return;
+  }
+
+  const { onMarker, rgb, stored } = inspectRecord(saved.draftId);
+
+  record(
+    "tray capture is recorded as trayDelayed",
+    stored.invokedVia === "trayDelayed",
+    stored.invokedVia
+  );
+  record("tray capture pins the detail under the pointer", onMarker, rgb);
 };
 
 const checkDiscard = async () => {
@@ -428,7 +525,7 @@ const checkDiscard = async () => {
 
   const mark = events().length;
 
-  clickButton("Discard");
+  await clickButton("Discard");
   record("Discard logged", (await waitFor("discarded", mark)) !== undefined);
   record(
     "Discard leaves no saved capture",
@@ -472,10 +569,9 @@ const checkLibrary = async () => {
     "library opens on request",
     (await waitFor("libraryOpened", mark)) !== undefined
   );
-  enableWebAccessibility();
   await delay(1500);
   record(
-    "library lists the saved thought after restart",
+    "library lists the saved thought after restart with the source app closed",
     await windowShows(thought),
     windowText().replaceAll(/\s+/gu, " ").slice(0, 160)
   );
@@ -516,7 +612,7 @@ const checkQuitWithDraft = async (app: ChildProcess) => {
   record("quit Discard exits", await exited(app));
   record(
     "quit Discard saves nothing",
-    savedCaptures().length === 2,
+    savedCaptures().length === 4,
     `${savedCaptures().length}`
   );
 };
@@ -549,30 +645,42 @@ const buildHelpers = () => {
   }
 };
 
+const assertNoRunningInstance = () => {
+  const running = spawnSync(
+    "pgrep",
+    ["-fl", `MacOS/Inset Context Pin$|${root}/node_modules/.+/MacOS/Electron`],
+    { encoding: "utf-8" }
+  ).stdout.trim();
+
+  if (running !== "") {
+    throw new Error(
+      `stop the running instance first; it holds the single-instance lock:\n${running}`
+    );
+  }
+};
+
 const main = async () => {
+  assertNoRunningInstance();
   buildHelpers();
 
   if (mode === "dev") {
     execFileSync("pnpm", ["build"], { cwd: root, stdio: "ignore" });
   }
 
-  const markerProcess = spawn(
-    path.join(markerApp, "Contents/MacOS/marker"),
-    [String(marker.x), String(marker.y), String(marker.size)],
-    { stdio: "ignore" }
-  );
-
-  await delay(800);
+  await startMarker(homeMarker);
   await focusMarker();
 
   const frontBefore = frontmost();
   let app = launch();
 
   await checkLaunch(app, frontBefore);
+  enableWebAccessibility();
 
-  await checkDismissAndRestore(await checkFirstPanel());
+  const first = await checkFirstPanel();
+
+  await checkDismissAndRestore(first);
   await checkSave();
-  checkSavedRecord();
+  checkSavedRecord(first.draftId);
   await checkDiscard();
 
   trayItem("Quit Inset Context Pin");
@@ -586,11 +694,16 @@ const main = async () => {
     (await waitFor("launch", mark, Date.now() + 15_000)) !== undefined
   );
   record("record survives restart", savedCaptures().length === 1);
+  enableWebAccessibility();
   await focusMarker();
   await checkFailedWrite();
+  await checkEdgeWiden();
+  await checkTrayFallback();
+  markerProcess?.kill();
   await checkLibrary();
+  await startMarker(homeMarker);
   await checkQuitWithDraft(app);
-  markerProcess.kill();
+  markerProcess?.kill();
 
   writeFileSync(
     path.join(work, "results.json"),
