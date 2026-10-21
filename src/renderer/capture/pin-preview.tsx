@@ -17,13 +17,15 @@ import {
   WIDEN_STEP,
 } from "@shared/geometry";
 import type { PinGeometry } from "@shared/geometry";
-import type { KeyboardEvent, PointerEvent } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
+import type { KeyboardEvent, PointerEvent, RefObject } from "react";
 
 import { Button } from "@/components/ui/button";
 import { PinMarker } from "@/shared/pin-marker";
 
 /** Panel content width (380 − 2 × 12 padding) and a compact height. */
-const MAX_BOX = size<"preview">(356, 220);
+const MAX_BOX_WIDTH = 356;
+const MAX_BOX_HEIGHT = 220;
 const NUDGE_FAR = 10;
 
 const ARROWS = new Map([
@@ -32,6 +34,49 @@ const ARROWS = new Map([
   ["ArrowRight", { x: 1, y: 0 }],
   ["ArrowUp", { x: 0, y: -1 }],
 ]);
+
+const observeWidth = (
+  element: HTMLElement,
+  onWidth: (width: number) => void
+): (() => void) => {
+  const observer = new ResizeObserver(() => {
+    const width = Math.floor(element.getBoundingClientRect().width);
+
+    if (width > 0) {
+      onWidth(width);
+    }
+  });
+
+  observer.observe(element);
+
+  return () => {
+    observer.disconnect();
+  };
+};
+
+/**
+ * The width the preview may use, which a classic scrollbar (Windows, or a
+ * panel cut to the work area) can make narrower than the panel's. It only
+ * shrinks within a mount: the scrollbar can appear because of the preview's
+ * own height, and growing back could toggle it on and off. Every show
+ * remounts, so the next one measures afresh.
+ */
+const useBoxWidth = (): [RefObject<HTMLDivElement | null>, number] => {
+  const ref = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(MAX_BOX_WIDTH);
+
+  useLayoutEffect(() => {
+    const element = ref.current;
+
+    return element === null
+      ? undefined
+      : observeWidth(element, (available) => {
+          setWidth((current) => Math.min(current, available));
+        });
+  }, []);
+
+  return [ref, width];
+};
 
 export interface PinPreviewProps {
   readonly frame: DraftView["frame"];
@@ -52,7 +97,8 @@ export const PinPreview = ({
   onChange,
 }: PinPreviewProps) => {
   const { crop, pin } = geometry;
-  const fit = fitPreview(crop, MAX_BOX);
+  const [boxRef, boxWidth] = useBoxWidth();
+  const fit = fitPreview(crop, size(boxWidth, MAX_BOX_HEIGHT));
   const marker = imageToPreview(pin, crop, fit);
 
   const placeAt = (event: PointerEvent<HTMLButtonElement>): void => {
@@ -110,7 +156,7 @@ export const PinPreview = ({
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="bg-muted flex justify-center rounded-lg">
+      <div className="bg-muted flex justify-center rounded-lg" ref={boxRef}>
         <button
           aria-label="Pin position. Click to move the pin, or use the arrow keys (Shift moves further)."
           aria-roledescription="pin preview"
