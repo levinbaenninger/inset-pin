@@ -1,0 +1,46 @@
+{
+  "name": "inset-context-pin",
+  "productName": "Inset Context Pin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Point-first thought capture utility for the Inset capture experiment.",
+  "license": "UNLICENSED",
+  "author": "Levin Bänninger",
+  "type": "module",
+  "main": "./out/main/index.js",
+  "packageManager": "pnpm@12.14.0",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "start": "electron-vite preview",
+    "build": "electron-vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "test": "vitest run",
+    "check": "ultracite check",
+    "fix": "ultracite fix",
+    "package:mac": "electron-vite build && electron-builder --mac --publish never",
+    "package:win": "electron-vite build && electron-builder --win --publish never",
+    "package:dir": "electron-vite build && electron-builder --dir --publish never"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.3",
+    "@tanstack/router-plugin": "1.168.47",
+    "@types/node": "^24.19.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "electron": "45.0.0",
+    "electron-builder": "26.15.3",
+    "electron-vite": "6.0.0",
+    "tailwindcss": "4.3.3",
+    "typescript": "7.0.2",
+    "vite": "8.3.5",
+    "vitest": "5.0.5"
+  },
+  "dependencies": {
+    "@fontsource-variable/inter": "^5.3.0",
+    "@tanstack/react-router": "1.170.45",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "zod": "4.6.7"
+  }
+}
