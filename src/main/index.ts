@@ -7,6 +7,7 @@ import { captureContract } from "@shared/contracts";
 import { CAPTURE_ACCELERATOR, shortcutLabel } from "@shared/shortcut";
 import {
   app,
+  dialog,
   globalShortcut,
   ipcMain,
   Menu,
@@ -52,6 +53,25 @@ const logRejected = (channel: string, reason: string): void => {
   console.warn(`Rejected IPC on ${channel}: ${reason}`);
 };
 
+const errorMessage = (cause: unknown): string =>
+  cause instanceof Error ? cause.message : "Unknown error";
+
+/** A startup step that failed, explained so the user can act on it. */
+class StartupError extends Error {
+  override readonly name = "StartupError";
+}
+
+const explainFailure = async <T>(
+  task: Promise<T>,
+  explain: (cause: string) => string
+): Promise<T> => {
+  try {
+    return await task;
+  } catch (error) {
+    throw new StartupError(explain(errorMessage(error)), { cause: error });
+  }
+};
+
 const trayIconPath = (): string => {
   const base = app.isPackaged
     ? path.join(process.resourcesPath, "resources")
@@ -80,14 +100,17 @@ const start = async (): Promise<void> => {
   );
   secureSession();
 
-  const store = await openCaptureStore(
-    path.join(app.getPath("userData"), "captures"),
-    {
+  const capturesDir = path.join(app.getPath("userData"), "captures");
+
+  const store = await explainFailure(
+    openCaptureStore(capturesDir, {
       fs:
         process.env.INSET_FAIL_NEXT_WRITE === "1"
           ? failNextWrite(nodeStoreFs)
           : nodeStoreFs,
-    }
+    }),
+    (cause) =>
+      `${PRODUCT_NAME} can't open its captures folder:\n${capturesDir}\n\n${cause}\n\nCheck that you can read and write this folder, then open ${PRODUCT_NAME} again.`
   );
 
   const library = createLibraryWindow({
@@ -200,7 +223,11 @@ const start = async (): Promise<void> => {
   surface.onHidden(() => {
     e2eLog("panelHidden");
   });
-  await surface.load();
+  await explainFailure(
+    surface.load(),
+    (cause) =>
+      `The capture panel failed to load.\n\n${cause}\n\nOpen ${PRODUCT_NAME} again. If this keeps happening, reinstall it.`
+  );
 
   const pointNow = (via: PointVia): void => {
     draft.invoke({
@@ -253,6 +280,21 @@ const start = async (): Promise<void> => {
   e2eLog("launch");
 };
 
+/** Without this, a failed start leaves a process with no tray holding the instance lock. */
+const startOrExit = async (): Promise<void> => {
+  try {
+    await start();
+  } catch (error) {
+    dialog.showErrorBox(
+      `${PRODUCT_NAME} couldn't start`,
+      error instanceof StartupError
+        ? error.message
+        : `${errorMessage(error)}\n\nOpen ${PRODUCT_NAME} again.`
+    );
+    app.exit(1);
+  }
+};
+
 // The instance lock is keyed by userData, so the path must be final before it is taken.
 app.setPath(
   "userData",
@@ -269,7 +311,7 @@ if (app.requestSingleInstanceLock()) {
   app.on("window-all-closed", () => {
     // A tray utility keeps running without windows.
   });
-  void start();
+  void startOrExit();
 } else {
   app.exit(0);
 }
