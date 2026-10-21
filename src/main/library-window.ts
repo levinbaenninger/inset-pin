@@ -148,7 +148,6 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
     });
 
     window = created;
-    created.setContentProtection(true);
 
     if (process.platform !== "darwin") {
       created.removeMenu();

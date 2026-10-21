@@ -95,8 +95,6 @@ export const createCaptureSurface = (
   let closable = false;
   const listeners = { dismiss: noop, hidden: noop, shown: noopBounds };
 
-  window.setContentProtection(true);
-
   if (isMac) {
     window.setVisibleOnAllWorkspaces(true, {
       skipTransformProcessType: true,
