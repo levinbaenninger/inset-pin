@@ -129,8 +129,13 @@ const windowText = () =>
       try { return String(e.value() ?? "") + " " + String(e.name() ?? ""); } catch { return ""; }
     }).join(" ");`);
 
-/** Chromium builds its accessibility tree on the first query, so the first read can come back empty. */
-const windowShows = async (text: string, attempts = 5): Promise<boolean> => {
+/** Chromium exposes web content to accessibility clients only after AXManualAccessibility is set. */
+const enableWebAccessibility = () =>
+  jxa(`const p = Application("System Events").processes.byName(${JSON.stringify(processName)});
+    try { p.attributes.byName("AXManualAccessibility").value = true; } catch {}
+    "ok";`);
+
+const windowShows = async (text: string, attempts = 10): Promise<boolean> => {
   if (windowText().includes(text)) {
     return true;
   }
@@ -467,10 +472,12 @@ const checkLibrary = async () => {
     "library opens on request",
     (await waitFor("libraryOpened", mark)) !== undefined
   );
+  enableWebAccessibility();
   await delay(1500);
   record(
     "library lists the saved thought after restart",
-    await windowShows(thought)
+    await windowShows(thought),
+    windowText().replaceAll(/\s+/gu, " ").slice(0, 160)
   );
   mark = events().length;
   closeWindow();
