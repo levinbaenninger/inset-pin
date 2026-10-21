@@ -9,11 +9,7 @@ import vitest from "ultracite/oxlint/vitest";
 export default defineConfig({
   env: core.env,
   extends: [core, react, tanstack, vitest, shadcn, antiSlop],
-  ignorePatterns: [
-    ...core.ignorePatterns,
-    "src/renderer/components/ui/**",
-    "src/renderer/library/routeTree.gen.ts",
-  ],
+  ignorePatterns: [...core.ignorePatterns, "src/renderer/components/ui/**"],
   jsPlugins: shadcn.jsPlugins,
   options: { typeAware: true },
 });
