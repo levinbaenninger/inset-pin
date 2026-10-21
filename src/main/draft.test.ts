@@ -16,7 +16,6 @@ import {
   SAVE_FAILED_NOTICE,
   step,
   toRecord,
-  viewOf,
 } from "./draft";
 import type {
   CapturedFrame,
@@ -28,7 +27,7 @@ import type {
   QuitState,
   Step,
 } from "./draft";
-import { openCaptureStore } from "./store";
+import { failNextWrite, nodeStoreFs, openCaptureStore } from "./store";
 
 const ID = CaptureIdSchema.parse("3f1c2b9e-4a7d-4e21-9b0c-5d8e6f7a1b2c");
 const STALE_ID = CaptureIdSchema.parse("11111111-2222-4333-8444-555555555555");
@@ -647,26 +646,46 @@ describe("draft and store together", () => {
     expect(reopened.list()).toStrictEqual([]);
   });
 
-  it("keeps the draft and its thought when the write fails", async () => {
-    const store = await openCaptureStore(root);
+  it("keeps the draft when the write fails and saves it under the same id on retry", async () => {
+    const store = await openCaptureStore(root, {
+      fs: failNextWrite(nodeStoreFs),
+    });
 
     const { controller } = createFakes({
       capture: capturing,
-      publish: async () =>
-        await Promise.resolve({ message: "Disk full", ok: false }),
+      publish: store.publish,
     });
+
+    const reopenedList = async () => {
+      const reopened = await openCaptureStore(root);
+
+      return reopened.list();
+    };
 
     controller.invoke(point.invocation);
     await settle();
     controller.save(ID, typed("Retry me"));
-    await settle();
+    await vi.waitFor(() => {
+      expect(controller.view()).toMatchObject({ write: { kind: "failed" } });
+    });
 
     expect(controller.view()).toMatchObject({
       draftId: ID,
       seed: { thought: "Retry me" },
-      write: { kind: "failed", message: "Disk full" },
+      write: {
+        kind: "failed",
+        message: "Simulated write failure (INSET_FAIL_NEXT_WRITE)",
+      },
     });
-    expect(store.list()).toStrictEqual([]);
-    expect(viewOf(IDLE)).toStrictEqual({ kind: "none" });
+    await expect(reopenedList()).resolves.toStrictEqual([]);
+
+    controller.save(ID, typed("Retry me"));
+    await vi.waitFor(() => {
+      expect(controller.view()).toStrictEqual({ kind: "none" });
+    });
+
+    await expect(reopenedList()).resolves.toMatchObject([
+      { id: ID, kind: "ok", record: { thought: "Retry me" } },
+    ]);
   });
 });
