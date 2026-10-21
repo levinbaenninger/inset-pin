@@ -269,11 +269,14 @@ const horizontalPlacement = (
   const left = anchorX - POPOVER_GAP_DIP - width;
   const workRight = workArea.x + workArea.width;
 
-  if (right + width <= workRight) {
+  const fits = (x: number): boolean =>
+    x >= workArea.x && x + width <= workRight;
+
+  if (fits(right)) {
     return right;
   }
 
-  if (left >= workArea.x) {
+  if (fits(left)) {
     return left;
   }
 
