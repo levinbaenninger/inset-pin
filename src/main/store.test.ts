@@ -38,7 +38,6 @@ const record: CaptureRecordV1 = {
   updatedAt: "2026-10-21T18:40:31.002Z",
 };
 
-/** A retry of the same draft stamps a new updatedAt. */
 const retried: CaptureRecordV1 = {
   ...record,
   updatedAt: "2026-10-21T18:45:00.000Z",
@@ -57,7 +56,6 @@ let root = "";
 const relative = (target: string): string =>
   path.relative(root, target).split(path.sep).join("/") || ".";
 
-/** The real filesystem plus an operation log (root-relative) and injectable EIO faults. */
 const createFaultFs = () => {
   const log: string[] = [];
   const control: FaultControl = { failWhen: null };

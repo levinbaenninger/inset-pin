@@ -21,7 +21,6 @@ export interface E2eDetails {
 
 const logFile = process.env.INSET_E2E_LOG;
 
-/** Test hook: with INSET_E2E_LOG set, appends one JSON line per lifecycle event. */
 export const e2eLog = (event: E2eEvent, details: E2eDetails = {}): void => {
   if (logFile === undefined || logFile === "") {
     return;

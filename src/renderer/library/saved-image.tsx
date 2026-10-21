@@ -13,7 +13,6 @@ export interface SavedImageProps {
 const percent = (value: number, total: number): string =>
   `${(value / total) * 100}%`;
 
-/** The approved crop with its pin. Full size renders at the crop's DIP size, never wider than its column. */
 export const SavedImage = ({ alt, image, pin, size }: SavedImageProps) => (
   <div
     className={cn(

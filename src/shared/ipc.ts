@@ -1,10 +1,5 @@
 import type { z } from "zod";
 
-/**
- * One contract object per window declares every channel. Preloads, main
- * handlers and renderer clients are all derived from it, so there is no hand
- * list of channel names to keep in sync.
- */
 export interface InvokeSpec<I extends z.ZodType, O> {
   readonly kind: "invoke";
   readonly input: I;
@@ -46,7 +41,6 @@ export type MethodSpec =
 
 export interface Contract {
   readonly name: string;
-  /** The window global the preload exposes this contract under. */
   readonly global: string;
   readonly methods: Readonly<Record<string, MethodSpec>>;
   readonly events: Readonly<Record<string, EventSpec<z.output<z.ZodType>>>>;

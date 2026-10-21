@@ -34,7 +34,6 @@ const recentRoute = createRoute({
 const captureRoute = createRoute({
   component: CapturePage,
   getParentRoute: () => rootRoute,
-  // The URL carries only the id; anything that is not a capture id is a missing record.
   loader: async ({ params }) => {
     const id = CaptureIdSchema.safeParse(params.captureId);
 

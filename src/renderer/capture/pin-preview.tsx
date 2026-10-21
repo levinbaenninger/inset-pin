@@ -23,7 +23,7 @@ import type { KeyboardEvent, PointerEvent, RefObject } from "react";
 import { Button } from "@/components/ui/button";
 import { PinMarker } from "@/shared/pin-marker";
 
-/** Panel content width (380 − 2 × 12 padding) and a compact height. */
+/** Panel content width: 380 − 2 × 12 padding. */
 const MAX_BOX_WIDTH = 356;
 const MAX_BOX_HEIGHT = 220;
 const NUDGE_FAR = 10;
@@ -55,11 +55,8 @@ const observeWidth = (
 };
 
 /**
- * The width the preview may use, which a classic scrollbar (Windows, or a
- * panel cut to the work area) can make narrower than the panel's. It only
- * shrinks within a mount: the scrollbar can appear because of the preview's
- * own height, and growing back could toggle it on and off. Every show
- * remounts, so the next one measures afresh.
+ * Only shrinks within a mount: a classic scrollbar can appear because of the
+ * preview's own height, and growing back could toggle it on and off.
  */
 const useBoxWidth = (): [RefObject<HTMLDivElement | null>, number] => {
   const ref = useRef<HTMLDivElement>(null);
@@ -85,11 +82,6 @@ export interface PinPreviewProps {
   readonly onChange: (geometry: PinGeometry) => void;
 }
 
-/**
- * The captured display, clipped to the crop, with the pin on top. Click or
- * drag places the pin; arrow keys nudge it by one DIP (Shift: ten). Widen and
- * Tighten rescale the crop around the pin, which never moves.
- */
 export const PinPreview = ({
   disabled,
   frame,

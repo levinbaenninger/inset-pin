@@ -38,10 +38,6 @@ const OK: ActionResult = { ok: true };
 
 const fail = (message: string): ActionResult => ({ message, ok: false });
 
-/**
- * The recent-captures window. Created only on explicit request and destroyed
- * on close; it owns the library contract's handlers.
- */
 export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
   const { store } = options;
   let window: BrowserWindow | null = null;

@@ -2,11 +2,7 @@ export type Space = "screen" | "image" | "crop" | "preview";
 
 declare const space: unique symbol;
 
-/**
- * Coordinates tagged with the space they live in. The tag is optional so plain
- * literals build a value without an assertion, while mixing two spaces fails
- * to typecheck.
- */
+/** The tag is optional so plain literals need no assertion, while mixing two spaces fails to typecheck. */
 export interface Point<S extends Space> {
   readonly x: number;
   readonly y: number;
@@ -41,7 +37,6 @@ export const rect = <S extends Space>(
   height: number
 ): Rect<S> => ({ height, width, x, y });
 
-/** Plain data copied from an Electron Display at sampling time. */
 export interface DisplaySnapshot {
   readonly id: number;
   readonly label: string | null;
@@ -68,11 +63,7 @@ export const POPOVER_GAP_DIP = 16;
 const clamp = (value: number, low: number, high: number): number =>
   Math.min(Math.max(value, low), high);
 
-/**
- * Global DIP to full-image pixels. Scales by the actual image size over the
- * display bounds (never bounds × scaleFactor), so negative origins and
- * downscaled captures map correctly.
- */
+/** Scales by image size over bounds, never bounds × scaleFactor, so negative origins and downscaled captures map correctly. */
 export const screenToImage = (
   point: Point<"screen">,
   bounds: Rect<"screen">,
@@ -84,7 +75,7 @@ export const screenToImage = (
   return pt(clamp(x, 0, image.width - 1), clamp(y, 0, image.height - 1));
 };
 
-/** Measured image pixels per DIP; feeds the DIP-denominated crop constants. */
+/** Measured from the delivered image rather than taken from scaleFactor. */
 export const pixelsPerDip = (
   bounds: Rect<"screen">,
   image: Size<"image">
@@ -96,7 +87,7 @@ const minCropSize = (image: Size<"image">, ppd: number): Size<"image"> =>
     Math.min(Math.round(MIN_CROP_DIP.height * ppd), image.height)
   );
 
-/** Shifts (never shrinks) a crop of a valid size so it lies inside the image. */
+/** Never shrinks: the crop must already fit inside the image. */
 const shiftInside = (
   crop: Rect<"image">,
   image: Size<"image">
@@ -108,7 +99,6 @@ const shiftInside = (
     crop.height
   );
 
-/** Shifts a crop the least amount needed to contain the pin. */
 const containPin = (crop: Rect<"image">, pin: Point<"image">): Rect<"image"> =>
   rect(
     clamp(crop.x, pin.x - crop.width + 1, pin.x),
@@ -126,7 +116,6 @@ export const clampPin = (
     clamp(Math.round(point.y), crop.y, crop.y + crop.height - 1)
   );
 
-/** DEFAULT_CROP_DIP centred on the pin, shifted into the image; shrunk only when the image is smaller. */
 export const defaultCrop = (
   pin: Point<"image">,
   image: Size<"image">,
@@ -150,10 +139,7 @@ export const defaultCrop = (
   );
 };
 
-/**
- * Scales the crop about the pin so the pin keeps its relative preview
- * position, bounded by the minimum crop and the image. The pin never moves.
- */
+/** The pin never moves and keeps its relative position in the preview. */
 export const scaleCrop = (
   crop: Rect<"image">,
   pin: Point<"image">,
@@ -225,7 +211,6 @@ export const pinInCrop = (
   crop: Rect<"image">
 ): Point<"crop"> => pt(pin.x - crop.x, pin.y - crop.y);
 
-/** Contain-fit of the crop into the preview box: the renderer's only mapping primitive. */
 export interface PreviewFit {
   readonly scale: number;
   readonly box: Size<"preview">;
@@ -283,10 +268,7 @@ const horizontalPlacement = (
   return clamp(right, workArea.x, workRight - width);
 };
 
-/**
- * Beside the anchor (right, else left, else clamped), a third above it, inside
- * the work area. A panel taller than the work area is cut to it and scrolls.
- */
+/** A panel taller than the work area is cut to it and scrolls. */
 export const placePopover = (
   anchor: Point<"screen">,
   wanted: Size<"screen">,

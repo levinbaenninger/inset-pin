@@ -3,7 +3,6 @@ import { eventChannel, methodChannel } from "@shared/ipc";
 import type { Contract, EventName, EventPayload, Handlers } from "@shared/ipc";
 import type { z } from "zod";
 
-/** The parts of Electron's IPC events the kit reads; fakes implement only these. */
 export interface SenderFrame {
   readonly url: string;
   readonly parent: SenderFrame | null;
@@ -33,7 +32,6 @@ export interface EventTarget {
 
 export interface ServeOptions {
   readonly ipc: IpcRegistrar;
-  /** Origin of the window's page: inset://app in production, the dev server in development. */
   readonly appOrigin: string;
   /** The one webContents allowed to call this contract and to receive its events. */
   readonly target: () => EventTarget | null;
@@ -47,12 +45,10 @@ export interface ContractServer<C extends Contract> {
   ) => void;
 }
 
-/** Wire data after the method's own schema accepted it. */
 type Parsed = z.output<z.ZodType>;
 
 type ParsedHandler = (input: Parsed) => Parsed;
 
-/** Expected webContents, its main frame (not a subframe), and the app origin. */
 export const isTrustedSender = (
   event: IpcSenderEvent,
   expected: { readonly id: number } | null,
@@ -69,18 +65,12 @@ export const isTrustedSender = (
   );
 };
 
-/**
- * Registers every method of the contract. Each message is dropped unless the
- * sender is trusted and the single argument passes the method's schema; only
- * then does the handler run, with the parsed (branded, transformed) value.
- */
 export const serveContract = <C extends Contract>(
   contract: C,
   handlers: Handlers<C>,
   options: ServeOptions
 ): ContractServer<C> => {
-  // SAFETY: Handlers<C> holds one function per key of contract.methods, and the
-  // loop below calls each only with the output of that same method's schema.
+  // SAFETY: Handlers<C> has one function per method, each called only with its own schema's output.
   const table = handlers as Readonly<Record<string, ParsedHandler | undefined>>;
 
   const accept = (

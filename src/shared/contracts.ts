@@ -22,7 +22,6 @@ const ImageRectSchema = z
   .object({ height: Extent, width: Extent, x: Pixel, y: Pixel })
   .transform((crop) => rect<"image">(crop.x, crop.y, crop.width, crop.height));
 
-/** Everything the renderer owns in a draft: PinGeometry plus the thought. */
 export const DraftContentSchema = z.object({
   crop: ImageRectSchema,
   pin: ImagePointSchema,
@@ -58,13 +57,12 @@ export interface DraftView {
   readonly draftId: CaptureId;
   readonly capturedAt: string;
   readonly sourceLabel: string | null;
-  /** url = inset://draft/<id>, the in-memory full-display frame. */
   readonly frame: {
     readonly url: string;
     readonly size: Size<"image">;
     readonly ppd: number;
   };
-  /** Read only when the editor mounts; afterwards the renderer owns content. */
+  /** Read only when the editor mounts; afterwards the renderer owns the content. */
   readonly seed: DraftContent;
   readonly write: WriteStatus;
   /** Changes every time the panel is shown; echoed with height reports. */

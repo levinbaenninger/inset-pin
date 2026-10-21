@@ -12,10 +12,7 @@ const isSaveChord = (event: KeyboardEvent): boolean =>
   (isMac ? event.metaKey : event.ctrlKey) &&
   !event.altKey;
 
-/**
- * Window-local Cmd/Ctrl+Enter and Escape. Skips IME composition and events a
- * component (for example a Radix layer) already handled.
- */
+/** Skips IME composition and events a component, such as a Radix layer, already handled. */
 export const useLocalKeys = (keys: LocalKeys): void => {
   const { onEscape, onSave } = keys;
 

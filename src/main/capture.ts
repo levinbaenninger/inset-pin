@@ -13,7 +13,7 @@ import type { Anchor, CaptureResult, FramePixels } from "./draft";
 
 const PREVIEW_JPEG_QUALITY = 85;
 
-/** Synchronous: call inside the shortcut callback, before any Inset UI exists. */
+/** Call synchronously in the shortcut callback, before any Inset UI exists. */
 export const sampleAnchor = (): Anchor => {
   const cursor = screen.getCursorScreenPoint();
 
@@ -47,9 +47,8 @@ const macScreenStatus = (): ReturnType<
     : null;
 
 /**
- * Without permission macOS still returns an image, but it shows only the
- * wallpaper, so any status other than granted is a problem. A reported
- * grant is not proof either: an empty image is reported too.
+ * Without permission macOS still returns an image showing only the wallpaper,
+ * and a reported grant can still deliver an empty image.
  */
 const permissionProblem = (imageEmpty: boolean): CaptureProblem | null => {
   const status = macScreenStatus();
@@ -71,10 +70,7 @@ const permissionProblem = (imageEmpty: boolean): CaptureProblem | null => {
     : { kind: "failed", message: "The screen image was empty." };
 };
 
-/**
- * Captures one display at full resolution. The size is read from the
- * delivered image, never assumed from bounds × scaleFactor.
- */
+/** The size is read from the delivered image, never assumed from bounds × scaleFactor. */
 export const captureDisplay = async (
   display: DisplaySnapshot
 ): Promise<CaptureResult> => {
