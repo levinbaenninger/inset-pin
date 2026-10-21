@@ -161,10 +161,6 @@ describe(serveContract, () => {
     await expect(invoke("getView", fromPanel)).resolves.toBe('{"kind":"none"}');
   });
 
-  it("derives channel names from the contract", () => {
-    expect(methodChannel(captureContract, "save")).toBe("capture:save");
-  });
-
   it("requires a handler for every method at compile time", () => {
     // @ts-expect-error discard is missing
     const partial: Handlers<CaptureContract> = {

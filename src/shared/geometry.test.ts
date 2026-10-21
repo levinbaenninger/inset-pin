@@ -136,7 +136,12 @@ describe(scaleCrop, () => {
     expect(after).toStrictEqual({ height: 1200, width: 1920, x: 720, y: 500 });
     expect(pinInCrop(pin, before)).toStrictEqual({ x: 240, y: 100 });
     expect(pinInCrop(pin, after)).toStrictEqual({ x: 480, y: 200 });
-    expect(240 / 960).toBe(480 / 1920);
+    expect(pinInCrop(pin, after).x / after.width).toBe(
+      pinInCrop(pin, before).x / before.width
+    );
+    expect(pinInCrop(pin, after).y / after.height).toBe(
+      pinInCrop(pin, before).y / before.height
+    );
   });
 
   it("keeps a pin near an edge on the same image detail after widening", () => {
