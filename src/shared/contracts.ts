@@ -67,13 +67,17 @@ export interface DraftView {
   /** Read only when the editor mounts; afterwards the renderer owns content. */
   readonly seed: DraftContent;
   readonly write: WriteStatus;
-  /** A change means the panel was shown again: refocus the thought. */
-  readonly shownSeq: number;
+  /** Changes every time the panel is shown; echoed with height reports. */
+  readonly surfaceKey: string;
 }
 
 export type CaptureView =
   | { readonly kind: "none" }
-  | { readonly kind: "problem"; readonly problem: CaptureProblem }
+  | {
+      readonly kind: "problem";
+      readonly problem: CaptureProblem;
+      readonly surfaceKey: string;
+    }
   | DraftView;
 
 export interface SavedImage {
@@ -130,7 +134,12 @@ export const captureContract = defineContract({
     getView: invoke(z.void(), out<CaptureView>()),
     openScreenSettings: send(z.void()),
     relaunch: send(z.void()),
-    reportHeight: send(z.number().int().min(1).max(4000)),
+    reportHeight: send(
+      z.object({
+        height: z.number().int().min(1).max(4000),
+        surfaceKey: z.string().max(200),
+      })
+    ),
     save: send(DraftEditSchema),
   },
   name: "capture",

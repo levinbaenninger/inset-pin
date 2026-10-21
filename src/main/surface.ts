@@ -21,7 +21,7 @@ const QUIT_CHOICES: readonly QuitChoice[] = ["save", "discard", "cancel"];
 export interface CaptureSurface extends DraftSurface {
   readonly webContents: WebContents;
   readonly load: () => Promise<void>;
-  readonly setContentHeight: (px: number) => void;
+  readonly setContentHeight: (px: number, surfaceKey: string) => void;
   readonly onDismissRequest: (listener: () => void) => void;
   readonly onShown: (listener: (bounds: Rectangle) => void) => void;
   readonly onHidden: (listener: () => void) => void;
@@ -88,7 +88,8 @@ export const createCaptureSurface = (
   let anchor: Anchor | null = null;
   let contentHeight = INITIAL_HEIGHT;
   let revealTimer: NodeJS.Timeout | undefined;
-  let waitingForHeight = false;
+  /** The surface key a pending show waits for; null when nothing is pending. */
+  let pendingKey: string | null = null;
   let hiddenAt = 0;
   let blurSuppressed = 0;
   let closable = false;
@@ -119,7 +120,7 @@ export const createCaptureSurface = (
 
   const reveal = (): void => {
     clearTimeout(revealTimer);
-    waitingForHeight = false;
+    pendingKey = null;
 
     if (anchor === null) {
       return;
@@ -140,7 +141,7 @@ export const createCaptureSurface = (
 
   const hide = (): void => {
     clearTimeout(revealTimer);
-    waitingForHeight = false;
+    pendingKey = null;
 
     if (!window.isVisible()) {
       return;
@@ -224,18 +225,18 @@ export const createCaptureSurface = (
     onShown: (listener) => {
       listeners.shown = listener;
     },
-    setContentHeight: (px) => {
+    setContentHeight: (px, surfaceKey) => {
       contentHeight = px;
 
-      if (waitingForHeight) {
+      if (pendingKey === surfaceKey) {
         reveal();
       } else if (window.isVisible()) {
         place();
       }
     },
-    show: (next) => {
+    show: (next, surfaceKey) => {
       anchor = next;
-      waitingForHeight = true;
+      pendingKey = surfaceKey;
       clearTimeout(revealTimer);
       revealTimer = setTimeout(reveal, HEIGHT_WAIT_MS);
     },

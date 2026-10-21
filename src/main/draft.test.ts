@@ -428,7 +428,7 @@ describe(createDraftController, () => {
     expect(controller.view()).toMatchObject({
       draftId: ID,
       kind: "draft",
-      shownSeq: 2,
+      surfaceKey: `${ID}:2`,
     });
   });
 

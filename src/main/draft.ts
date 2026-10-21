@@ -376,9 +376,18 @@ export const step = (state: DraftState, event: DraftEvent): Step => {
   }
 };
 
+const PROBLEM_SURFACE_KEY = "problem";
+
+const draftSurfaceKey = (state: DraftPhase): string =>
+  `${state.draft.id}:${state.shownSeq}`;
+
 export const viewOf = (state: DraftState): CaptureView => {
   if (state.phase === "problem") {
-    return { kind: "problem", problem: state.problem };
+    return {
+      kind: "problem",
+      problem: state.problem,
+      surfaceKey: PROBLEM_SURFACE_KEY,
+    };
   }
 
   if (state.phase !== "draft") {
@@ -397,8 +406,8 @@ export const viewOf = (state: DraftState): CaptureView => {
     },
     kind: "draft",
     seed: draft.content,
-    shownSeq: state.shownSeq,
     sourceLabel: draft.anchor.display.label,
+    surfaceKey: draftSurfaceKey(state),
     write: state.write,
   };
 };
@@ -410,13 +419,13 @@ export type SurfaceState =
 
 export const surfaceOf = (state: DraftState): SurfaceState => {
   if (state.phase === "problem") {
-    return { anchor: state.anchor, key: "problem", visible: true };
+    return { anchor: state.anchor, key: PROBLEM_SURFACE_KEY, visible: true };
   }
 
   if (state.phase === "draft" && state.surface === "shown") {
     return {
       anchor: state.draft.anchor,
-      key: `${state.draft.id}:${state.shownSeq}`,
+      key: draftSurfaceKey(state),
       visible: true,
     };
   }
@@ -476,7 +485,8 @@ export const toRecord = (draft: Draft, savedAt: Date): CaptureRecordV1 => {
 };
 
 export interface DraftSurface {
-  readonly show: (anchor: Anchor) => void;
+  /** Shows beside the anchor once the renderer reports its height for this surface key. */
+  readonly show: (anchor: Anchor, surfaceKey: string) => void;
   readonly hide: () => void;
   readonly focus: () => void;
   /** Resolves once the panel is off screen and the compositor has settled. */
@@ -555,7 +565,7 @@ export const createDraftController = (deps: DraftDeps): DraftController => {
     }
 
     if (!before.visible || before.key !== after.key) {
-      deps.surface.show(after.anchor);
+      deps.surface.show(after.anchor, after.key);
     }
   };
 
