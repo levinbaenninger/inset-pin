@@ -25,6 +25,7 @@ import type {
   DraftDeps,
   DraftEvent,
   DraftState,
+  QuitState,
   Step,
 } from "./draft";
 import { openCaptureStore } from "./store";
@@ -90,6 +91,15 @@ const draftOf = (state: DraftState): Draft => {
 
   return state.draft;
 };
+
+const savingWhile = (quit: QuitState): DraftState => ({
+  draft: draftOf(withThought("Keep me")),
+  phase: "draft",
+  quit,
+  shownSeq: 1,
+  surface: "shown",
+  write: { kind: "saving" },
+});
 
 describe(step, () => {
   it("captures on the first invocation, with the panel hidden", () => {
@@ -297,6 +307,98 @@ describe(step, () => {
     expect(step(captured, { id: ID, type: "discarded" }).state).toBe(IDLE);
     expect(step(saving, { id: ID, type: "discarded" }).state).toBe(saving);
   });
+
+  it("quits once a save that was running when quit was held completes", () => {
+    const saving = step(withThought("Keep me"), {
+      content: typed("Keep me"),
+      id: ID,
+      type: "saveRequested",
+    }).state;
+
+    const held = step(saving, { type: "quitHeld" });
+    const done = step(held.state, { id: ID, type: "published" });
+
+    expect(held).toMatchObject({
+      effects: [],
+      state: { quit: "afterSave", write: { kind: "saving" } },
+    });
+    expect(done).toStrictEqual({ effects: [{ type: "quit" }], state: IDLE });
+  });
+
+  it("shows the draft and stays running when the save before quitting fails", () => {
+    expect(
+      run(
+        captured,
+        { content: typed("Keep me"), id: ID, type: "saveRequested" },
+        { type: "dismissed" },
+        { type: "quitHeld" },
+        { id: ID, message: "EIO", type: "publishFailed" }
+      )
+    ).toMatchObject({
+      effects: [],
+      state: {
+        draft: { content: typed("Keep me"), id: ID },
+        quit: "none",
+        surface: "shown",
+        write: { kind: "failed", message: "EIO" },
+      },
+    });
+  });
+
+  it("ignores the panel's save, discard and edits while the quit dialog is open", () => {
+    const asking = step(withThought("Keep me"), { type: "quitHeld" }).state;
+
+    expect(
+      [
+        step(asking, {
+          content: typed("Keep me"),
+          id: ID,
+          type: "saveRequested",
+        }),
+        step(asking, { id: ID, type: "discarded" }),
+        step(asking, { content: typed("Changed"), id: ID, type: "edited" }),
+      ].map((next) => next.state)
+    ).toStrictEqual([asking, asking, asking]);
+    expect(
+      run(
+        asking,
+        { id: ID, type: "discarded" },
+        { choice: "save", type: "quitChoice" }
+      ).effects
+    ).toMatchObject([
+      { draft: { content: typed("Keep me") }, type: "publish" },
+    ]);
+  });
+
+  // Not reachable through events any more; guards the dialog against a save that started first.
+  it.each(["save", "discard"] as const)(
+    "waits for a running save when the quit dialog answers %s",
+    (choice) => {
+      expect(
+        step(savingWhile("asking"), { choice, type: "quitChoice" })
+      ).toStrictEqual({
+        effects: [],
+        state: savingWhile("afterSave"),
+      });
+    }
+  );
+
+  it("closes the problem panel on dismiss without keeping a draft", () => {
+    const problem = run(IDLE, point, {
+      problem: { kind: "displayNotMatched" },
+      type: "captureFailed",
+    }).state;
+
+    expect(problem).toStrictEqual({
+      anchor,
+      phase: "problem",
+      problem: { kind: "displayNotMatched" },
+    });
+    expect(step(problem, { type: "dismissed" })).toStrictEqual({
+      effects: [],
+      state: IDLE,
+    });
+  });
 });
 
 describe(mayQuit, () => {
@@ -455,6 +557,31 @@ describe(createDraftController, () => {
 
     expect(calls).toContain("focus");
     expect(controller.tray()).toBe("shown");
+  });
+
+  it("pushes a fresh view when the quit dialog closes, so an ignored Save stops waiting", async () => {
+    const { calls, controller } = createFakes({ capture: capturing });
+
+    controller.invoke(point.invocation);
+    await settle();
+    controller.edit(ID, typed("Keep me"));
+    controller.subscribe(() => {
+      calls.push("view pushed");
+    });
+    calls.length = 0;
+
+    controller.holdQuitIfNeeded();
+    controller.save(ID, typed("Keep me"));
+    calls.push("save sent");
+    await settle();
+
+    expect(calls).toStrictEqual([
+      "view pushed",
+      "save sent",
+      "view pushed",
+      "focus",
+    ]);
+    expect(controller.view()).toMatchObject({ write: { kind: "editing" } });
   });
 });
 
