@@ -30,6 +30,7 @@ export interface LibraryOptions {
   readonly preload: string;
   readonly url: string;
   readonly onOpened: () => void;
+  readonly onClosed: () => void;
   readonly onRejected: (channel: string, reason: string) => void;
 }
 
@@ -166,6 +167,7 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
     });
     created.on("closed", () => {
       window = null;
+      options.onClosed();
     });
     void created.loadURL(options.url);
   };

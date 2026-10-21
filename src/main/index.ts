@@ -67,10 +67,15 @@ const start = async (): Promise<void> => {
     app.dock?.hide();
   }
 
-  // macOS routes Cmd+C/V/X/Z/A through the application menu; Windows needs none.
+  // macOS routes Cmd+C/V/X/Z/A and Cmd+W through the application menu; Windows needs none.
   Menu.setApplicationMenu(
     isMac
-      ? Menu.buildFromTemplate([{ role: "appMenu" }, { role: "editMenu" }])
+      ? Menu.buildFromTemplate([
+          { role: "appMenu" },
+          { role: "fileMenu" },
+          { role: "editMenu" },
+          { role: "windowMenu" },
+        ])
       : null
   );
   secureSession();
@@ -86,6 +91,9 @@ const start = async (): Promise<void> => {
   );
 
   const library = createLibraryWindow({
+    onClosed: () => {
+      e2eLog("libraryClosed");
+    },
     onOpened: () => {
       e2eLog("libraryOpened");
     },
