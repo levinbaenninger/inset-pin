@@ -1,18 +1,15 @@
-import { cn } from "@/lib/utils";
-
 export interface PinMarkerProps {
   readonly left: string;
   readonly top: string;
   readonly size?: "sm" | "md";
 }
 
+/** A hollow ring, so the detail under the pin stays readable; drawn the same way into copied images. */
 export const PinMarker = ({ left, size = "md", top }: PinMarkerProps) => (
   <span
     aria-hidden="true"
-    className={cn(
-      "bg-primary pointer-events-none absolute top-(--pin-y) left-(--pin-x) -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-md ring-1 ring-black/50",
-      size === "md" ? "size-4" : "size-2.5"
-    )}
+    className="pin-marker"
+    data-size={size}
     style={{ "--pin-x": left, "--pin-y": top }}
   />
 );

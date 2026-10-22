@@ -6,12 +6,7 @@ import type { PinGeometry } from "@shared/geometry";
 import { saveShortcutLabel } from "@shared/shortcut";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import {
-  Alert,
-  AlertAction,
-  AlertDescription,
-  AlertTitle,
-} from "@/components/ui/alert";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { Label } from "@/components/ui/label";
@@ -20,12 +15,66 @@ import { Textarea } from "@/components/ui/textarea";
 import { captureBridge } from "@/shared/bridge";
 import { useLocalKeys } from "@/shared/keys";
 import { isMac } from "@/shared/platform";
+import { useExpiringState } from "@/shared/use-expiring-state";
 
 import { PinPreview } from "./pin-preview";
 
 const api = captureBridge();
 
 const timeFormat = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
+
+/** How long a first click on Discard waits for the second. */
+const DISCARD_ARM_MS = 4000;
+
+const PLACEHOLDER = "For example: this total ignores the discount";
+
+/** Discard asks for a second click once there is a thought to lose. */
+const useArmedDiscard = (needsConfirm: boolean, discard: () => void) => {
+  const [armedAt, setArmedAt] = useExpiringState<true>(DISCARD_ARM_MS);
+  const armed = armedAt !== null;
+
+  const disarm = useCallback((): void => {
+    setArmedAt(null);
+  }, [setArmedAt]);
+
+  const press = (): void => {
+    if (armed || !needsConfirm) {
+      discard();
+    } else {
+      setArmedAt(true);
+    }
+  };
+
+  return { armed, disarm, press };
+};
+
+interface DraftCaptionProps {
+  readonly view: DraftView;
+}
+
+/** A set-aside draft says so, because the shortcut brought it back instead of capturing the new point. */
+const DraftCaption = ({ view }: DraftCaptionProps) => {
+  const time = timeFormat.format(new Date(view.capturedAt));
+
+  if (view.reopened) {
+    return (
+      <p className="leading-snug">
+        <span className="text-foreground font-medium">
+          Unsaved draft from {time}
+        </span>
+        <span className="text-muted-foreground block">
+          Save or discard it to capture something new.
+        </span>
+      </p>
+    );
+  }
+
+  return (
+    <p className="text-muted-foreground truncate">
+      {[view.sourceLabel, time].filter((part) => part !== null).join(" · ")}
+    </p>
+  );
+};
 
 export interface DraftEditorProps {
   readonly view: DraftView;
@@ -46,7 +95,14 @@ export const DraftEditor = ({ view }: DraftEditorProps) => {
 
   const { draftId, write } = view;
 
+  const discard = useArmedDiscard(savable, () => {
+    api.discard(draftId);
+  });
+
+  const { armed, disarm } = discard;
+
   const change = (next: DraftContent): void => {
+    disarm();
     setContent(next);
     api.edit({ content: next, id: draftId });
   };
@@ -60,9 +116,14 @@ export const DraftEditor = ({ view }: DraftEditorProps) => {
     api.save({ content, id: draftId });
   }, [busy, content, draftId, savable, write]);
 
+  // While Discard waits for its second click, Escape only takes the question back.
   const dismiss = useCallback((): void => {
-    api.dismiss();
-  }, []);
+    if (armed) {
+      disarm();
+    } else {
+      api.dismiss();
+    }
+  }, [armed, disarm]);
 
   useLocalKeys({ onEscape: dismiss, onSave: save });
 
@@ -84,6 +145,7 @@ export const DraftEditor = ({ view }: DraftEditorProps) => {
       }}
     >
       <PinPreview
+        caption={<DraftCaption view={view} />}
         disabled={busy}
         frame={view.frame}
         geometry={content}
@@ -92,14 +154,7 @@ export const DraftEditor = ({ view }: DraftEditorProps) => {
         }}
       />
       <div className="flex flex-col gap-1.5">
-        <div className="flex items-baseline justify-between gap-2">
-          <Label htmlFor="thought">What matters here?</Label>
-          <span className="text-muted-foreground truncate text-xs">
-            {[view.sourceLabel, timeFormat.format(new Date(view.capturedAt))]
-              .filter((part) => part !== null)
-              .join(" · ")}
-          </span>
-        </div>
+        <Label htmlFor="thought">What matters here?</Label>
         <Textarea
           className="max-h-40 min-h-16 resize-none"
           disabled={busy}
@@ -108,6 +163,7 @@ export const DraftEditor = ({ view }: DraftEditorProps) => {
           onChange={(event) => {
             change({ ...content, thought: event.target.value });
           }}
+          placeholder={PLACEHOLDER}
           ref={thoughtRef}
           rows={2}
           value={content.thought}
@@ -118,33 +174,29 @@ export const DraftEditor = ({ view }: DraftEditorProps) => {
           <HugeiconsIcon icon={Alert02Icon} />
           <AlertTitle>Not saved. Your draft is kept.</AlertTitle>
           <AlertDescription>{view.write.message}</AlertDescription>
-          <AlertAction>
-            <Button
-              disabled={busy || !savable}
-              size="xs"
-              type="submit"
-              variant="outline"
-            >
-              Retry
-            </Button>
-          </AlertAction>
         </Alert>
       ) : null}
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex items-center gap-2">
         <Button
           disabled={busy}
           onClick={() => {
-            api.discard(draftId);
+            discard.press();
           }}
           size="sm"
           type="button"
-          variant="ghost"
+          variant={armed ? "destructive" : "ghost"}
         >
-          Discard
+          {armed ? "Click again to discard" : "Discard"}
         </Button>
+        <p
+          aria-live="polite"
+          className="text-muted-foreground ml-auto truncate text-xs"
+        >
+          {armed ? "Esc keeps it" : "Esc keeps the draft"}
+        </p>
         <Button disabled={busy || !savable} size="sm" type="submit">
           {busy ? <Spinner data-icon="inline-start" /> : null}
-          Save
+          {view.write.kind === "failed" ? "Retry" : "Save"}
           <Kbd>{saveShortcutLabel(isMac)}</Kbd>
         </Button>
       </div>

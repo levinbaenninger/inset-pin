@@ -52,6 +52,19 @@ const draftItems = (draft: TrayState): readonly TrayItem[] => {
   return [];
 };
 
+const captureLabel = (model: TrayModel): string => {
+  if (model.countdownPending) {
+    return "Capturing in 3 seconds…";
+  }
+
+  return model.draft === "none"
+    ? "New capture in 3 seconds"
+    : "New capture: save or discard the draft first";
+};
+
+export const trayTooltip = (model: Pick<TrayModel, "isMac">): string =>
+  `Inset Context Pin: point at a detail and press ${shortcutLabel(model.isMac)}`;
+
 export const trayMenu = (model: TrayModel): readonly TrayItem[] => {
   const shortcut = shortcutLabel(model.isMac);
   const canCapture = model.draft === "none" && !model.countdownPending;
@@ -62,9 +75,7 @@ export const trayMenu = (model: TrayModel): readonly TrayItem[] => {
       action: "captureAfterDelay",
       enabled: canCapture,
       kind: "item",
-      label: model.countdownPending
-        ? "Capturing in 3 seconds…"
-        : "New capture in 3 seconds",
+      label: captureLabel(model),
     },
     {
       action: null,

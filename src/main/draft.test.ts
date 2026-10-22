@@ -16,6 +16,7 @@ import {
   SAVE_FAILED_NOTICE,
   step,
   toRecord,
+  viewOf,
 } from "./draft";
 import type {
   CapturedFrame,
@@ -170,6 +171,15 @@ describe(step, () => {
       effects: [],
       state: { shownSeq: 2, surface: "shown" },
     });
+  });
+
+  it("marks the view reopened only once a set-aside draft is shown again", () => {
+    const refocused = step(captured, point).state;
+    const reopened = step(step(captured, { type: "dismissed" }).state, point);
+
+    expect(viewOf(captured)).toMatchObject({ reopened: false });
+    expect(viewOf(refocused)).toMatchObject({ reopened: false });
+    expect(viewOf(reopened.state)).toMatchObject({ reopened: true });
   });
 
   it("ignores edits for a stale draft id", () => {
