@@ -34,20 +34,27 @@ The Windows build compiles and packages in CI. Nobody has run it on Windows yet.
 ## Capture a thought
 
 1. Move the pointer over the detail that matters, in any app.
-2. Press `⌥⌘P` on macOS or `Ctrl+Alt+P` on Windows. A small panel opens beside the pointer with a crop around that point and a pin on it.
+2. Press `⌥⌘P` on macOS or `Ctrl+Alt+P` on Windows. A small panel opens beside the pointer with a crop around that point and a ring on it.
 3. Type what matters in **What matters here?**.
-4. Optional: click or drag in the preview to move the pin, use the arrow keys to nudge it, or click **Widen context** to include more of the screen.
+4. Optional: click or drag in the preview to move the pin, or use the arrow keys to nudge it. The two buttons above the preview, **Tighten** and **Widen context**, show less or more of the screen. A pinch on the trackpad over the preview does the same.
 5. Press `⌘↩` or `Ctrl+Enter`, or click **Save**. The panel closes and you are back in your work.
 
-To set a capture aside, press `Escape` or click anywhere outside the panel. The draft stays in memory. Press the shortcut again to bring the same draft back. The app does not take a new screenshot while a draft exists.
+To set a capture aside, press `Escape` or click anywhere outside the panel. The draft stays in memory. Press the shortcut again to bring the same draft back. The panel then says **Unsaved draft from** with its time, because the app does not take a new screenshot while a draft exists. Save or discard it to capture something new.
 
-To throw a draft away, click **Discard**.
+To throw a draft away, click **Discard**. Once you have typed something, the button asks **Click again to discard**. A second click within 4 seconds discards the draft. `Escape` takes the question back.
 
 If the shortcut does not work because another app uses it, choose **New capture in 3 seconds** from the menu-bar icon and move the pointer over your detail before the delay ends.
 
 ## Read, edit, and export captures
 
-Choose **Recent captures…** from the menu-bar icon. The window lists your captures with the newest first. Open one to see the full crop with its pin. On that page you can edit the thought, use **Copy note** or **Copy image**, drag **Drag image** into another app to drop the crop file there, or delete the capture.
+Choose **Recent captures…** from the menu-bar icon. The window shows your captures grouped by day, newest first, and opens the newest one beside the list. In a narrow window the list and a capture each take the whole window.
+
+- Search the thoughts with the field at the top, or with `⌘F` or `Ctrl+F`. Every word you type must appear.
+- Move through the list with `↑` and `↓`.
+- **Copy note** copies the thought. **Copy image** copies the crop with the pin drawn on it. Each button shows **Copied** when it has worked.
+- Drag the image itself into another app to drop it as a file. The file carries the pin too and is named after the thought.
+- **Edit thought** changes the text. `⌘↩` saves it and `Escape` cancels.
+- **Delete** asks once, then opens the next capture.
 
 The app stores each capture as a folder with `capture.json` and `crop.png`.
 
