@@ -65,6 +65,8 @@ export interface DraftView {
   /** Read only when the editor mounts; afterwards the renderer owns the content. */
   readonly seed: DraftContent;
   readonly write: WriteStatus;
+  /** The draft was set aside and shown again, so the shortcut did not capture a new point. */
+  readonly reopened: boolean;
   /** Changes every time the panel is shown; echoed with height reports. */
   readonly surfaceKey: string;
 }
@@ -92,6 +94,7 @@ export type CaptureSummary =
       readonly kind: "ok";
       readonly id: CaptureId;
       readonly title: string;
+      readonly thought: string;
       readonly capturedAt: string;
       readonly sourceLabel: string | null;
       readonly image: SavedImage;

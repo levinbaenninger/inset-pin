@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { trayMenu } from "./tray-menu";
+import { trayMenu, trayTooltip } from "./tray-menu";
 import type { TrayModel } from "./tray-menu";
 
 const labels = (model: TrayModel): string[] =>
@@ -45,6 +45,7 @@ describe(trayMenu, () => {
     expect(items[1]).toMatchObject({
       action: "captureAfterDelay",
       enabled: false,
+      label: "New capture: save or discard the draft first",
     });
   });
 
@@ -55,5 +56,16 @@ describe(trayMenu, () => {
       kind: "item",
       label: "Capturing in 3 seconds…",
     });
+  });
+});
+
+describe(trayTooltip, () => {
+  it("names the shortcut for the platform", () => {
+    expect(trayTooltip({ isMac: true })).toBe(
+      "Inset Context Pin: point at a detail and press ⌥⌘P"
+    );
+    expect(trayTooltip({ isMac: false })).toBe(
+      "Inset Context Pin: point at a detail and press Ctrl+Alt+P"
+    );
   });
 });

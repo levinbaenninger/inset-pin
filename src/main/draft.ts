@@ -411,6 +411,7 @@ export const viewOf = (state: DraftState): CaptureView => {
       url: insetUrl.draftImage(draft.id),
     },
     kind: "draft",
+    reopened: state.shownSeq > 1,
     seed: draft.content,
     sourceLabel: draft.anchor.display.label,
     surfaceKey: draftSurfaceKey(state),

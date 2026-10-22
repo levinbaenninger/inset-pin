@@ -3,7 +3,7 @@ import { Menu, nativeImage, Tray } from "electron";
 import type { MenuItemConstructorOptions } from "electron";
 
 import type { TrayState } from "./draft";
-import { trayMenu } from "./tray-menu";
+import { trayMenu, trayTooltip } from "./tray-menu";
 import type { TrayAction, TrayItem } from "./tray-menu";
 
 export interface TrayOptions {
@@ -80,7 +80,7 @@ export const createTray = (options: TrayOptions): Tray => {
     );
   };
 
-  tray.setToolTip("Inset Context Pin");
+  tray.setToolTip(trayTooltip({ isMac: process.platform === "darwin" }));
   options.subscribe(rebuild);
   rebuild();
 

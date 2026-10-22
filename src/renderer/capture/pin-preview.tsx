@@ -17,16 +17,30 @@ import {
   WIDEN_STEP,
 } from "@shared/geometry";
 import type { PinGeometry } from "@shared/geometry";
-import { useLayoutEffect, useRef, useState } from "react";
-import type { KeyboardEvent, PointerEvent, RefObject } from "react";
+import {
+  useEffect,
+  useEffectEvent,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
+import type { KeyboardEvent, PointerEvent, ReactNode, RefObject } from "react";
 
 import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { PinMarker } from "@/shared/pin-marker";
 
 /** Panel content width: 380 − 2 × 12 padding. */
 const MAX_BOX_WIDTH = 356;
 const MAX_BOX_HEIGHT = 220;
 const NUDGE_FAR = 10;
+
+/** Trackpad pinch arrives as ctrl+wheel; this much delta is one widen or tighten step. */
+const PINCH_STEP_DELTA = 40;
 
 const ARROWS = new Map([
   ["ArrowDown", { x: 0, y: 1 }],
@@ -75,14 +89,82 @@ const useBoxWidth = (): [RefObject<HTMLDivElement | null>, number] => {
   return [ref, width];
 };
 
+/** Pinch on a trackpad (ctrl+wheel) widens or tightens; plain scrolling is left alone. */
+const usePinch = (
+  ref: RefObject<HTMLElement | null>,
+  onStep: (direction: "widen" | "tighten") => void
+): void => {
+  const step = useEffectEvent(onStep);
+
+  useEffect(() => {
+    const element = ref.current;
+    let pending = 0;
+
+    const onWheel = (event: WheelEvent): void => {
+      if (!event.ctrlKey) {
+        return;
+      }
+
+      event.preventDefault();
+      pending += event.deltaY;
+
+      if (Math.abs(pending) >= PINCH_STEP_DELTA) {
+        step(pending > 0 ? "widen" : "tighten");
+        pending = 0;
+      }
+    };
+
+    element?.addEventListener("wheel", onWheel, { passive: false });
+
+    return () => {
+      element?.removeEventListener("wheel", onWheel);
+    };
+  }, [ref]);
+};
+
+interface ZoomButtonProps {
+  readonly label: string;
+  readonly hint: string;
+  readonly icon: typeof ArrowExpand01Icon;
+  readonly disabled: boolean;
+  readonly onClick: () => void;
+}
+
+const ZoomButton = ({
+  disabled,
+  hint,
+  icon,
+  label,
+  onClick,
+}: ZoomButtonProps) => (
+  <Tooltip>
+    <TooltipTrigger asChild>
+      <Button
+        aria-label={label}
+        disabled={disabled}
+        onClick={onClick}
+        size="icon-sm"
+        type="button"
+        variant="ghost"
+      >
+        <HugeiconsIcon icon={icon} />
+      </Button>
+    </TooltipTrigger>
+    <TooltipContent side="bottom">{hint}</TooltipContent>
+  </Tooltip>
+);
+
 export interface PinPreviewProps {
   readonly frame: DraftView["frame"];
   readonly geometry: PinGeometry;
   readonly disabled: boolean;
   readonly onChange: (geometry: PinGeometry) => void;
+  /** Shown left of the context buttons, above the preview. */
+  readonly caption: ReactNode;
 }
 
 export const PinPreview = ({
+  caption,
   disabled,
   frame,
   geometry,
@@ -90,6 +172,9 @@ export const PinPreview = ({
 }: PinPreviewProps) => {
   const { crop, pin } = geometry;
   const [boxRef, boxWidth] = useBoxWidth();
+  const previewRef = useRef<HTMLButtonElement>(null);
+  const widest = isWidest(crop, frame.size);
+  const tightest = isTightest(crop, frame.size, frame.ppd);
   const fit = fitPreview(crop, size(boxWidth, MAX_BOX_HEIGHT));
   const marker = imageToPreview(pin, crop, fit);
 
@@ -146,17 +231,53 @@ export const PinPreview = ({
     });
   };
 
+  usePinch(previewRef, (direction) => {
+    if (disabled) {
+      return;
+    }
+
+    if (direction === "widen" && !widest) {
+      rescale(WIDEN_STEP);
+    } else if (direction === "tighten" && !tightest) {
+      rescale(1 / WIDEN_STEP);
+    }
+  });
+
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-1.5">
+      <div className="flex min-h-7 items-center justify-between gap-2">
+        <div className="min-w-0 text-xs">{caption}</div>
+        <div className="flex shrink-0 items-center">
+          <ZoomButton
+            disabled={disabled || tightest}
+            hint="Tighten: show less around the pin"
+            icon={ArrowShrink01Icon}
+            label="Tighten"
+            onClick={() => {
+              rescale(1 / WIDEN_STEP);
+            }}
+          />
+          <ZoomButton
+            disabled={disabled || widest}
+            hint="Widen context: show more around the pin"
+            icon={ArrowExpand01Icon}
+            label="Widen context"
+            onClick={() => {
+              rescale(WIDEN_STEP);
+            }}
+          />
+        </div>
+      </div>
       <div className="bg-muted flex justify-center rounded-lg" ref={boxRef}>
         <button
-          aria-label="Pin position. Click to move the pin, or use the arrow keys (Shift moves further)."
+          aria-label="Pin position. Click or drag to move the pin, or use the arrow keys (Shift moves further). Pinch to widen or tighten."
           aria-roledescription="pin preview"
           className="focus-visible:ring-ring/50 relative h-(--box-h) w-(--box-w) cursor-crosshair touch-none overflow-hidden rounded-lg outline-none focus-visible:ring-3 disabled:cursor-default"
           disabled={disabled}
           onKeyDown={onKeyDown}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
+          ref={previewRef}
           style={{
             "--box-h": `${fit.box.height}px`,
             "--box-w": `${fit.box.width}px`,
@@ -177,32 +298,6 @@ export const PinPreview = ({
           />
           <PinMarker left={`${marker.x}px`} top={`${marker.y}px`} />
         </button>
-      </div>
-      <div className="flex gap-1">
-        <Button
-          disabled={disabled || isWidest(crop, frame.size)}
-          onClick={() => {
-            rescale(WIDEN_STEP);
-          }}
-          size="xs"
-          type="button"
-          variant="outline"
-        >
-          <HugeiconsIcon data-icon="inline-start" icon={ArrowExpand01Icon} />
-          Widen context
-        </Button>
-        <Button
-          disabled={disabled || isTightest(crop, frame.size, frame.ppd)}
-          onClick={() => {
-            rescale(1 / WIDEN_STEP);
-          }}
-          size="xs"
-          type="button"
-          variant="outline"
-        >
-          <HugeiconsIcon data-icon="inline-start" icon={ArrowShrink01Icon} />
-          Tighten
-        </Button>
       </div>
     </div>
   );
