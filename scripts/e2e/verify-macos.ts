@@ -122,7 +122,7 @@ const enableWebAccessibility = () =>
 
 const buttonCentre = (title: string) =>
   jxa(`const hit = ${processElements}.find((e) => {
-      try { return e.role() === "AXButton" && e.name() === ${JSON.stringify(title)}; } catch { return false; }
+      try { return e.role() === "AXButton" && (e.name() === ${JSON.stringify(title)} || e.description() === ${JSON.stringify(title)}); } catch { return false; }
     });
     hit ? (() => { const [x, y] = hit.position(); const [w, h] = hit.size(); return Math.round(x + w / 2) + " " + Math.round(y + h / 2); })() : "";`);
 
@@ -363,6 +363,10 @@ const checkDismissAndRestore = async ({
       .slice(mark)
       .some((e) => e.event === "capture")
   );
+  record(
+    "reopened panel says the draft is unsaved",
+    await windowShows("Unsaved draft from")
+  );
 
   await typeText(" row");
   await delay(200);
@@ -526,6 +530,11 @@ const checkDiscard = async () => {
   const mark = events().length;
 
   await clickButton("Discard");
+  record(
+    "Discard with a thought asks for a second click",
+    (await waitFor("discarded", mark, Date.now() + 600)) === undefined
+  );
+  await clickButton("Click again to discard");
   record("Discard logged", (await waitFor("discarded", mark)) !== undefined);
   record(
     "Discard leaves no saved capture",
