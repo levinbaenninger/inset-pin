@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import type { CaptureId } from "@shared/capture-record";
@@ -49,6 +49,18 @@ interface PinnedImage {
 export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
   const { store } = options;
   let window: BrowserWindow | null = null;
+
+  // Dragged copies wait here for the drop; a drop can finish after startDrag returns, so they are cleared on delete and at launch.
+  const dragStaging = path.join(app.getPath("temp"), "Inset Context Pin");
+
+  const clearStaging = (id?: CaptureId): void => {
+    rmSync(id === undefined ? dragStaging : path.join(dragStaging, id), {
+      force: true,
+      recursive: true,
+    });
+  };
+
+  clearStaging();
 
   /** The saved crop with the pin drawn on it, so the receiving app sees what mattered. */
   const pinnedImage = (id: CaptureId): PinnedImage | null => {
@@ -126,7 +138,13 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
       remove: async (id) => {
         const result = await store.remove(id);
 
-        return result.ok ? OK : fail(result.message);
+        if (!result.ok) {
+          return fail(result.message);
+        }
+
+        clearStaging(id);
+
+        return OK;
       },
       startImageDrag: (id) => {
         const pinned = pinnedImage(id);
@@ -136,7 +154,7 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
         }
 
         // A named copy, so the dropped file says what it is instead of "crop.png".
-        const folder = path.join(app.getPath("temp"), "Inset Context Pin", id);
+        const folder = path.join(dragStaging, id);
         const file = path.join(folder, pinned.fileName);
 
         mkdirSync(folder, { recursive: true });
