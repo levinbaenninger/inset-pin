@@ -16,6 +16,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 
 import { CaptureRecordV1Schema } from "../../src/shared/capture-record.ts";
+import { DEFAULT_CROP_DIP } from "../../src/shared/geometry.ts";
 
 const root = path.resolve(import.meta.dirname, "../..");
 const mode = process.argv[2] === "packaged" ? "packaged" : "dev";
@@ -484,7 +485,7 @@ const checkEdgeWiden = async () => {
 
   record(
     "widening near the edge enlarges the crop",
-    stored.image.widthPx > 960,
+    stored.image.widthPx > DEFAULT_CROP_DIP.width * stored.image.pixelsPerDip,
     `${stored.image.widthPx}x${stored.image.heightPx}`
   );
   record("pin stays on the edge detail after widening", onMarker, rgb);
