@@ -9,8 +9,29 @@ const dateTime = new Intl.DateTimeFormat(undefined, {
   timeStyle: "short",
 });
 
+const time = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
+
+const weekdayDate = new Intl.DateTimeFormat(undefined, {
+  day: "numeric",
+  month: "short",
+  weekday: "short",
+});
+
 export const formatCaptureTime = (iso: string): string =>
   dateTime.format(new Date(iso));
+
+export const timeOfDay = (iso: string): string => time.format(new Date(iso));
+
+export const dayLabel = (
+  day: Date,
+  relative: "today" | "yesterday" | null
+): string => {
+  if (relative === "today") {
+    return "Today";
+  }
+
+  return relative === "yesterday" ? "Yesterday" : weekdayDate.format(day);
+};
 
 export const sourceText = (label: string | null): string =>
   label ?? "Screen capture";

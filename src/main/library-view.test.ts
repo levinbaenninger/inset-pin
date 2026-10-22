@@ -2,7 +2,7 @@ import { CaptureIdSchema } from "@shared/capture-record";
 import type { CaptureRecordV1 } from "@shared/capture-record";
 import { describe, expect, it } from "vitest";
 
-import { toDetail, toSummary } from "./library-view";
+import { exportFileName, toDetail, toSummary } from "./library-view";
 
 const ID = CaptureIdSchema.parse("3f1c2b9e-4a7d-4e21-9b0c-5d8e6f7a1b2c");
 
@@ -34,6 +34,7 @@ describe(toSummary, () => {
       kind: "ok",
       pin: { x: 240, y: 100 },
       sourceLabel: null,
+      thought: "  \nThis total ignores the discount row\nCheck with finance",
       title: "This total ignores the discount row",
     });
   });
@@ -64,5 +65,21 @@ describe(toDetail, () => {
       thought: record.thought,
       updatedAt: "2026-10-21T18:40:31.002Z",
     });
+  });
+});
+
+describe(exportFileName, () => {
+  it("names the file after the thought's first line", () => {
+    expect(exportFileName(record.thought)).toBe(
+      "This total ignores the discount row.png"
+    );
+  });
+
+  it("replaces characters a file name can't hold and trims trailing dots", () => {
+    expect(exportFileName('Is a/b: "ok"?\u0007...')).toBe("Is a-b- -ok--.png");
+  });
+
+  it("falls back when nothing usable is left", () => {
+    expect(exportFileName("...")).toBe("Capture.png");
   });
 });

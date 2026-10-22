@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import { mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
 
 import type { CaptureId } from "@shared/capture-record";
 import { libraryContract } from "@shared/contracts";
@@ -14,7 +15,8 @@ import {
 } from "electron";
 
 import { serveContract } from "./ipc-kit";
-import { toDetail, toSummary } from "./library-view";
+import { exportFileName, toDetail, toSummary } from "./library-view";
+import { drawPinMark } from "./pin-mark";
 import type { CaptureStore } from "./store";
 import { appOrigin, harden, secureWebPreferences } from "./window-security";
 
@@ -38,29 +40,64 @@ const OK: ActionResult = { ok: true };
 
 const fail = (message: string): ActionResult => ({ message, ok: false });
 
+interface PinnedImage {
+  readonly image: Electron.NativeImage;
+  readonly png: Buffer;
+  readonly fileName: string;
+}
+
 export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
   const { store } = options;
   let window: BrowserWindow | null = null;
 
-  const savedImage = (id: CaptureId): Electron.NativeImage | null => {
+  /** The saved crop with the pin drawn on it, so the receiving app sees what mattered. */
+  const pinnedImage = (id: CaptureId): PinnedImage | null => {
+    const entry = store.get(id);
     const file = store.imageFile(id);
-    const image = file === null ? null : nativeImage.createFromPath(file);
 
-    return image === null || image.isEmpty() ? null : image;
+    if (entry?.kind !== "ok" || file === null) {
+      return null;
+    }
+
+    const saved = nativeImage.createFromPath(file);
+
+    if (saved.isEmpty()) {
+      return null;
+    }
+
+    const { height, width } = saved.getSize();
+    const { pin, image } = entry.record;
+
+    const marked = nativeImage.createFromBitmap(
+      Buffer.from(
+        drawPinMark(
+          { data: saved.toBitmap(), height, width },
+          pin,
+          image.pixelsPerDip
+        )
+      ),
+      { height, width }
+    );
+
+    return {
+      fileName: exportFileName(entry.record.thought),
+      image: marked,
+      png: marked.toPNG(),
+    };
   };
 
   const server = serveContract(
     libraryContract,
     {
       copyImage: async (id) => {
-        const file = store.imageFile(id);
+        const pinned = pinnedImage(id);
 
-        if (file === null) {
+        if (pinned === null) {
           return fail("This capture has no readable image.");
         }
 
         try {
-          const png = new Blob([await readFile(file)], { type: "image/png" });
+          const png = new Blob([pinned.png], { type: "image/png" });
 
           await clipboard.write([new ClipboardItem({ "image/png": png })]);
 
@@ -92,15 +129,22 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
         return result.ok ? OK : fail(result.message);
       },
       startImageDrag: (id) => {
-        const file = store.imageFile(id);
-        const image = savedImage(id);
+        const pinned = pinnedImage(id);
 
-        if (window !== null && file !== null && image !== null) {
-          window.webContents.startDrag({
-            file,
-            icon: image.resize({ width: DRAG_ICON_WIDTH }),
-          });
+        if (window === null || pinned === null) {
+          return;
         }
+
+        // A named copy, so the dropped file says what it is instead of "crop.png".
+        const folder = path.join(app.getPath("temp"), "Inset Context Pin", id);
+        const file = path.join(folder, pinned.fileName);
+
+        mkdirSync(folder, { recursive: true });
+        writeFileSync(file, pinned.png);
+        window.webContents.startDrag({
+          file,
+          icon: pinned.image.resize({ width: DRAG_ICON_WIDTH }),
+        });
       },
       updateThought: async ({ id, thought }) => {
         const result = await store.updateThought(id, thought);
