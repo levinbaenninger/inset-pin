@@ -14,6 +14,7 @@ import { saveShortcutLabel } from "@shared/shortcut";
 import {
   getRouteApi,
   Link,
+  useBlocker,
   useNavigate,
   useRouter,
 } from "@tanstack/react-router";
@@ -109,6 +110,14 @@ const ThoughtEditor = ({ capture, onDone }: ThoughtEditorProps) => {
   const [thought, setThought] = useState(capture.thought);
   const [saving, setSaving] = useState(false);
   const savable = canSaveThought(thought) && !saving;
+  const changed = thought !== capture.thought;
+
+  // Choosing another capture while editing would otherwise drop the change silently.
+  const leaving = useBlocker({
+    enableBeforeUnload: false,
+    shouldBlockFn: () => changed,
+    withResolver: true,
+  });
 
   // The field and Cancel stay locked until the save settles, so no edit is silently dropped.
   const save = useCallback(async (): Promise<void> => {
@@ -134,49 +143,85 @@ const ThoughtEditor = ({ capture, onDone }: ThoughtEditorProps) => {
   useLocalKeys({ onEscape: cancel, onSave: saveNow });
 
   return (
-    <form
-      className="flex flex-col gap-2"
-      onSubmit={(event) => {
-        event.preventDefault();
-        saveNow();
-      }}
-    >
-      <Textarea
-        aria-label="Thought"
-        autoFocus
-        className="min-h-28"
-        maxLength={THOUGHT_MAX}
-        onChange={(event) => {
-          setThought(event.target.value);
+    <>
+      <AlertDialog
+        onOpenChange={(open) => {
+          if (!open) {
+            leaving.reset?.();
+          }
         }}
-        onFocus={(event) => {
-          const end = event.currentTarget.value.length;
+        open={leaving.status === "blocked"}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Leave without saving?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Your change to this thought is not saved yet.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              onClick={() => {
+                leaving.reset?.();
+              }}
+            >
+              Keep editing
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                leaving.proceed?.();
+              }}
+              variant="destructive"
+            >
+              Leave without saving
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <form
+        className="flex flex-col gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          saveNow();
+        }}
+      >
+        <Textarea
+          aria-label="Thought"
+          autoFocus
+          className="min-h-28"
+          maxLength={THOUGHT_MAX}
+          onChange={(event) => {
+            setThought(event.target.value);
+          }}
+          onFocus={(event) => {
+            const end = event.currentTarget.value.length;
 
-          event.currentTarget.setSelectionRange(end, end);
-        }}
-        readOnly={saving}
-        value={thought}
-      />
-      <div className="flex items-center justify-end gap-2">
-        <span className="text-muted-foreground mr-auto text-xs">
-          Esc cancels
-        </span>
-        <Button
-          disabled={saving}
-          onClick={cancel}
-          size="sm"
-          type="button"
-          variant="ghost"
-        >
-          Cancel
-        </Button>
-        <Button disabled={!savable} size="sm" type="submit">
-          {saving ? <Spinner data-icon="inline-start" /> : null}
-          Save thought
-          <Kbd>{saveShortcutLabel(isMac)}</Kbd>
-        </Button>
-      </div>
-    </form>
+            event.currentTarget.setSelectionRange(end, end);
+          }}
+          readOnly={saving}
+          value={thought}
+        />
+        <div className="flex items-center justify-end gap-2">
+          <span className="text-muted-foreground mr-auto text-xs">
+            Esc cancels
+          </span>
+          <Button
+            disabled={saving}
+            onClick={cancel}
+            size="sm"
+            type="button"
+            variant="ghost"
+          >
+            Cancel
+          </Button>
+          <Button disabled={!savable} size="sm" type="submit">
+            {saving ? <Spinner data-icon="inline-start" /> : null}
+            Save thought
+            <Kbd>{saveShortcutLabel(isMac)}</Kbd>
+          </Button>
+        </div>
+      </form>
+    </>
   );
 };
 

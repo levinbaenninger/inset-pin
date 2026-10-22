@@ -106,12 +106,11 @@ const ARROW_OFFSETS = new Map<string, 1 | -1>([
   ["ArrowUp", -1],
 ]);
 
-/** Text areas keep their arrow keys, and an open dialog keeps the list still behind it. */
+/** The thought editor and dialogs keep their arrow keys, so moving through the list never drops an edit. */
 const ownsArrowKeys = (target: EventTarget | null): boolean =>
-  target instanceof HTMLTextAreaElement ||
-  (target instanceof HTMLElement &&
-    (target.isContentEditable ||
-      target.closest('[role="alertdialog"], [role="dialog"]') !== null));
+  target instanceof HTMLElement &&
+  (target.isContentEditable ||
+    target.closest('form, [role="alertdialog"], [role="dialog"]') !== null);
 
 /** ↑ and ↓ move through the visible captures from anywhere but a text area; ⌘F or Ctrl+F searches. */
 const useListKeys = (

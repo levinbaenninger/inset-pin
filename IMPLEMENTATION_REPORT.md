@@ -42,7 +42,8 @@ The experiment should record these choices next to its findings, because each on
 | Fallback condition | Each record stores `invokedVia` as `shortcut` or `trayDelayed` | `CaptureRecordV1Schema` |
 | Library on open | Two panes from 768 px wide, opening the newest capture. Narrower windows show one pane at a time. | `src/renderer/library/router.tsx` |
 | Exported image | **Copy image** and file drag carry the pin, drawn into the PNG. The stored `crop.png` stays without it. | `drawPinMark` in `src/main/pin-mark.ts` |
-| Dragged file name | The thought's first line, made safe for a file name | `exportFileName` in `src/main/library-view.ts` |
+| Dragged file name | The thought's first line, made safe for a file name. The named copy waits in the system temp folder under `Inset Context Pin/<id>`, is removed when the capture is deleted, and the folder is cleared at every launch. | `exportFileName` in `src/main/library-view.ts`, `src/main/library-window.ts` |
+| Leaving an edited thought | Choosing another capture with an unsaved change asks **Keep editing** or **Leave without saving**. Arrow keys inside the editor never move through the list. | `useBlocker` in `src/renderer/library/capture-page.tsx` |
 
 ## What was tested
 
@@ -145,6 +146,8 @@ The first CI run on pull request #1 passed all four jobs: lint, typecheck, tests
 - **Permission refusal and the first-run grant.** The app shows a panel with **Open System Settings** and **Quit and Reopen** when macOS reports that screen access is missing. This path was not observed. Every test run launched the app from a terminal host that already had screen access, and macOS attributes the grant to that host. A packaged app opened from Finder asks for its own grant, and that first run is untested.
 - **Shortcut conflict detection does not work across apps on macOS.** `scripts/e2e/hotkey-holder.swift` registered `⌥⌘P` through Carbon in a separate process. Electron's `globalShortcut.register` still returned true, so the tray kept showing "Capture under pointer: ⌥⌘P" instead of the conflict notice. The tray item **New capture in 3 seconds** is always present and was verified, so a participant whose shortcut is taken still has a working entry. The conflict notice appears only when Electron itself reports a failure.
 - **Pasting and dropping into a real receiving app.** In the packaged app, **Copy image** was clicked and the clipboard read back with AppleScript. It held the 960 × 600 crop with the pin ring in the right colour, and the button showed **Copied**. Pasting into another application and dragging the file into one were not tried.
+- **Library keys, pinch and delete in the real app.** `↑`/`↓`, `⌘F`, the unsaved-edit guard and opening the next capture after **Delete** were checked only in the browser preview with a stubbed bridge. Pinch (ctrl+wheel) over the panel preview was not tried at all. Sending keys to the real library needs it in front, and macOS did not bring the menu-bar app forward from a script.
+- **A `⌘W` miss.** In one of five dev runs after the UX changes, `⌘W` did not close the library, which stayed open until the app quit. The next four runs, dev and packaged, closed it. The cause is unknown.
 - **The pin in exported images on Windows.** The drawing code assumes the BGRA bitmap order that Electron returned on macOS. Windows was not checked.
 - **Screen readers.** The panel has labels and keyboard paths, but no screen reader test ran.
 - **The problem panel followed by a new capture.** When the problem panel is visible and the user presses the shortcut again, the app hides the panel and waits 150 ms before it captures. Whether that wait keeps the panel out of the image was not observed.

@@ -53,7 +53,7 @@ Choose **Recent captures…** from the menu-bar icon. The window shows your capt
 - Move through the list with `↑` and `↓`.
 - **Copy note** copies the thought. **Copy image** copies the crop with the pin drawn on it. Each button shows **Copied** when it has worked.
 - Drag the image itself into another app to drop it as a file. The file carries the pin too and is named after the thought.
-- **Edit thought** changes the text. `⌘↩` saves it and `Escape` cancels.
+- **Edit thought** changes the text. `⌘↩` saves it and `Escape` cancels. Choosing another capture with an unsaved change asks first.
 - **Delete** asks once, then opens the next capture.
 
 The app stores each capture as a folder with `capture.json` and `crop.png`.
