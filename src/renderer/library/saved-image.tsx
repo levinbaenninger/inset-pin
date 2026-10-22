@@ -16,8 +16,10 @@ const percent = (value: number, total: number): string =>
 export const SavedImage = ({ alt, image, pin, size }: SavedImageProps) => (
   <div
     className={cn(
-      "bg-muted relative overflow-hidden rounded-lg",
-      size === "thumbnail" ? "w-24 shrink-0" : "w-fit max-w-full"
+      "bg-muted after:ring-foreground/10 relative overflow-hidden rounded-lg after:pointer-events-none after:absolute after:inset-0 after:ring-1 after:ring-inset",
+      size === "thumbnail"
+        ? "w-20 shrink-0 rounded-md after:rounded-md"
+        : "w-fit max-w-full after:rounded-lg"
     )}
   >
     <img
