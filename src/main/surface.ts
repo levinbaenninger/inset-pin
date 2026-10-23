@@ -1,12 +1,11 @@
-import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 
 import { placePopover, POPOVER_WIDTH_DIP, rect, size } from "@shared/geometry";
 import type { Rect } from "@shared/geometry";
-import { app, BrowserWindow, dialog, nativeTheme, screen } from "electron";
-import type { MessageBoxOptions, Rectangle, WebContents } from "electron";
+import { app, BrowserWindow, nativeTheme, screen } from "electron";
+import type { Rectangle, WebContents } from "electron";
 
-import type { Anchor, DraftSurface, QuitChoice } from "./draft";
+import type { Anchor, DraftSurface } from "./draft";
 import { harden, secureWebPreferences } from "./window-security";
 
 const INITIAL_HEIGHT = 320;
@@ -14,18 +13,6 @@ const HEIGHT_WAIT_MS = 250;
 
 /** Lets the compositor drop the hidden panel before a capture; not measured, see report. */
 const HIDE_SETTLE_MS = 150;
-const QUIT_CHOICES: readonly QuitChoice[] = ["save", "discard", "cancel"];
-
-const QUIT_DIALOG: MessageBoxOptions = {
-  buttons: ["Save", "Discard", "Cancel"],
-  cancelId: 2,
-  defaultId: 0,
-  detail: "This capture has a thought that has not been saved yet.",
-  message: "Save your capture before quitting?",
-  noLink: true,
-  title: "Inset Context Pin",
-  type: "question",
-};
 
 export interface CaptureSurface extends DraftSurface {
   readonly webContents: WebContents;
@@ -93,9 +80,7 @@ export const createCaptureSurface = (
   let contentHeight = INITIAL_HEIGHT;
   let revealTimer: NodeJS.Timeout | undefined;
   let pendingKey: string | null = null;
-  const pending = new EventTarget();
   let hiddenAt = 0;
-  let blurSuppressed = 0;
   let closable = false;
   const listeners = { dismiss: noop, hidden: noop, shown: noopBounds };
 
@@ -123,24 +108,6 @@ export const createCaptureSurface = (
   const settlePending = (): void => {
     clearTimeout(revealTimer);
     pendingKey = null;
-    pending.dispatchEvent(new Event("settled"));
-  };
-
-  const pendingSettled = async (): Promise<void> => {
-    if (pendingKey !== null) {
-      await once(pending, "settled");
-    }
-  };
-
-  /** Windows leaves the panel clickable behind a parentless dialog; on macOS a parent would turn the app-modal alert into a sheet. */
-  const quitDialogParent = async (): Promise<BrowserWindow | null> => {
-    if (isMac) {
-      return null;
-    }
-
-    await pendingSettled();
-
-    return window.isVisible() ? window : null;
   };
 
   const reveal = (): void => {
@@ -189,7 +156,7 @@ export const createCaptureSurface = (
   };
 
   window.on("blur", () => {
-    if (blurSuppressed === 0 && window.isVisible()) {
+    if (window.isVisible()) {
       listeners.dismiss();
     }
   });
@@ -210,26 +177,6 @@ export const createCaptureSurface = (
   return {
     allowClose: () => {
       closable = true;
-    },
-    askQuitChoice: async () => {
-      blurSuppressed += 1;
-
-      try {
-        if (isMac) {
-          app.focus({ steal: true });
-        }
-
-        const parent = await quitDialogParent();
-
-        const { response } =
-          parent === null
-            ? await dialog.showMessageBox(QUIT_DIALOG)
-            : await dialog.showMessageBox(parent, QUIT_DIALOG);
-
-        return QUIT_CHOICES[response] ?? "cancel";
-      } finally {
-        blurSuppressed -= 1;
-      }
     },
     focus: () => {
       if (window.isVisible()) {

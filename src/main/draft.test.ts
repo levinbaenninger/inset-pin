@@ -267,7 +267,7 @@ describe(step, () => {
     const done = step(saving.state, { id: ID, type: "published" });
 
     expect(asking).toMatchObject({
-      effects: [{ type: "askQuitChoice" }],
+      effects: [{ type: "focus" }],
       state: { quit: "asking" },
     });
     expect(again).toStrictEqual({ effects: [], state: asking.state });
@@ -279,6 +279,20 @@ describe(step, () => {
     expect(mayQuit(done.state)).toBeTruthy();
   });
 
+  it("tells the panel to ask only until the question is answered", () => {
+    const asking = step(withThought("Keep me"), { type: "quitHeld" }).state;
+    const saving = step(asking, { choice: "save", type: "quitChoice" }).state;
+    const cancelled = step(asking, { choice: "cancel", type: "quitChoice" });
+
+    expect(
+      [asking, saving, cancelled.state].map((state) => viewOf(state))
+    ).toMatchObject([
+      { quitting: true },
+      { quitting: false },
+      { quitting: false },
+    ]);
+  });
+
   it("shows a hidden draft when quit asks about it", () => {
     const hidden = step(withThought("Keep me"), { type: "dismissed" }).state;
 
@@ -288,7 +302,7 @@ describe(step, () => {
     });
   });
 
-  it("discards or cancels from the quit dialog", () => {
+  it("discards or cancels from the quit question", () => {
     const asking = step(withThought("Keep me"), { type: "quitHeld" }).state;
 
     expect(
@@ -353,7 +367,7 @@ describe(step, () => {
     });
   });
 
-  it("ignores the panel's save, discard and edits while the quit dialog is open", () => {
+  it("ignores the panel's save, discard and edits while it asks about quitting", () => {
     const asking = step(withThought("Keep me"), { type: "quitHeld" }).state;
 
     expect(
@@ -378,9 +392,9 @@ describe(step, () => {
     ]);
   });
 
-  // Not reachable through events any more; guards the dialog against a save that started first.
+  // Not reachable through events any more; guards the question against a save that started first.
   it.each(["save", "discard"] as const)(
-    "waits for a running save when the quit dialog answers %s",
+    "waits for a running save when the quit question is answered %s",
     (choice) => {
       expect(
         step(savingWhile("asking"), { choice, type: "quitChoice" })
@@ -487,7 +501,6 @@ const createFakes = (overrides: Partial<DraftDeps> = {}) => {
       calls.push("quit");
     },
     surface: {
-      askQuitChoice: async () => await Promise.resolve("cancel"),
       focus: () => {
         calls.push("focus");
       },
@@ -552,7 +565,7 @@ describe(createDraftController, () => {
     expect(controller.frame(STALE_ID)).toBeNull();
   });
 
-  it("holds quit for a savable draft and runs the dialog choice", async () => {
+  it("holds quit for a savable draft and asks in the panel", async () => {
     const { calls, controller } = createFakes({ capture: capturing });
 
     controller.invoke(point.invocation);
@@ -560,14 +573,16 @@ describe(createDraftController, () => {
     controller.edit(ID, typed("Keep me"));
 
     expect(controller.holdQuitIfNeeded()).toBe("hold");
-
-    await settle();
-
+    expect(controller.view()).toMatchObject({ quitting: true });
     expect(calls).toContain("focus");
     expect(controller.tray()).toBe("shown");
+
+    controller.answerQuit("discard");
+
+    expect(calls.at(-1)).toBe("quit");
   });
 
-  it("pushes a fresh view when the quit dialog closes, so an ignored Save stops waiting", async () => {
+  it("pushes a fresh view when the quit question ends, so an ignored Save stops waiting", async () => {
     const { calls, controller } = createFakes({ capture: capturing });
 
     controller.invoke(point.invocation);
@@ -581,15 +596,19 @@ describe(createDraftController, () => {
     controller.holdQuitIfNeeded();
     controller.save(ID, typed("Keep me"));
     calls.push("save sent");
-    await settle();
+    controller.answerQuit("cancel");
 
     expect(calls).toStrictEqual([
       "view pushed",
+      "focus",
       "save sent",
       "view pushed",
       "focus",
     ]);
-    expect(controller.view()).toMatchObject({ write: { kind: "editing" } });
+    expect(controller.view()).toMatchObject({
+      quitting: false,
+      write: { kind: "editing" },
+    });
   });
 });
 

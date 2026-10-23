@@ -35,6 +35,10 @@ const DraftEditSchema = z.object({
   id: CaptureIdSchema,
 });
 
+export const QuitChoiceSchema = z.enum(["save", "discard", "cancel"]);
+
+export type QuitChoice = z.output<typeof QuitChoiceSchema>;
+
 export type WriteStatus =
   | { readonly kind: "editing" }
   | { readonly kind: "saving" }
@@ -67,6 +71,8 @@ export interface DraftView {
   readonly write: WriteStatus;
   /** The draft was set aside and shown again, so the shortcut did not capture a new point. */
   readonly reopened: boolean;
+  /** Quit was requested; the panel asks whether to save this thought first. */
+  readonly quitting: boolean;
   /** Changes every time the panel is shown; echoed with height reports. */
   readonly surfaceKey: string;
 }
@@ -129,6 +135,7 @@ export const captureContract = defineContract({
   events: { view: event<CaptureView>() },
   global: "insetCapture",
   methods: {
+    answerQuit: send(QuitChoiceSchema),
     discard: send(CaptureIdSchema),
     dismiss: send(z.void()),
     edit: send(DraftEditSchema),

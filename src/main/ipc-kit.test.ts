@@ -53,6 +53,7 @@ const setup = () => {
   };
 
   const handlers: Handlers<CaptureContract> = {
+    answerQuit: noop,
     discard: noop,
     dismiss: noop,
     edit: noop,
