@@ -171,6 +171,12 @@ export const createCaptureSurface = (
     }
 
     window.setAlwaysOnTop(false);
+
+    if (!isMac && window.isFocused()) {
+      // Windows hides a window without activating another, so the hidden panel would keep the keyboard.
+      window.blur();
+    }
+
     window.hide();
     hiddenAt = Date.now();
 
