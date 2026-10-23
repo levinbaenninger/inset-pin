@@ -406,6 +406,17 @@ const inspectRecord = (captureId: string, dataDir = userData) => {
   };
 };
 
+/** The tray menu can take a moment to appear after the click. */
+const menuItems = async (attempts = 10): Promise<Element[]> => {
+  await delay(300);
+
+  const items = helper(z.array(ElementSchema), "menu", appPid());
+
+  return items.length > 0 || attempts <= 1
+    ? items
+    : await menuItems(attempts - 1);
+};
+
 const trayMenu = async () => {
   // The colon tells the tray icon's tooltip from a taskbar button named after an open window.
   const icon = helper(ElementSchema, "trayfind", "Inset Context Pin:");
@@ -423,13 +434,14 @@ const trayMenu = async () => {
   }
 
   click(String(owner.pid), icon.x, icon.y);
-  await delay(600);
 
-  return helper(z.array(ElementSchema), "menu", appPid());
+  return await menuItems();
 };
 
 const trayItem = async (start: string) => {
-  const items = await trayMenu();
+  // One more click if the first one opened nothing, for example while the overflow was closing.
+  const first = await trayMenu();
+  const items = first.length > 0 ? first : await trayMenu();
   const item = items.find((candidate) => candidate.name.startsWith(start));
 
   if (item === undefined) {
