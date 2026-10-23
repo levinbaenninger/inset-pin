@@ -448,7 +448,7 @@ export const CapturePage = () => {
   }
 
   return (
-    <div className="flex flex-col gap-4 px-6 pt-5 pb-8 md:px-8 md:pt-8">
+    <div className="pt-page flex flex-col gap-4 px-6 pb-8 md:px-8">
       <BackLink />
       <h2 className="sr-only">{detail.title}</h2>
       {/* Keyed by id only: a refresh after an edit keeps the status line and its announcement. */}
