@@ -1,0 +1,5 @@
+# Oxfmt checks for LF, so a Windows checkout must not convert line endings.
+* text=auto eol=lf
+*.png binary
+*.ico binary
+*.icns binary

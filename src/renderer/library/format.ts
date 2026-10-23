@@ -1,0 +1,47 @@
+import type { PointVia } from "@shared/capture-record";
+import type { ReadOnlyWhy } from "@shared/contracts";
+import { shortcutLabel } from "@shared/shortcut";
+
+import { isMac } from "@/shared/platform";
+
+const dateTime = new Intl.DateTimeFormat(undefined, {
+  dateStyle: "medium",
+  timeStyle: "short",
+});
+
+const time = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
+
+const weekdayDate = new Intl.DateTimeFormat(undefined, {
+  day: "numeric",
+  month: "short",
+  weekday: "short",
+});
+
+export const formatCaptureTime = (iso: string): string =>
+  dateTime.format(new Date(iso));
+
+export const timeOfDay = (iso: string): string => time.format(new Date(iso));
+
+export const dayLabel = (
+  day: Date,
+  relative: "today" | "yesterday" | null
+): string => {
+  if (relative === "today") {
+    return "Today";
+  }
+
+  return relative === "yesterday" ? "Yesterday" : weekdayDate.format(day);
+};
+
+export const sourceText = (label: string | null): string =>
+  label ?? "Screen capture";
+
+export const viaText = (via: PointVia): string =>
+  via === "shortcut"
+    ? `Captured with ${shortcutLabel(isMac)}`
+    : "Captured from the menu (3 s delay)";
+
+export const readOnlyText = (why: ReadOnlyWhy): string =>
+  why === "newerVersion"
+    ? "Saved by a newer version of Inset. It is kept unchanged and can't be shown here."
+    : "This capture's file can't be read. It is kept unchanged on disk.";
