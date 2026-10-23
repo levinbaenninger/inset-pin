@@ -127,6 +127,11 @@ export type CaptureDetail =
       readonly pin: { readonly x: number; readonly y: number };
     };
 
+export interface AppStatus {
+  /** False when another app holds the capture shortcut. */
+  readonly shortcutRegistered: boolean;
+}
+
 export type ActionResult =
   | { readonly ok: true }
   | { readonly ok: false; readonly message: string };
@@ -163,6 +168,7 @@ export const libraryContract = defineContract({
     list: invoke(z.void(), out<CaptureSummary[]>()),
     remove: invoke(CaptureIdSchema, out<ActionResult>()),
     startImageDrag: send(CaptureIdSchema),
+    status: invoke(z.void(), out<AppStatus>()),
     updateThought: invoke(
       z.object({ id: CaptureIdSchema, thought: SavedThoughtSchema }),
       out<ActionResult>()

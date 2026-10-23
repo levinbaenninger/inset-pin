@@ -3,7 +3,6 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { CaptureIdSchema } from "@shared/capture-record";
 import type { CaptureId } from "@shared/capture-record";
 import type { CaptureSummary } from "@shared/contracts";
-import { shortcutLabel } from "@shared/shortcut";
 import {
   getRouteApi,
   Link,
@@ -17,7 +16,6 @@ import {
   InputGroupAddon,
   InputGroupInput,
 } from "@/components/ui/input-group";
-import { Kbd } from "@/components/ui/kbd";
 import { isMac } from "@/shared/platform";
 
 import { dayLabel, readOnlyText, timeOfDay } from "./format";
@@ -87,17 +85,6 @@ const Groups = ({ groups }: { readonly groups: readonly CaptureGroup[] }) => (
         ))}
       </section>
     ))}
-  </div>
-);
-
-// With two panes, the empty right pane carries the hint instead.
-const NoCaptures = () => (
-  <div className="text-muted-foreground flex flex-col gap-2 px-2 py-6 text-sm">
-    <p className="text-foreground font-medium">No captures yet</p>
-    <p className="md:hidden">
-      Point at a detail in any app and press <Kbd>{shortcutLabel(isMac)}</Kbd>.
-      Saved captures appear here.
-    </p>
   </div>
 );
 
@@ -205,47 +192,42 @@ export const RecentList = () => {
 
   return (
     <div className="flex min-h-0 w-full flex-col">
-      <header className="flex flex-col gap-3 px-4 pt-5 pb-3">
-        <div className="flex items-baseline justify-between gap-2 px-1">
+      <header className="app-drag flex flex-col gap-3 px-4 pt-5 pb-3">
+        <div className="flex items-baseline justify-between gap-2 px-1 max-md:pr-(--titlebar-inset-right)">
           <h1 className="text-base font-semibold">Recent captures</h1>
-          {captures.length > 0 ? (
-            <span className="text-muted-foreground text-xs tabular-nums">
-              {query === ""
-                ? captures.length
-                : `${visible.length} of ${captures.length}`}
-            </span>
-          ) : null}
+          <span className="text-muted-foreground text-xs tabular-nums">
+            {query === ""
+              ? captures.length
+              : `${visible.length} of ${captures.length}`}
+          </span>
         </div>
-        {captures.length > 0 ? (
-          <InputGroup>
-            <InputGroupAddon>
-              <HugeiconsIcon icon={Search01Icon} />
-            </InputGroupAddon>
-            <InputGroupInput
-              aria-label="Search captures"
-              onChange={(event) => {
-                setQuery(event.target.value);
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Escape" && query !== "") {
-                  event.preventDefault();
-                  setQuery("");
-                }
-              }}
-              placeholder="Search thoughts"
-              ref={searchRef}
-              type="search"
-              value={query}
-            />
-          </InputGroup>
-        ) : null}
+        <InputGroup className="app-no-drag">
+          <InputGroupAddon>
+            <HugeiconsIcon icon={Search01Icon} />
+          </InputGroupAddon>
+          <InputGroupInput
+            aria-label="Search captures"
+            onChange={(event) => {
+              setQuery(event.target.value);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && query !== "") {
+                event.preventDefault();
+                setQuery("");
+              }
+            }}
+            placeholder="Search thoughts"
+            ref={searchRef}
+            type="search"
+            value={query}
+          />
+        </InputGroup>
       </header>
       <nav
         aria-label="Captures"
         className="min-h-0 flex-1 overflow-y-auto px-2 pb-4"
       >
-        {captures.length === 0 ? <NoCaptures /> : null}
-        {captures.length > 0 && visible.length === 0 ? (
+        {visible.length === 0 ? (
           <p className="text-muted-foreground px-2 py-6 text-sm">
             No captures match “{query.trim()}”.
           </p>

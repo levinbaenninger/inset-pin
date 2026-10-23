@@ -1,9 +1,5 @@
-import { shortcutLabel } from "@shared/shortcut";
 import { getRouteApi, useNavigate } from "@tanstack/react-router";
 import { useEffect } from "react";
-
-import { Kbd } from "@/components/ui/kbd";
-import { isMac } from "@/shared/platform";
 
 const rootRoute = getRouteApi("__root__");
 
@@ -24,7 +20,7 @@ const useOpenNewest = (newest: string | undefined): void => {
   }, [navigate, newest]);
 };
 
-/** The right pane before a capture is chosen; hidden in the one-pane layout. */
+/** The right pane before a capture is chosen; hidden in the one-pane layout. Without captures the welcome shows instead. */
 export const NoSelection = () => {
   const captures = rootRoute.useLoaderData();
 
@@ -33,14 +29,8 @@ export const NoSelection = () => {
   return (
     <div className="text-muted-foreground flex h-full items-center justify-center p-8 text-sm">
       <p className="max-w-xs text-center text-balance">
-        {captures.length === 0 ? (
-          <>
-            Press <Kbd>{shortcutLabel(isMac)}</Kbd> over a detail in any app to
-            make your first capture.
-          </>
-        ) : (
-          "Choose a capture to read it, copy it, or drag its image into another app."
-        )}
+        Choose a capture to read it, copy it, or drag its image into another
+        app.
       </p>
     </div>
   );

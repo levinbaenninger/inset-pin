@@ -271,18 +271,45 @@ const openPanel = async (label: string) => {
   return { captured, shown };
 };
 
-const checkLaunch = async (app: ChildProcess, frontBefore: string) => {
+/** Before the first capture the library opens as a welcome; it is closed again before capturing. */
+const checkFirstLaunch = async (app: ChildProcess) => {
   const launched = await waitFor("launch", 0, Date.now() + 15_000);
 
-  await delay(500);
   record("launch logged", launched !== undefined && app.exitCode === null);
   record(
-    "launch opens no window",
-    launched?.windows === 0,
+    "first launch opens the welcome",
+    (await waitFor("libraryOpened", 0)) !== undefined
+  );
+  enableWebAccessibility();
+  record(
+    "the welcome says how to capture",
+    await windowShows("Inset Context Pin is running")
+  );
+
+  const mark = events().length;
+
+  closeWindow();
+  record(
+    "Cmd+W closes the welcome",
+    (await waitFor("libraryClosed", mark)) !== undefined
+  );
+};
+
+const checkLaterLaunch = async (mark: number, frontBefore: string) => {
+  const launched = await waitFor("launch", mark, Date.now() + 15_000);
+
+  record("relaunch logged", launched !== undefined);
+  await delay(1000);
+  record(
+    "a launch with captures opens no window",
+    launched?.windows === 0 &&
+      !events()
+        .slice(mark)
+        .some((e) => e.event === "libraryOpened"),
     `windows=${launched?.windows}`
   );
   record(
-    "launch does not take focus",
+    "a launch with captures does not take focus",
     frontmost() === frontBefore,
     `${frontBefore} -> ${frontmost()}`
   );
@@ -679,10 +706,9 @@ const main = async () => {
   await startMarker(homeMarker);
   await focusMarker();
 
-  const frontBefore = frontmost();
   let app = launch();
 
-  await checkLaunch(app, frontBefore);
+  await checkFirstLaunch(app);
   enableWebAccessibility();
 
   const first = await checkFirstPanel();
@@ -697,11 +723,12 @@ const main = async () => {
 
   const mark = events().length;
 
+  await focusMarker();
+
+  const frontBefore = frontmost();
+
   app = launch({ INSET_FAIL_NEXT_WRITE: "1" });
-  record(
-    "relaunch logged",
-    (await waitFor("launch", mark, Date.now() + 15_000)) !== undefined
-  );
+  await checkLaterLaunch(mark, frontBefore);
   record("record survives restart", savedCaptures().length === 1);
   enableWebAccessibility();
   await focusMarker();
