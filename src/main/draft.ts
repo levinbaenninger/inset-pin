@@ -127,7 +127,7 @@ export interface Step {
 export const IDLE: DraftState = { phase: "idle" };
 
 export const SAVE_FAILED_NOTICE =
-  "Your capture wasn't saved. Choose “Show unsaved draft” in the Inset menu to retry.";
+  "Your capture wasn't saved. Choose “Show unsaved draft” from the pin icon to retry.";
 
 const stay = (state: DraftState): Step => ({ effects: [], state });
 
