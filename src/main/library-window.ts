@@ -22,6 +22,27 @@ import { appOrigin, harden, secureWebPreferences } from "./window-security";
 
 const DRAG_ICON_WIDTH = 128;
 
+/** Matches --titlebar-height in src/renderer/styles.css. */
+const TITLE_BAR_HEIGHT = 40;
+
+const isMac = process.platform === "darwin";
+
+/** The page's background and text colours in the current theme, from src/renderer/styles.css. */
+const themeColors = (): { background: string; foreground: string } =>
+  nativeTheme.shouldUseDarkColors
+    ? { background: "#0a0a0a", foreground: "#fafafa" }
+    : { background: "#ffffff", foreground: "#0a0a0a" };
+
+const titleBarOverlay = (): Electron.TitleBarOverlayOptions => {
+  const { background, foreground } = themeColors();
+
+  return {
+    color: background,
+    height: TITLE_BAR_HEIGHT,
+    symbolColor: foreground,
+  };
+};
+
 export interface LibraryWindow {
   readonly open: () => void;
   readonly isVisible: () => boolean;
@@ -197,21 +218,34 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
     }
 
     const created = new BrowserWindow({
-      backgroundColor: nativeTheme.shouldUseDarkColors ? "#0a0a0a" : "#ffffff",
+      backgroundColor: themeColors().background,
       height: 680,
       minHeight: 420,
       minWidth: 560,
       show: false,
       title: "Recent captures",
+      // On Windows only the caption buttons stay, drawn over the page; macOS keeps its title bar.
+      titleBarOverlay: isMac ? false : titleBarOverlay(),
+      titleBarStyle: isMac ? "default" : "hidden",
       webPreferences: secureWebPreferences(options.preload),
       width: 960,
     });
 
     window = created;
 
-    if (process.platform !== "darwin") {
+    if (!isMac) {
       created.removeMenu();
     }
+
+    const followTheme = (): void => {
+      created.setBackgroundColor(themeColors().background);
+
+      if (!isMac) {
+        created.setTitleBarOverlay(titleBarOverlay());
+      }
+    };
+
+    nativeTheme.on("updated", followTheme);
 
     harden(created.webContents, "library");
     created.once("ready-to-show", () => {
@@ -225,6 +259,7 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
       options.onOpened();
     });
     created.on("closed", () => {
+      nativeTheme.off("updated", followTheme);
       window = null;
       options.onClosed();
     });

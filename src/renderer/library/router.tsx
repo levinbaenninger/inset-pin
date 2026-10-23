@@ -55,11 +55,14 @@ const RootLayout = () => {
       </aside>
       <main
         className={cn(
-          "min-h-0 overflow-y-auto md:block",
-          showingCapture ? "block" : "hidden"
+          "min-h-0 flex-col md:flex",
+          showingCapture ? "flex" : "hidden"
         )}
       >
-        <Outlet />
+        <TitleBarStrip />
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <Outlet />
+        </div>
       </main>
     </div>
   );

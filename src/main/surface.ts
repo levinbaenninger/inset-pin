@@ -59,7 +59,8 @@ export const createCaptureSurface = (
 ): CaptureSurface => {
   const window = new BrowserWindow({
     alwaysOnTop: false,
-    backgroundColor: backgroundColor(),
+    // Windows rounds a frameless window by only 8 px, so there the page draws the panel's corners itself.
+    backgroundColor: isMac ? backgroundColor() : "#00000000",
     frame: false,
     fullscreenable: false,
     hasShadow: true,
@@ -70,6 +71,7 @@ export const createCaptureSurface = (
     show: false,
     skipTaskbar: true,
     title: "Inset Context Pin",
+    transparent: !isMac,
     type: isMac ? "panel" : undefined,
     useContentSize: true,
     webPreferences: secureWebPreferences(options.preload),

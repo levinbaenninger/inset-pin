@@ -80,7 +80,7 @@ export const CaptureApp = () => {
 
   // Keyed by surface key so every show mounts fresh from main's latest content.
   return (
-    <main className="bg-background text-foreground" ref={ref}>
+    <main className="capture-surface bg-background text-foreground" ref={ref}>
       {view.kind === "draft" ? (
         <DraftEditor key={view.surfaceKey} view={view} />
       ) : null}

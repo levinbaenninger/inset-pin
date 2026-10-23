@@ -138,6 +138,25 @@
   -webkit-app-region: no-drag;
 }
 
+/* Space above a library page; on Windows the caption strip above it already leaves most of it. */
+@utility pt-page {
+  padding-top: max(0.5rem, calc(2rem - var(--titlebar-height)));
+}
+
+/*
+ * On Windows the capture panel draws its own corners on a transparent window.
+ * They run parallel to the preview's: its radius plus the panel's 12 px padding.
+ */
+[data-corners="drawn"] body {
+  background: transparent;
+}
+
+[data-corners="drawn"] .capture-surface {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) + 0.75rem);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
