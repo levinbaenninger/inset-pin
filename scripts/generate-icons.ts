@@ -21,11 +21,14 @@ const appSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
 <g transform="translate(232 232) scale(23.333)">${glyph("#ffffff", 1.5)}</g>
 </svg>`;
 
+// macOS tints the template itself; Windows gets a white glyph for a dark taskbar and a black one for a light one.
 const outputs: [svg: string, size: number, file: string][] = [
   [traySvg("#000000"), 16, "resources/trayTemplate.png"],
   [traySvg("#000000"), 32, "resources/trayTemplate@2x.png"],
-  [traySvg(sky), 16, "resources/tray.png"],
-  [traySvg(sky), 32, "resources/tray@2x.png"],
+  [traySvg("#ffffff"), 16, "resources/tray-white.png"],
+  [traySvg("#ffffff"), 32, "resources/tray-white@2x.png"],
+  [traySvg("#000000"), 16, "resources/tray-black.png"],
+  [traySvg("#000000"), 32, "resources/tray-black@2x.png"],
   [appSvg, 1024, "build/icon.png"],
 ];
 
