@@ -184,6 +184,9 @@ const start = async (): Promise<void> => {
   const captureServer = serveContract(
     captureContract,
     {
+      answerQuit: (choice) => {
+        draft.answerQuit(choice);
+      },
       discard: (id) => {
         draft.discard(id);
 

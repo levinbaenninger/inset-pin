@@ -8,6 +8,7 @@ import type {
   CaptureProblem,
   CaptureView,
   DraftContent,
+  QuitChoice,
   WriteStatus,
 } from "@shared/contracts";
 import {
@@ -64,9 +65,8 @@ export interface Draft {
   readonly content: DraftContent;
 }
 
+/** "asking" means the panel shows the quit question and waits for an answer. */
 export type QuitState = "none" | "asking" | "afterSave";
-
-export type QuitChoice = "save" | "discard" | "cancel";
 
 export type DraftState =
   | { readonly phase: "idle" }
@@ -115,7 +115,6 @@ export type DraftEvent =
 export type Effect =
   | { readonly type: "capture"; readonly display: DisplaySnapshot }
   | { readonly type: "publish"; readonly draft: Draft }
-  | { readonly type: "askQuitChoice" }
   | { readonly type: "focus" }
   | { readonly type: "quit" }
   | { readonly type: "notify"; readonly message: string };
@@ -277,7 +276,8 @@ const onQuitHeld = (state: DraftState): Step => {
     return stay({ ...state, quit: "afterSave" });
   }
 
-  return to(show({ ...state, quit: "asking" }), { type: "askQuitChoice" });
+  // The panel asks; its answer comes back as a quitChoice event.
+  return to(show({ ...state, quit: "asking" }), { type: "focus" });
 };
 
 const onQuitChoice = (state: DraftState, choice: QuitChoice): Step => {
@@ -411,6 +411,7 @@ export const viewOf = (state: DraftState): CaptureView => {
       url: insetUrl.draftImage(draft.id),
     },
     kind: "draft",
+    quitting: state.quit === "asking",
     reopened: state.shownSeq > 1,
     seed: draft.content,
     sourceLabel: draft.anchor.display.label,
@@ -498,7 +499,6 @@ export interface DraftSurface {
   readonly focus: () => void;
   /** Resolves once the panel is off screen and the compositor has settled. */
   readonly whenHidden: () => Promise<void>;
-  readonly askQuitChoice: () => Promise<QuitChoice>;
 }
 
 export type PublishResult =
@@ -526,6 +526,8 @@ export interface DraftController {
   readonly discard: (id: CaptureId) => void;
   /** Dispatches, so not a predicate; "hold" means the caller must prevent the quit. */
   readonly holdQuitIfNeeded: () => "allow" | "hold";
+  /** The panel's answer to the quit question. */
+  readonly answerQuit: (choice: QuitChoice) => void;
   readonly view: () => CaptureView;
   readonly tray: () => TrayState;
   readonly frame: (id: CaptureId) => CapturedFrame | null;
@@ -539,7 +541,7 @@ type Dispatch = (event: DraftEvent) => void;
 
 /**
  * The seed is left out because the panel reads it only at mount; the quit
- * phase counts so closing the dialog ends the wait of a Save sent meanwhile.
+ * phase counts so ending the question ends the wait of a Save sent meanwhile.
  */
 const publicKey = (state: DraftState): string => {
   const view = viewOf(state);
@@ -618,12 +620,6 @@ export const createDraftController = (deps: DraftDeps): DraftController => {
     }
   };
 
-  const runAskQuitChoice = async (dispatch: Dispatch): Promise<void> => {
-    const choice = await deps.surface.askQuitChoice();
-
-    dispatch({ choice, type: "quitChoice" });
-  };
-
   const run = (effect: Effect, dispatch: Dispatch): void => {
     switch (effect.type) {
       case "capture": {
@@ -633,11 +629,6 @@ export const createDraftController = (deps: DraftDeps): DraftController => {
 
       case "publish": {
         void runPublish(effect.draft, dispatch);
-        break;
-      }
-
-      case "askQuitChoice": {
-        void runAskQuitChoice(dispatch);
         break;
       }
 
@@ -699,6 +690,9 @@ export const createDraftController = (deps: DraftDeps): DraftController => {
   };
 
   return {
+    answerQuit: (choice) => {
+      dispatch({ choice, type: "quitChoice" });
+    },
     discard: (id) => {
       dispatch({ id, type: "discarded" });
     },

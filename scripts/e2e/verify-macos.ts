@@ -172,11 +172,6 @@ const trayItem = (item: string) =>
     `tell application "System Events" to tell process "${processName}" to click menu item "${item}" of menu 1 of menu bar item 1 of menu bar 2`
   );
 
-const dialogButton = (title: string) =>
-  osa(
-    `tell application "System Events" to tell process "${processName}" to click button "${title}" of window 1`
-  );
-
 const events = (): AppEvent[] =>
   existsSync(logFile)
     ? readFileSync(logFile, "utf-8")
@@ -604,7 +599,11 @@ const checkQuitWithDraft = async (app: ChildProcess) => {
   await delay(300);
   trayItem("Quit Inset Context Pin");
   await delay(1000);
-  dialogButton("Cancel");
+  record(
+    "quit asks in the panel",
+    await windowShows("Quit Inset Context Pin?")
+  );
+  await clickButton("Cancel");
   await delay(800);
   record("quit Cancel keeps the app running", app.exitCode === null);
 
@@ -618,7 +617,7 @@ const checkQuitWithDraft = async (app: ChildProcess) => {
   await delay(300);
   trayItem("Quit Inset Context Pin");
   await delay(1000);
-  dialogButton("Discard");
+  await clickButton("Discard and quit");
   record("quit Discard exits", await exited(app));
   record(
     "quit Discard saves nothing",

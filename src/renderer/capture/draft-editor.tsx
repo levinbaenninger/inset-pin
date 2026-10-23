@@ -1,7 +1,12 @@
 import { Alert02Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { canSaveThought, THOUGHT_MAX } from "@shared/capture-record";
-import type { DraftContent, DraftView, WriteStatus } from "@shared/contracts";
+import type {
+  DraftContent,
+  DraftView,
+  QuitChoice,
+  WriteStatus,
+} from "@shared/contracts";
 import type { PinGeometry } from "@shared/geometry";
 import { saveShortcutLabel } from "@shared/shortcut";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -76,6 +81,78 @@ const DraftCaption = ({ view }: DraftCaptionProps) => {
   );
 };
 
+const QUIT_TITLE_ID = "quit-title";
+const QUIT_DETAIL_ID = "quit-detail";
+
+interface QuitQuestionProps {
+  readonly answer: (choice: QuitChoice) => void;
+}
+
+/** Asked in the panel, next to the thought it is about, instead of in a separate system dialog. */
+const QuitQuestion = ({ answer }: QuitQuestionProps) => {
+  const saveRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    saveRef.current?.focus();
+  }, []);
+
+  return (
+    <div
+      aria-describedby={QUIT_DETAIL_ID}
+      aria-labelledby={QUIT_TITLE_ID}
+      className="bg-muted/60 flex flex-col gap-3 rounded-lg p-3"
+      role="alertdialog"
+    >
+      <div className="flex flex-col gap-0.5">
+        <p className="text-sm font-medium" id={QUIT_TITLE_ID}>
+          Quit Inset Context Pin?
+        </p>
+        <p className="text-muted-foreground text-xs" id={QUIT_DETAIL_ID}>
+          This thought isn’t saved yet.
+        </p>
+      </div>
+      <div className="flex items-center gap-2">
+        <Button
+          onClick={() => {
+            answer("cancel");
+          }}
+          size="sm"
+          type="button"
+          variant="ghost"
+        >
+          Cancel
+        </Button>
+        <Button
+          className="ml-auto"
+          onClick={() => {
+            answer("discard");
+          }}
+          size="sm"
+          type="button"
+          variant="ghost"
+        >
+          Discard and quit
+        </Button>
+        <Button
+          onClick={() => {
+            answer("save");
+          }}
+          ref={saveRef}
+          size="sm"
+          title={`Save and quit (${saveShortcutLabel(isMac)})`}
+          type="button"
+        >
+          Save and quit
+        </Button>
+      </div>
+    </div>
+  );
+};
+
+const answerQuit = (choice: QuitChoice): void => {
+  api.answerQuit(choice);
+};
+
 export interface DraftEditorProps {
   readonly view: DraftView;
 }
@@ -91,6 +168,8 @@ export const DraftEditor = ({ view }: DraftEditorProps) => {
 
   const thoughtRef = useRef<HTMLTextAreaElement>(null);
   const busy = view.write.kind === "saving" || submittedWhile === view.write;
+  // Main ignores edits while it asks about quitting, so the fields lock too.
+  const locked = busy || view.quitting;
   const savable = canSaveThought(content.thought);
 
   const { draftId, write } = view;
@@ -125,7 +204,19 @@ export const DraftEditor = ({ view }: DraftEditorProps) => {
     }
   }, [armed, disarm]);
 
-  useLocalKeys({ onEscape: dismiss, onSave: save });
+  const cancelQuit = useCallback((): void => {
+    answerQuit("cancel");
+  }, []);
+
+  const saveAndQuit = useCallback((): void => {
+    answerQuit("save");
+  }, []);
+
+  useLocalKeys(
+    view.quitting
+      ? { onEscape: cancelQuit, onSave: saveAndQuit }
+      : { onEscape: dismiss, onSave: save }
+  );
 
   useEffect(() => {
     const field = thoughtRef.current;
@@ -146,7 +237,7 @@ export const DraftEditor = ({ view }: DraftEditorProps) => {
     >
       <PinPreview
         caption={<DraftCaption view={view} />}
-        disabled={busy}
+        disabled={locked}
         frame={view.frame}
         geometry={content}
         onChange={(geometry: PinGeometry) => {
@@ -157,7 +248,7 @@ export const DraftEditor = ({ view }: DraftEditorProps) => {
         <Label htmlFor="thought">What matters here?</Label>
         <Textarea
           className="max-h-40 min-h-16 resize-none"
-          disabled={busy}
+          disabled={locked}
           id="thought"
           maxLength={THOUGHT_MAX}
           onChange={(event) => {
@@ -176,30 +267,44 @@ export const DraftEditor = ({ view }: DraftEditorProps) => {
           <AlertDescription>{view.write.message}</AlertDescription>
         </Alert>
       ) : null}
-      <div className="flex items-center gap-2">
-        <Button
-          disabled={busy}
-          onClick={() => {
-            discard.press();
-          }}
-          size="sm"
-          type="button"
-          variant={armed ? "destructive" : "ghost"}
-        >
-          {armed ? "Click again to discard" : "Discard"}
-        </Button>
-        <p
-          aria-live="polite"
-          className="text-muted-foreground ml-auto truncate text-xs"
-        >
-          {armed ? "Esc keeps it" : "Esc keeps the draft"}
-        </p>
-        <Button disabled={busy || !savable} size="sm" type="submit">
-          {busy ? <Spinner data-icon="inline-start" /> : null}
-          {view.write.kind === "failed" ? "Retry" : "Save"}
-          <Kbd>{saveShortcutLabel(isMac)}</Kbd>
-        </Button>
-      </div>
+      {view.quitting ? (
+        <QuitQuestion answer={answerQuit} />
+      ) : (
+        <div className="flex items-center gap-2">
+          <Button
+            disabled={busy}
+            onClick={() => {
+              discard.press();
+            }}
+            size="sm"
+            type="button"
+            variant={armed ? "destructive" : "ghost"}
+          >
+            {armed ? "Click again to discard" : "Discard"}
+          </Button>
+          {/* While Discard asks, its label fills the row; the hint stays for screen readers only. */}
+          <p
+            aria-live="polite"
+            className={
+              armed
+                ? "sr-only"
+                : "text-muted-foreground ml-auto truncate text-xs"
+            }
+          >
+            {armed ? "Esc keeps it" : "Esc keeps the draft"}
+          </p>
+          <Button
+            className={armed ? "ml-auto" : undefined}
+            disabled={busy || !savable}
+            size="sm"
+            type="submit"
+          >
+            {busy ? <Spinner data-icon="inline-start" /> : null}
+            {view.write.kind === "failed" ? "Retry" : "Save"}
+            <Kbd>{saveShortcutLabel(isMac)}</Kbd>
+          </Button>
+        </div>
+      )}
     </form>
   );
 };
