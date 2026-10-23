@@ -50,7 +50,9 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+/* Scrollbars and native form parts follow the theme; Windows draws them light otherwise. */
 :root {
+  color-scheme: light;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
@@ -86,6 +88,7 @@
 }
 
 .dark {
+  color-scheme: dark;
   --background: oklch(0.145 0 0);
   --foreground: oklch(0.985 0 0);
   --card: oklch(0.205 0 0);
