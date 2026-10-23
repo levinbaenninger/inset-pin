@@ -34,6 +34,7 @@ export interface LibraryOptions {
   readonly onOpened: () => void;
   readonly onClosed: () => void;
   readonly onRejected: (channel: string, reason: string) => void;
+  readonly shortcutRegistered: () => boolean;
 }
 
 const OK: ActionResult = { ok: true };
@@ -146,6 +147,7 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
 
         return OK;
       },
+      status: () => ({ shortcutRegistered: options.shortcutRegistered() }),
       startImageDrag: (id) => {
         const pinned = pinnedImage(id);
 

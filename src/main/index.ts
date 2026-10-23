@@ -124,6 +124,8 @@ const start = async (): Promise<void> => {
       `${PRODUCT_NAME} can't open its captures folder:\n${capturesDir}\n\n${cause}\n\nCheck that you can read and write this folder, then open ${PRODUCT_NAME} again.`
   );
 
+  let shortcutRegistered = false;
+
   const library = createLibraryWindow({
     onClosed: () => {
       e2eLog("libraryClosed");
@@ -133,6 +135,7 @@ const start = async (): Promise<void> => {
     },
     onRejected: logRejected,
     preload: preloadPath("library"),
+    shortcutRegistered: () => shortcutRegistered,
     store,
     url: pageUrl("library"),
   });
@@ -252,7 +255,7 @@ const start = async (): Promise<void> => {
     });
   };
 
-  const shortcutRegistered =
+  shortcutRegistered =
     globalShortcut.register(CAPTURE_ACCELERATOR, () => {
       pointNow("shortcut");
     }) && globalShortcut.isRegistered(CAPTURE_ACCELERATOR);
@@ -276,10 +279,14 @@ const start = async (): Promise<void> => {
 
   if (!shortcutRegistered) {
     showNotification(
-      `${shortcutLabel(isMac)} is in use by another app. Use “New capture in 3 seconds” in the Inset menu instead.`
+      `${shortcutLabel(isMac)} is in use by another app. Choose “New capture in 3 seconds” from the pin icon instead.`
     );
   }
 
+  // Opening the app again while it runs would otherwise look like nothing happened.
+  app.on("second-instance", () => {
+    library.open();
+  });
   app.on("before-quit", (event) => {
     if (draft.holdQuitIfNeeded() === "hold") {
       event.preventDefault();
@@ -290,6 +297,11 @@ const start = async (): Promise<void> => {
   app.on("will-quit", () => {
     globalShortcut.unregisterAll();
   });
+
+  // Until the first capture, the library is a welcome that says how to capture and where the app lives.
+  if (store.list().length === 0) {
+    library.open();
+  }
 
   e2eLog("launch");
 };

@@ -122,6 +122,22 @@
   --sidebar-ring: oklch(0.556 0 0);
 }
 
+/* Windows draws the library's caption buttons over the page (src/main/library-window.ts); 0 elsewhere. */
+:root {
+  --titlebar-height: env(titlebar-area-height, 0px);
+  --titlebar-inset-right: calc(
+    100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)
+  );
+}
+
+@utility app-drag {
+  -webkit-app-region: drag;
+}
+
+@utility app-no-drag {
+  -webkit-app-region: no-drag;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
