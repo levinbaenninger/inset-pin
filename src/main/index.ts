@@ -11,6 +11,7 @@ import {
   globalShortcut,
   ipcMain,
   Menu,
+  nativeTheme,
   Notification,
   shell,
 } from "electron";
@@ -72,12 +73,22 @@ const explainFailure = async <T>(
   }
 };
 
+/** macOS tints the template; Windows needs the glyph that contrasts with its taskbar, which has its own theme. */
 const trayIconPath = (): string => {
   const base = app.isPackaged
     ? path.join(process.resourcesPath, "resources")
     : path.join(app.getAppPath(), "resources");
 
-  return path.join(base, isMac ? "trayTemplate.png" : "tray.png");
+  if (isMac) {
+    return path.join(base, "trayTemplate.png");
+  }
+
+  return path.join(
+    base,
+    nativeTheme.shouldUseDarkColorsForSystemIntegratedUI
+      ? "tray-white.png"
+      : "tray-black.png"
+  );
 };
 
 const start = async (): Promise<void> => {
@@ -248,7 +259,7 @@ const start = async (): Promise<void> => {
       pointNow("trayDelayed");
     },
     draftState: draft.tray,
-    iconPath: trayIconPath(),
+    iconPath: trayIconPath,
     openLibrary: library.open,
     quit: () => {
       app.quit();

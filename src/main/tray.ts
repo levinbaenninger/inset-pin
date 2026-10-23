@@ -1,5 +1,5 @@
 import { TRAY_CAPTURE_DELAY_MS } from "@shared/shortcut";
-import { Menu, nativeImage, Tray } from "electron";
+import { Menu, nativeImage, nativeTheme, Tray } from "electron";
 import type { MenuItemConstructorOptions } from "electron";
 
 import type { TrayState } from "./draft";
@@ -7,7 +7,8 @@ import { trayMenu, trayTooltip } from "./tray-menu";
 import type { TrayAction, TrayItem } from "./tray-menu";
 
 export interface TrayOptions {
-  readonly iconPath: string;
+  /** Read again when the system theme changes. */
+  readonly iconPath: () => string;
   readonly shortcutRegistered: boolean;
   readonly draftState: () => TrayState;
   readonly subscribe: (listener: () => void) => () => void;
@@ -41,8 +42,12 @@ const toMenuItem = (
 };
 
 export const createTray = (options: TrayOptions): Tray => {
-  const tray = new Tray(nativeImage.createFromPath(options.iconPath));
+  const tray = new Tray(nativeImage.createFromPath(options.iconPath()));
   let countdown: NodeJS.Timeout | null = null;
+
+  nativeTheme.on("updated", () => {
+    tray.setImage(nativeImage.createFromPath(options.iconPath()));
+  });
 
   const run = (action: TrayAction, refresh: () => void): void => {
     if (action === "showDraft") {
