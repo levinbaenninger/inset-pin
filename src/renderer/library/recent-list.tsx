@@ -93,7 +93,9 @@ const CaptureRow = ({
           size="thumbnail"
         />
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <p className="line-clamp-2 text-sm leading-snug">{capture.thought}</p>
+          <p className="line-clamp-2 text-sm leading-snug wrap-break-word">
+            {capture.thought}
+          </p>
           <p className="text-muted-foreground text-xs tabular-nums">
             {timeOfDay(capture.capturedAt)}
           </p>
