@@ -4,9 +4,9 @@ This report covers Inset Context Pin version 0.1.0 as of 23 October 2026. It rec
 
 ## What the prototype does
 
-Inset Context Pin runs as a menu-bar or tray utility. Until the first capture exists, it opens the library at launch as a welcome; after that it opens no window at launch. `CommandOrControl+Alt+P` samples the pointer position and captures that display before any Inset window appears. A 380 DIP wide panel then opens beside the point with a crop preview, a pin on the sampled point, and the **What matters here?** field. Saving writes the approved crop, the pin relative to that crop, the thought, and the capture time, then hides the panel. Escape and an outside click hide the panel and keep the draft in memory. **Discard** clears it. Quitting with an unsaved thought shows the panel, which asks whether to save first.
+On macOS Inset Context Pin is a regular app with a Dock icon, a menu bar of its own and a pin in the menu bar; Settings can drop the Dock icon or the pin. On Windows it is a tray utility. Until the first capture exists, it opens the library at launch as a welcome; after that it opens no window at launch. `CommandOrControl+Alt+P` samples the pointer position and captures that display before any Inset window appears. A 380 DIP wide panel then opens beside the point with a crop preview, a pin on the sampled point, and the **What matters here?** field. Saving writes the approved crop, the pin relative to that crop, the thought, and the capture time, then hides the panel. Escape and an outside click hide the panel and keep the draft in memory. **Discard** clears it. Quitting with an unsaved thought shows the panel, which asks whether to save first.
 
-**Recent captures…** in the tray menu opens a separate library window. It uses TanStack Router with hash history on `/` and `/captures/$captureId`. The detail page supports editing the thought, deletion, **Copy note**, **Copy image**, and native file drag of the crop.
+**Recent captures…** in the tray menu, a click on the Dock icon, **File > Show Library** or a capture named in the tray or Dock menu opens a separate library window. It uses TanStack Router with hash history on `/` and `/captures/$captureId`. The detail page supports editing the thought, deletion, **Copy note**, **Copy image**, **Pin**, and native file drag of the crop. **Pin** keeps the capture in a small window above other apps. **Settings…** sets Open at Login, where the app's icon shows, and Copy after saving.
 
 ## Architecture in brief
 
@@ -50,6 +50,12 @@ The experiment should record these choices next to its findings, because each on
 | Exported image | **Copy image** and file drag carry the pin, drawn into the PNG. The stored `crop.png` stays without it. | `drawPinMark` in `src/main/pin-mark.ts` |
 | Dragged file name | The thought's first line, made safe for a file name. The named copy waits in the system temp folder under `Inset Context Pin/<id>`, is removed when the capture is deleted, and the folder is cleared at every launch. | `exportFileName` in `src/main/library-view.ts`, `src/main/library-window.ts` |
 | Library keys and menu | `Enter` edits, `Backspace` or `Delete` asks to delete, `⇧⌘C` (Ctrl+Shift+C) copies the image, and the copy command (`⌘C`, Ctrl+C, Edit > Copy) copies the note when no text is selected. A right-click on a row selects it and offers the same four commands. | `useCaptureShortcuts` in `src/renderer/library/capture-commands.tsx`, `RowMenu` in `src/renderer/library/recent-list.tsx` |
+| App identity | macOS: a Dock icon, a menu bar (File, Edit, Capture, View, Window, Help) and the pin in the menu bar, by default. Settings can show the Dock icon only, or the pin only, which makes the app an accessory without its own menu bar. A click on the Dock icon opens the library. Windows: the tray pin only. | `placeIcon` in `src/main/index.ts`, `src/main/app-menu.ts` |
+| Settings | A small window like a Mac app's Settings, with the sidebar material on macOS: Open at Login, Show app icon in, Copy after saving. Kept in `settings.json` next to the captures folder. | `src/main/settings-window.ts`, `src/shared/settings.ts` |
+| Copy after saving | Off by default. When on, every saved capture puts the image with its pin and the thought on the clipboard, as one item. | `copyBoth` in `src/main/capture-export.ts` |
+| Recent captures in menus | The tray menu and the Dock menu name the five newest captures, cut to 40 characters; one opens the library on it. | `RECENT_IN_MENU` in `src/main/tray-menu.ts` |
+| Pin to Screen | `⌘P` (Ctrl+P), **Pin**, the row menu or **Capture > Pin to Screen** opens the capture in a frameless window at the crop's own size, at most 420 × 320 DIP and at least 120 DIP wide, at the top right of the screen under the pointer. It floats above other apps on every Space and full-screen app, shows the thought on the image, and keeps its shape when resized. A click shows **Close**, **Copy image** and **Show in library**; `Escape` closes it. Deleting the capture closes it. Pins are on screen like any window, so they appear in new captures. | `src/main/pin-windows.ts`, `src/renderer/pin/pin-app.tsx` |
+| Library window on macOS | The traffic lights sit over the list, which shows the window's translucent sidebar material; the capture keeps the page background. **Window > Keep Library on Top** floats it. | `src/main/library-window.ts` |
 | Leaving an edited thought | Choosing another capture with an unsaved change asks **Keep editing**, **Discard** or **Save**; ⌘↩ (Ctrl+Enter) saves and goes on to the chosen capture. Arrow keys inside the editor never move through the list. | `useBlocker` in `src/renderer/library/capture-page.tsx` |
 
 ## What was tested
@@ -73,7 +79,7 @@ Negative display origins were not available physically. Unit tests cover them wi
 
 ### Automated tests
 
-`pnpm test` runs 147 Vitest tests in 11 files. They cover:
+`pnpm test` runs 177 Vitest tests in 16 files. They cover:
 
 - Coordinate conversion with negative origins, mixed scale, and image sizes that differ from `bounds × scaleFactor`.
 - Default crop, widen, and tighten near image edges, with the pin staying on the same image pixel.
@@ -82,6 +88,8 @@ Negative display origins were not available physically. Unit tests cover them wi
 - The store, using a real temporary folder with injected failures on each write and rename. A failed publish leaves no partial capture. An unknown schema version stays byte-identical through an attempted edit and delete.
 - URL parsing, IPC sender and input validation, the tray menu, and the library view mapping.
 - The pin drawn into exported images (colour and byte order, the readable centre, edges), the exported file name, the reopened-draft flag, and the library's search, day grouping and keyboard selection.
+- Moving and resizing the crop (image edges, the pin, the smallest crop) and fitting the preview view around it.
+- The settings file, the app menu, the recent captures in the tray and Dock menus, the size of a pinned capture, and IPC served to several windows of one kind.
 
 ### Real desktop runs (macOS, dev build)
 
@@ -173,6 +181,20 @@ A third pass drove the library in the browser preview with a stubbed bridge and 
 
 The search got a themed clear button and shows its count only while searching. The scrollbars are thin, follow the theme and keep their room. The shown capture got keys and a right-click menu, see the table above.
 
+### Mac app pass
+
+A fourth pass made the app look and behave like Inset Shelf on macOS: a Dock icon and menu bar, a Settings window, pinned captures, recent captures in the menus, and direct editing of the crop. The real app ran from `out/` with a separate data folder holding four sample captures, next to another instance in development. Driven with System Events and synthetic pointer events, these were observed:
+
+- The library with the sidebar material and the traffic lights over the list, and the selected row visible on the material. Settings opened from the app menu and from the tray.
+- **Capture > Pin to Screen** opened the shown capture at 210 × 150 DIP at the floating window level. A click showed its buttons, and **Show in library** opened the library.
+- With a pin on screen, a delayed capture over TextEdit opened the panel, a typed key went to the panel, and after `Escape` typing went to TextEdit again. The pin stayed.
+- A capture chosen in the tray menu opened a new library window on that capture.
+- A launch with captures opened no window and left Finder in front, with the Dock icon showing. **Dock Only** started without the menu-bar pin, and **Menu Bar Only** as an accessory app. Quit from the tray exited with Settings open.
+
+It found two defects, both fixed. Pin windows loaded a 404, because the app scheme refuses addresses with a fragment, which the pin's address used; main now tells each pin window its capture by its sender. The panel's `app.hide()` on `Escape` also hid every pin, and showing them again did not work while the app was hidden. The panel never activates the app (the app in front stayed frontmost while it was open), so `app.hide()` is now skipped while a pin is visible, as it already was for the library.
+
+The crop editor was checked in the browser preview only, with a stubbed bridge and a mouse: dragging a corner, moving the frame, a click that places the pin, and ctrl+wheel.
+
 ### Code review
 
 Two independent reviews (Claude Opus and GPT Sol) read the full diff against the brief. They found no high-severity issue. These medium and low findings were fixed and have tests where a test is possible:
@@ -204,6 +226,7 @@ The first CI run on pull request #1 passed all four jobs: lint, typecheck, tests
 - **Windows beyond the dev runs.** A complete run of the unpacked app is still open, see above. The NSIS installer, SmartScreen on first start, the arm64 zip, the notification's sender name in a packaged build, and displays scaled above 100% or with mixed scale were not tried. The Windows script requires 100% scale, because it compares window positions with screen pixels one to one.
 - **This round on macOS.** The welcome, the quit question in the panel, `color-scheme`, the library's page padding and the changed notification text also apply to macOS, and none of them ran there. `verify-macos.ts` was updated for the welcome and the quit question but not run.
 - **The library pass on the real desktop.** Bringing an open library forward and the check added for it to `verify-macos.ts` did not run. The one run of the script in this pass failed before the library, at the first checks that read the window through accessibility: the welcome text, **Unsaved draft from** and the **Discard** button. Inset Shelf was running in development at the same time, also as a process named Electron, so the script now finds the app by process id. That is not shown to be the cause: asked by process id, System Events also reported no windows for an instance whose welcome had just opened.
+- **The Mac app pass, beyond what is listed above.** A click on the Dock icon, the Dock menu, Open at Login, Copy after saving, **Keep Library on Top**, dragging and resizing a pin, pins on other Spaces and over full-screen apps, and deleting a pinned capture were not tried in the real app. The crop editor did not run in Electron, and no real trackpad pinch was tried. None of it ran on Windows. `verify-macos.ts` did not run; its launch check (no window, focus stays in front) was observed once by hand with the Dock icon showing.
 - **Intel Macs.** The x64 macOS build is produced but was not run.
 - **A second display during the macOS runs.** The macOS pin-to-pixel check ran on the built-in display only. The spike covered two displays with mixed scale, but the full panel flow did not. On Windows the full flow ran on a second display at the same scale.
 - **Negative display origins** on real hardware.
