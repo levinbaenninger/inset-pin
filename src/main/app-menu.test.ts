@@ -17,6 +17,7 @@ const actions = (): AppMenuActions => ({
 const state: AppMenuState = {
   canCapture: true,
   floatOnTop: false,
+  libraryFocused: true,
   libraryOpen: true,
 };
 
@@ -84,7 +85,12 @@ describe(appMenuTemplate, () => {
 
   it("disables what has nowhere to go", () => {
     const template = appMenuTemplate(
-      { canCapture: false, floatOnTop: false, libraryOpen: false },
+      {
+        canCapture: false,
+        floatOnTop: false,
+        libraryFocused: false,
+        libraryOpen: false,
+      },
       actions()
     );
 
@@ -93,7 +99,30 @@ describe(appMenuTemplate, () => {
       item(submenu(template, "File"), "New Capture in 3 Seconds")?.enabled
     ).toBeFalsy();
     expect(
-      item(submenu(template, "windowMenu"), "Keep Library on Top")?.enabled
+      item(submenu(template, "View"), "Keep Library on Top")?.enabled
     ).toBeFalsy();
+  });
+
+  it("acts on a capture only while the library has the keyboard", () => {
+    const template = appMenuTemplate(
+      { ...state, libraryFocused: false },
+      actions()
+    );
+
+    expect(
+      submenu(template, "Capture").every((entry) => entry.enabled !== true)
+    ).toBeTruthy();
+    expect(
+      item(submenu(template, "View"), "Keep Library on Top")?.enabled
+    ).toBeTruthy();
+  });
+
+  it("has no page zoom, which would also zoom the capture panel", () => {
+    const roles = appMenuTemplate(state, actions()).flatMap((menu) =>
+      Array.isArray(menu.submenu) ? menu.submenu.map((entry) => entry.role) : []
+    );
+
+    expect(roles).not.toContain("zoomIn");
+    expect(roles).not.toContain("resetZoom");
   });
 });
