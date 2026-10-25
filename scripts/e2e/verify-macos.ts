@@ -26,7 +26,6 @@ const packagedApp = path.join(
   "release/mac-arm64/Inset Context Pin.app/Contents/MacOS/Inset Context Pin"
 );
 
-const processName = mode === "packaged" ? "Inset Context Pin" : "Electron";
 const work = mkdtempSync(path.join(tmpdir(), "inset-e2e-"));
 const bin = path.join(work, "bin");
 const userData = path.join(work, "userData");
@@ -51,11 +50,37 @@ const EventSchema = z.object({
     .optional(),
   draftId: z.string().optional(),
   event: z.string(),
+  pid: z.number().optional(),
   t: z.number(),
   windows: z.number(),
 });
 
 type AppEvent = z.infer<typeof EventSchema>;
+
+const events = (): AppEvent[] =>
+  existsSync(logFile)
+    ? readFileSync(logFile, "utf-8")
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => EventSchema.parse(JSON.parse(line)))
+    : [];
+
+/** The app that launched last; each launch logs its process id. */
+const appPid = (): number => {
+  let pid: number | undefined;
+
+  for (const e of events()) {
+    if (e.event === "launch") {
+      ({ pid } = e);
+    }
+  }
+
+  if (pid === undefined) {
+    throw new Error("the app has not logged its launch yet");
+  }
+
+  return pid;
+};
 
 interface Result {
   readonly check: string;
@@ -90,6 +115,9 @@ const systemEvents = (line: string) =>
 const frontmost = () =>
   systemEvents("get name of first process whose frontmost is true");
 
+const frontmostPid = () =>
+  Number(systemEvents("get unix id of first process whose frontmost is true"));
+
 const shortcut = () =>
   systemEvents('keystroke "p" using {command down, option down}');
 
@@ -97,7 +125,7 @@ const shortcut = () =>
 const typeText = async (text: string) => {
   const front = frontmost();
 
-  if (front !== "marker" && front !== processName) {
+  if (front !== "marker" && frontmostPid() !== appPid()) {
     throw new Error(`refusing to type while ${front} is frontmost`);
   }
 
@@ -113,16 +141,21 @@ const closeWindow = () => systemEvents('keystroke "w" using {command down}');
 const pointer = (action: "move" | "click", x: number, y: number) =>
   execFileSync(path.join(bin, "pointer"), [action, String(x), String(y)]);
 
-const processElements = `Application("System Events").processes.byName(${JSON.stringify(processName)}).windows().flatMap((w) => w.entireContents())`;
+/** By process id: another Electron app in development is also called "Electron". */
+const appProcess = () =>
+  `Application("System Events").processes.whose({ unixId: ${appPid()} })()[0]`;
+
+const processElements = () =>
+  `${appProcess()}.windows().flatMap((w) => w.entireContents())`;
 
 /** Chromium exposes web content to accessibility clients only after AXManualAccessibility is set. */
 const enableWebAccessibility = () =>
-  jxa(`const p = Application("System Events").processes.byName(${JSON.stringify(processName)});
+  jxa(`const p = ${appProcess()};
     try { p.attributes.byName("AXManualAccessibility").value = true; } catch {}
     "ok";`);
 
 const buttonCentre = (title: string) =>
-  jxa(`const hit = ${processElements}.find((e) => {
+  jxa(`const hit = ${processElements()}.find((e) => {
       try { return e.role() === "AXButton" && (e.name() === ${JSON.stringify(title)} || e.description() === ${JSON.stringify(title)}); } catch { return false; }
     });
     hit ? (() => { const [x, y] = hit.position(); const [w, h] = hit.size(); return Math.round(x + w / 2) + " " + Math.round(y + h / 2); })() : "";`);
@@ -147,7 +180,7 @@ const clickButton = async (title: string, attempts = 10): Promise<void> => {
 };
 
 const windowText = () =>
-  jxa(`${processElements}.map((e) => {
+  jxa(`${processElements()}.map((e) => {
       try { return String(e.value() ?? "") + " " + String(e.name() ?? ""); } catch { return ""; }
     }).join(" ");`);
 
@@ -167,18 +200,10 @@ const windowShows = async (text: string, attempts = 10): Promise<boolean> => {
 
 const trayItem = (item: string) =>
   osa(
-    `tell application "System Events" to tell process "${processName}" to click menu bar item 1 of menu bar 2`,
+    `tell application "System Events" to tell (first process whose unix id is ${appPid()}) to click menu bar item 1 of menu bar 2`,
     "delay 0.4",
-    `tell application "System Events" to tell process "${processName}" to click menu item "${item}" of menu 1 of menu bar item 1 of menu bar 2`
+    `tell application "System Events" to tell (first process whose unix id is ${appPid()}) to click menu item "${item}" of menu 1 of menu bar item 1 of menu bar 2`
   );
-
-const events = (): AppEvent[] =>
-  existsSync(logFile)
-    ? readFileSync(logFile, "utf-8")
-        .split("\n")
-        .filter(Boolean)
-        .map((line) => EventSchema.parse(JSON.parse(line)))
-    : [];
 
 const waitFor = async (
   name: string,

@@ -32,6 +32,6 @@ export const e2eLog = (event: E2eEvent, details: E2eDetails = {}): void => {
 
   appendFileSync(
     logFile,
-    `${JSON.stringify({ event, t: Date.now(), ...details, windows })}\n`
+    `${JSON.stringify({ event, pid: process.pid, t: Date.now(), ...details, windows })}\n`
   );
 };
