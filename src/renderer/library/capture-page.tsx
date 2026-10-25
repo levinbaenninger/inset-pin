@@ -5,6 +5,7 @@ import {
   Delete02Icon,
   Image01Icon,
   PencilEdit02Icon,
+  PinIcon,
   Tick02Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -422,6 +423,9 @@ const SavedCaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
       },
       edit: startEditing,
       id: capture.id,
+      pin: () => {
+        api.pinToScreen(capture.id);
+      },
     },
     !editing
   );
@@ -469,6 +473,17 @@ const SavedCaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
         >
           <HugeiconsIcon data-icon="inline-start" icon={PencilEdit02Icon} />
           Edit thought
+        </Button>
+        <Button
+          onClick={() => {
+            api.pinToScreen(capture.id);
+          }}
+          size="sm"
+          title={`Pin to screen (${keys.pin}): keep it in view above other apps`}
+          variant="outline"
+        >
+          <HugeiconsIcon data-icon="inline-start" icon={PinIcon} />
+          Pin
         </Button>
         <DeleteButton
           onDelete={() => {

@@ -251,3 +251,15 @@
     display: none;
   }
 }
+
+/* Settings and the library's list on macOS: the window's translucent material shows through the page. */
+@layer base {
+  [data-platform="mac"] body:has([data-material]) {
+    background: transparent;
+  }
+}
+
+/* macOS draws the traffic lights over the page (src/main/library-window.ts); the strip above a page holds them and moves the window. */
+[data-platform="mac"] {
+  --titlebar-height: 3.25rem;
+}

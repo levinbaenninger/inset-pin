@@ -1,30 +1,30 @@
-import { TRAY_CAPTURE_DELAY_MS } from "@shared/shortcut";
+import type { CaptureId } from "@shared/capture-record";
 import { Menu, nativeImage, nativeTheme, Tray } from "electron";
 import type { MenuItemConstructorOptions } from "electron";
 
-import type { TrayState } from "./draft";
-import { trayMenu, trayTooltip } from "./tray-menu";
+import { trayTooltip } from "./tray-menu";
 import type { TrayAction, TrayItem } from "./tray-menu";
 
-export interface TrayOptions {
-  /** Read again when the system theme changes. */
-  readonly iconPath: () => string;
-  readonly shortcutRegistered: boolean;
-  readonly draftState: () => TrayState;
-  readonly subscribe: (listener: () => void) => () => void;
-  readonly showDraft: () => void;
-  /** Called after the delay, so the user can move the pointer back over their work. */
-  readonly captureNow: () => void;
-  readonly openLibrary: () => void;
-  readonly quit: () => void;
+export interface MenuRunner {
+  readonly run: (action: TrayAction) => void;
+  readonly openCapture: (id: CaptureId) => void;
 }
 
-const toMenuItem = (
+export const toMenuItem = (
   item: TrayItem,
-  run: (action: TrayAction) => void
+  { openCapture, run }: MenuRunner
 ): MenuItemConstructorOptions => {
   if (item.kind === "separator") {
     return { type: "separator" };
+  }
+
+  if (item.kind === "capture") {
+    return {
+      click: () => {
+        openCapture(item.id);
+      },
+      label: item.label,
+    };
   }
 
   const { action } = item;
@@ -41,53 +41,37 @@ const toMenuItem = (
   };
 };
 
-export const createTray = (options: TrayOptions): Tray => {
+export interface TrayOptions {
+  /** Read again when the system theme changes. */
+  readonly iconPath: () => string;
+  readonly items: () => readonly TrayItem[];
+  readonly runner: MenuRunner;
+}
+
+export interface TrayIcon {
+  /** Rebuilds the menu from the current state. */
+  readonly refresh: () => void;
+  readonly destroy: () => void;
+}
+
+export const createTray = (options: TrayOptions): TrayIcon => {
   const tray = new Tray(nativeImage.createFromPath(options.iconPath()));
-  let countdown: NodeJS.Timeout | null = null;
 
-  nativeTheme.on("updated", () => {
+  const followTheme = (): void => {
     tray.setImage(nativeImage.createFromPath(options.iconPath()));
-  });
-
-  const run = (action: TrayAction, refresh: () => void): void => {
-    if (action === "showDraft") {
-      options.showDraft();
-    } else if (action === "openLibrary") {
-      options.openLibrary();
-    } else if (action === "quit") {
-      options.quit();
-    } else if (countdown === null) {
-      countdown = setTimeout(() => {
-        countdown = null;
-        refresh();
-        options.captureNow();
-      }, TRAY_CAPTURE_DELAY_MS);
-      refresh();
-    }
   };
 
-  const rebuild = (): void => {
-    const items = trayMenu({
-      countdownPending: countdown !== null,
-      draft: options.draftState(),
-      isMac: process.platform === "darwin",
-      shortcutRegistered: options.shortcutRegistered,
-    });
-
+  const refresh = (): void => {
     tray.setContextMenu(
       Menu.buildFromTemplate(
-        items.map((item) =>
-          toMenuItem(item, (action) => {
-            run(action, rebuild);
-          })
-        )
+        options.items().map((item) => toMenuItem(item, options.runner))
       )
     );
   };
 
+  nativeTheme.on("updated", followTheme);
   tray.setToolTip(trayTooltip({ isMac: process.platform === "darwin" }));
-  options.subscribe(rebuild);
-  rebuild();
+  refresh();
 
   if (process.platform === "win32") {
     tray.on("click", () => {
@@ -95,5 +79,11 @@ export const createTray = (options: TrayOptions): Tray => {
     });
   }
 
-  return tray;
+  return {
+    destroy: () => {
+      nativeTheme.off("updated", followTheme);
+      tray.destroy();
+    },
+    refresh,
+  };
 };

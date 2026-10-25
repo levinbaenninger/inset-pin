@@ -50,6 +50,15 @@ describe(captureKeyAction, () => {
     expect(captureKeyAction(press("c", { metaKey: true }), true)).toBeNull();
   });
 
+  it("pins with the platform's command key and P", () => {
+    expect(captureKeyAction(press("p", { metaKey: true }), true)).toBe("pin");
+    expect(captureKeyAction(press("p", { ctrlKey: true }), false)).toBe("pin");
+    expect(
+      captureKeyAction(press("p", { metaKey: true, shiftKey: true }), true)
+    ).toBeNull();
+    expect(captureKeyAction(press("p"), true)).toBeNull();
+  });
+
   it("leaves AltGr combinations alone", () => {
     expect(
       captureKeyAction(

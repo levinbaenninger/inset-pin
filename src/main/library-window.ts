@@ -3,20 +3,16 @@ import path from "node:path";
 
 import type { CaptureId } from "@shared/capture-record";
 import { libraryContract } from "@shared/contracts";
-import type { ActionResult } from "@shared/contracts";
-import {
-  app,
-  BrowserWindow,
-  clipboard,
-  ClipboardItem,
-  ipcMain,
-  nativeImage,
-  nativeTheme,
-} from "electron";
+import type {
+  ActionResult,
+  AppStatus,
+  LibraryCommand,
+} from "@shared/contracts";
+import { app, BrowserWindow, ipcMain, nativeTheme } from "electron";
 
+import type { CaptureExport } from "./capture-export";
 import { serveContract } from "./ipc-kit";
-import { exportFileName, toDetail, toSummary } from "./library-view";
-import { drawPinMark } from "./pin-mark";
+import { toDetail, toSummary } from "./library-view";
 import type { CaptureStore } from "./store";
 import { appOrigin, harden, secureWebPreferences } from "./window-security";
 
@@ -36,7 +32,7 @@ const bringToFront = (): void => {
   }
 };
 
-/** The page's background and text colours in the current theme, from src/renderer/styles.css. */
+/** The page's background and text colours in the current theme, from src/renderer/styles.css. On macOS the list shows the window's material, so the window itself is clear. */
 const themeColors = (): { background: string; foreground: string } =>
   nativeTheme.shouldUseDarkColors
     ? { background: "#0a0a0a", foreground: "#fafafa" }
@@ -53,33 +49,39 @@ const titleBarOverlay = (): Electron.TitleBarOverlayOptions => {
 };
 
 export interface LibraryWindow {
-  readonly open: () => void;
+  /** Opens the library, on one capture when an id is given. */
+  readonly open: (id?: CaptureId) => void;
+  readonly isOpen: () => boolean;
   readonly isVisible: () => boolean;
+  /** Runs a command from the app menu on the shown capture. */
+  readonly command: (command: LibraryCommand) => void;
+  readonly isFloating: () => boolean;
+  readonly setFloating: (on: boolean) => void;
 }
 
 export interface LibraryOptions {
   readonly store: CaptureStore;
+  readonly exporter: CaptureExport;
   readonly preload: string;
   readonly url: string;
   readonly onOpened: () => void;
   readonly onClosed: () => void;
   readonly onRejected: (channel: string, reason: string) => void;
-  readonly shortcutRegistered: () => boolean;
+  readonly status: () => AppStatus;
+  readonly pinToScreen: (id: CaptureId) => void;
 }
 
 const OK: ActionResult = { ok: true };
 
 const fail = (message: string): ActionResult => ({ message, ok: false });
 
-interface PinnedImage {
-  readonly image: Electron.NativeImage;
-  readonly png: Buffer;
-  readonly fileName: string;
-}
+/** Where macOS draws the traffic lights: centred in the page's title strip (--titlebar-height in styles.css). */
+const TRAFFIC_LIGHTS = { x: 18, y: 18 };
 
 export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
-  const { store } = options;
+  const { exporter, store } = options;
   let window: BrowserWindow | null = null;
+  let floatOnTop = false;
 
   // Dragged copies wait here for the drop; a drop can finish after startDrag returns, so they are cleared on delete and at launch.
   const dragStaging = path.join(app.getPath("temp"), "Inset Context Pin");
@@ -93,79 +95,18 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
 
   clearStaging();
 
-  /** The saved crop with the pin drawn on it, so the receiving app sees what mattered. */
-  const pinnedImage = (id: CaptureId): PinnedImage | null => {
-    const entry = store.get(id);
-    const file = store.imageFile(id);
-
-    if (entry?.kind !== "ok" || file === null) {
-      return null;
-    }
-
-    const saved = nativeImage.createFromPath(file);
-
-    if (saved.isEmpty()) {
-      return null;
-    }
-
-    const { height, width } = saved.getSize();
-    const { pin, image } = entry.record;
-
-    const marked = nativeImage.createFromBitmap(
-      Buffer.from(
-        drawPinMark(
-          { data: saved.toBitmap(), height, width },
-          pin,
-          image.pixelsPerDip
-        )
-      ),
-      { height, width }
-    );
-
-    return {
-      fileName: exportFileName(entry.record.thought),
-      image: marked,
-      png: marked.toPNG(),
-    };
-  };
-
   const server = serveContract(
     libraryContract,
     {
-      copyImage: async (id) => {
-        const pinned = pinnedImage(id);
-
-        if (pinned === null) {
-          return fail("This capture has no readable image.");
-        }
-
-        try {
-          const png = new Blob([pinned.png], { type: "image/png" });
-
-          await clipboard.write([new ClipboardItem({ "image/png": png })]);
-
-          return OK;
-        } catch {
-          return fail("The image could not be copied.");
-        }
-      },
-      copyNote: async (id) => {
-        const entry = store.get(id);
-
-        if (entry?.kind !== "ok") {
-          return fail("This capture can't be copied.");
-        }
-
-        await clipboard.writeText(entry.record.thought);
-
-        return OK;
-      },
+      copyImage: exporter.copyImage,
+      copyNote: exporter.copyNote,
       get: (id) => {
         const entry = store.get(id);
 
         return entry === undefined ? null : toDetail(entry);
       },
       list: () => store.list().map(toSummary),
+      pinToScreen: options.pinToScreen,
       remove: async (id) => {
         const result = await store.remove(id);
 
@@ -177,9 +118,9 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
 
         return OK;
       },
-      status: () => ({ shortcutRegistered: options.shortcutRegistered() }),
+      status: options.status,
       startImageDrag: (id) => {
-        const pinned = pinnedImage(id);
+        const pinned = exporter.pinnedImage(id);
 
         if (window === null || pinned === null) {
           return;
@@ -214,10 +155,14 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
     server.emit("changed", null);
   });
 
-  const open = (): void => {
+  const open = (id?: CaptureId): void => {
     if (window !== null) {
       if (window.isMinimized()) {
         window.restore();
+      }
+
+      if (id !== undefined) {
+        server.emit("show", id);
       }
 
       bringToFront();
@@ -228,29 +173,34 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
     }
 
     const created = new BrowserWindow({
-      backgroundColor: themeColors().background,
+      backgroundColor: isMac ? "#00000000" : themeColors().background,
       height: 680,
       minHeight: 420,
       minWidth: 560,
       show: false,
       title: "Recent captures",
-      // On Windows only the caption buttons stay, drawn over the page; macOS keeps its title bar.
+      // On Windows only the caption buttons stay, drawn over the page; on macOS the traffic lights sit on the list.
       titleBarOverlay: isMac ? false : titleBarOverlay(),
-      titleBarStyle: isMac ? "default" : "hidden",
+      titleBarStyle: isMac ? "hiddenInset" : "hidden",
+      trafficLightPosition: TRAFFIC_LIGHTS,
+      vibrancy: isMac ? "sidebar" : undefined,
       webPreferences: secureWebPreferences(options.preload),
       width: 960,
     });
 
     window = created;
 
+    if (floatOnTop) {
+      created.setAlwaysOnTop(true, "floating");
+    }
+
     if (!isMac) {
       created.removeMenu();
     }
 
     const followTheme = (): void => {
-      created.setBackgroundColor(themeColors().background);
-
       if (!isMac) {
+        created.setBackgroundColor(themeColors().background);
         created.setTitleBarOverlay(titleBarOverlay());
       }
     };
@@ -269,8 +219,36 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
       window = null;
       options.onClosed();
     });
+
+    // The app scheme refuses addresses with a fragment, so the capture follows once the page listens.
+    if (id !== undefined) {
+      created.webContents.once("did-finish-load", () => {
+        server.emit("show", id);
+      });
+    }
+
     void created.loadURL(options.url);
   };
 
-  return { isVisible: () => window?.isVisible() ?? false, open };
+  return {
+    command: (command) => {
+      if (window !== null) {
+        if (command === "find") {
+          bringToFront();
+          window.show();
+          window.focus();
+        }
+
+        server.emit("command", command);
+      }
+    },
+    isFloating: () => floatOnTop,
+    isOpen: () => window !== null,
+    isVisible: () => window?.isVisible() ?? false,
+    open,
+    setFloating: (on) => {
+      floatOnTop = on;
+      window?.setAlwaysOnTop(on, "floating");
+    },
+  };
 };

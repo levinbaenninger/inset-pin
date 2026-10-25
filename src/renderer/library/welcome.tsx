@@ -1,6 +1,7 @@
 import { Alert02Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { AppStatus } from "@shared/contracts";
+import type { IconPlace } from "@shared/settings";
 import { shortcutLabel } from "@shared/shortcut";
 import { useEffect, useState } from "react";
 
@@ -26,10 +27,17 @@ const useStatus = (): AppStatus | null => {
   return status;
 };
 
+const MAC_PLACES: Record<IconPlace, string> = {
+  dock: "the Dock",
+  dockAndMenuBar: "the Dock or the pin in the menu bar",
+  menuBar: "the pin in the menu bar",
+};
+
 /** Where the window can be found again; Windows hides new icons behind the ^ arrow at first. */
-const findTheApp = isMac
-  ? "Reopen this window from the Dock or the pin in the menu bar."
-  : "Reopen this window from the pin in the taskbar’s notification area, behind ^ if you can’t see it.";
+const findTheApp = (iconIn: IconPlace): string =>
+  isMac
+    ? `Reopen this window from ${MAC_PLACES[iconIn]}.`
+    : "Reopen this window from the pin in the taskbar’s notification area, behind ^ if you can’t see it.";
 
 /**
  * The library before the first capture. It opens at launch, so a new
@@ -71,7 +79,7 @@ export const Welcome = () => {
           </Alert>
         ) : null}
         <p className="text-muted-foreground border-t pt-4 text-xs leading-relaxed">
-          Captures appear here. {findTheApp}
+          Captures appear here. {findTheApp(status?.iconIn ?? "dockAndMenuBar")}
         </p>
       </div>
     </div>

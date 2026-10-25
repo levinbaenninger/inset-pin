@@ -5,6 +5,7 @@ import {
   Delete02Icon,
   Image01Icon,
   PencilEdit02Icon,
+  PinIcon,
   Search01Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -37,7 +38,7 @@ import {
 } from "@/components/ui/input-group";
 import { isMac } from "@/shared/platform";
 
-import { useCaptureCommands } from "./capture-commands";
+import { useCaptureCommands, useMenuCommands } from "./capture-commands";
 import type { CaptureCommands } from "./capture-commands";
 import { captureKeyLabels } from "./capture-keys";
 import { dayLabel, readOnlyText, timeOfDay } from "./format";
@@ -53,8 +54,9 @@ import { SavedImage } from "./saved-image";
 
 const rootRoute = getRouteApi("__root__");
 
+/** Tints of the text colour, so a selection shows on the page and on macOS's translucent sidebar alike. */
 const ROW =
-  "flex gap-3 rounded-lg px-2 py-2 outline-none hover:bg-muted/60 focus-visible:ring-3 focus-visible:ring-ring/50 aria-[current=page]:bg-muted";
+  "flex gap-3 rounded-lg px-2 py-2 outline-none hover:bg-foreground/5 focus-visible:ring-3 focus-visible:ring-ring/50 aria-[current=page]:bg-foreground/10";
 
 /** Where a right-click opened the menu, and on which capture. */
 interface RowMenuAt {
@@ -209,6 +211,11 @@ const RowMenu = ({
           Edit thought
           <DropdownMenuShortcut>{keys.edit}</DropdownMenuShortcut>
         </DropdownMenuItem>
+        <DropdownMenuItem onSelect={run((shown) => shown.pin)}>
+          <HugeiconsIcon icon={PinIcon} />
+          Pin to screen
+          <DropdownMenuShortcut>{keys.pin}</DropdownMenuShortcut>
+        </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem
           onSelect={run((shown) => shown.askDelete)}
@@ -352,6 +359,7 @@ export const RecentList = () => {
   }, [showSearch]);
 
   useListKeys(ids, selected, focusSearch);
+  useMenuCommands(focusSearch);
 
   const openMenu = useCallback(
     async (at: RowMenuAt): Promise<void> => {
@@ -383,7 +391,8 @@ export const RecentList = () => {
 
   return (
     <div className="flex min-h-0 w-full flex-col">
-      <header className="app-drag flex flex-col gap-3 px-4 pt-5 pb-3">
+      {/* On macOS the traffic lights sit above the title. */}
+      <header className="app-drag flex flex-col gap-3 px-4 pt-5 pb-3 in-data-[platform=mac]:pt-13">
         <div className="flex items-baseline justify-between gap-2 px-1 max-md:pr-(--titlebar-inset-right)">
           <h1 className="text-base font-semibold">Recent captures</h1>
           {/* Only a search makes the count worth reading. */}

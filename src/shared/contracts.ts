@@ -9,6 +9,8 @@ import type { CaptureId, PointVia } from "./capture-record";
 import { pt, rect } from "./geometry";
 import type { Size } from "./geometry";
 import { defineContract, event, invoke, out, send } from "./ipc";
+import { SettingsSchema } from "./settings";
+import type { IconPlace, SettingsView } from "./settings";
 
 const PIXEL_MAX = 100_000;
 const Pixel = z.number().int().min(0).max(PIXEL_MAX);
@@ -130,7 +132,18 @@ export type CaptureDetail =
 export interface AppStatus {
   /** False when another app holds the capture shortcut. */
   readonly shortcutRegistered: boolean;
+  /** Where the app's icon shows, so the welcome can say where to find the window again. */
+  readonly iconIn: IconPlace;
 }
+
+/** Commands for the shown capture, sent from the app menu. */
+export type LibraryCommand =
+  | "copyNote"
+  | "copyImage"
+  | "edit"
+  | "delete"
+  | "pin"
+  | "find";
 
 export type ActionResult =
   | { readonly ok: true }
@@ -159,13 +172,19 @@ export const captureContract = defineContract({
 });
 
 export const libraryContract = defineContract({
-  events: { changed: event<null>() },
+  events: {
+    changed: event<null>(),
+    command: event<LibraryCommand>(),
+    /** Asked from the tray or the Dock menu to show one capture. */
+    show: event<CaptureId>(),
+  },
   global: "insetLibrary",
   methods: {
     copyImage: invoke(CaptureIdSchema, out<ActionResult>()),
     copyNote: invoke(CaptureIdSchema, out<ActionResult>()),
     get: invoke(CaptureIdSchema, out<CaptureDetail | null>()),
     list: invoke(z.void(), out<CaptureSummary[]>()),
+    pinToScreen: send(CaptureIdSchema),
     remove: invoke(CaptureIdSchema, out<ActionResult>()),
     startImageDrag: send(CaptureIdSchema),
     status: invoke(z.void(), out<AppStatus>()),
@@ -177,6 +196,36 @@ export const libraryContract = defineContract({
   name: "library",
 });
 
+/** A capture pinned to the screen. Each pin window acts only on its own capture, which main knows by the sender. */
+export const pinContract = defineContract({
+  events: { changed: event<null>() },
+  global: "insetPin",
+  methods: {
+    close: send(z.void()),
+    copyImage: invoke(z.void(), out<ActionResult>()),
+    get: invoke(z.void(), out<CaptureDetail | null>()),
+    openInLibrary: send(z.void()),
+  },
+  name: "pin",
+});
+
+export const settingsContract = defineContract({
+  events: { view: event<SettingsView>() },
+  global: "insetSettings",
+  methods: {
+    /** The page's height, so the window fits it without empty space. */
+    fitHeight: send(z.number().int().min(120).max(1200)),
+    getView: invoke(z.void(), out<SettingsView>()),
+    setOpenAtLogin: send(z.boolean()),
+    update: send(SettingsSchema.partial()),
+  },
+  name: "settings",
+});
+
 export type CaptureContract = typeof captureContract;
+
+export type PinContract = typeof pinContract;
+
+export type SettingsContract = typeof settingsContract;
 
 export type LibraryContract = typeof libraryContract;

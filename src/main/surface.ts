@@ -28,7 +28,7 @@ export interface CaptureSurface extends DraftSurface {
 export interface SurfaceOptions {
   readonly preload: string;
   readonly url: string;
-  /** Another Inset window (the library) is visible, so app.hide() would hide it too. */
+  /** Another Inset window (the library, a pinned capture) is visible, so app.hide() would hide it too. */
   readonly otherWindowVisible: () => boolean;
 }
 

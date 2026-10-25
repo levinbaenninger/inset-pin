@@ -2,6 +2,7 @@ import type { CaptureId } from "@shared/capture-record";
 import { createContext, use, useEffect, useEffectEvent, useRef } from "react";
 import type { ReactNode, RefObject } from "react";
 
+import { libraryBridge } from "@/shared/bridge";
 import { isMac } from "@/shared/platform";
 
 import { captureKeyAction } from "./capture-keys";
@@ -12,6 +13,7 @@ export interface CaptureCommands {
   readonly copyNote: () => void;
   readonly copyImage: () => void;
   readonly edit: () => void;
+  readonly pin: () => void;
   readonly askDelete: () => void;
 }
 
@@ -61,10 +63,39 @@ const enterActivates = (target: EventTarget | null, id: CaptureId): boolean =>
 const hasTextSelection = (): boolean =>
   (window.getSelection()?.toString() ?? "") !== "";
 
+/** Runs the app menu's commands on the shown capture; Find goes to the search. */
+export const useMenuCommands = (find: () => void): void => {
+  const commands = useCaptureCommands();
+  const onFind = useEffectEvent(find);
+
+  useEffect(
+    () =>
+      libraryBridge().on("command", (command) => {
+        const shown = commands.current;
+
+        if (command === "find") {
+          onFind();
+        } else if (shown !== null) {
+          const run = {
+            copyImage: shown.copyImage,
+            copyNote: shown.copyNote,
+            delete: shown.askDelete,
+            edit: shown.edit,
+            pin: shown.pin,
+          }[command];
+
+          run();
+        }
+      }),
+    [commands]
+  );
+};
+
 /**
  * Publishes the shown capture's commands and gives them keys: Enter edits,
- * Backspace or Delete asks to delete, ⇧⌘C copies the image, and the copy
- * command (⌘C, Ctrl+C or Edit > Copy) copies the note when no text is selected.
+ * Backspace or Delete asks to delete, ⇧⌘C copies the image, ⌘P pins it to the
+ * screen, and the copy command (⌘C, Ctrl+C or Edit > Copy) copies the note
+ * when no text is selected.
  */
 export const useCaptureShortcuts = (
   commands: CaptureCommands,
@@ -112,6 +143,7 @@ export const useCaptureShortcuts = (
       copyImage: commands.copyImage,
       delete: commands.askDelete,
       edit: commands.edit,
+      pin: commands.pin,
     }[action];
 
     run();
