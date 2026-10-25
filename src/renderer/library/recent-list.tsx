@@ -19,6 +19,7 @@ import {
   useRouter,
 } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import {
   DropdownMenu,
@@ -442,7 +443,8 @@ export const RecentList = () => {
         ) : null}
         <Groups groups={groups} onMenu={showMenu} />
       </nav>
-      <RowMenu menu={menu} onClose={closeMenu} />
+      {/* Outside the list, which a narrow window hides once the right-click selects a capture. */}
+      {createPortal(<RowMenu menu={menu} onClose={closeMenu} />, document.body)}
     </div>
   );
 };
