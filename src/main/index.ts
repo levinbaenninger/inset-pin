@@ -156,6 +156,9 @@ const start = async (): Promise<void> => {
       e2eLog("libraryOpened");
       menus.refresh();
     },
+    onFocusChange: () => {
+      menus.refresh();
+    },
     onRejected: logRejected,
     pinToScreen: pins.open,
     preload: preloadPath("library"),
@@ -392,6 +395,7 @@ const start = async (): Promise<void> => {
     const appState: AppMenuState = {
       canCapture: model.draft === "none" && !model.countdownPending,
       floatOnTop: library.isFloating(),
+      libraryFocused: library.isFocused(),
       libraryOpen: library.isOpen(),
     };
 

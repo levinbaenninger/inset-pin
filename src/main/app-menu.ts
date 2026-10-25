@@ -4,8 +4,10 @@ import type { MenuItemConstructorOptions } from "electron";
 export const HELP_URL = "https://github.com/levinbaenninger/inset-pin#readme";
 
 export interface AppMenuState {
-  /** The library is open, so its capture commands have somewhere to go. */
+  /** The library is open, so it can float. */
   readonly libraryOpen: boolean;
+  /** The library has the keyboard, so its capture commands go to the capture the user is looking at. */
+  readonly libraryFocused: boolean;
   readonly floatOnTop: boolean;
   /** No new capture while a draft waits to be saved or discarded. */
   readonly canCapture: boolean;
@@ -40,7 +42,7 @@ const captureSubmenu = (
     click: () => {
       actions.libraryCommand(command);
     },
-    enabled: state.libraryOpen,
+    enabled: state.libraryFocused,
     label,
     registerAccelerator: false,
   });
@@ -115,29 +117,17 @@ export const appMenuTemplate = (
         click: () => {
           actions.libraryCommand("find");
         },
-        enabled: state.libraryOpen,
+        enabled: state.libraryFocused,
         label: "Find",
         registerAccelerator: false,
       },
     ],
   },
   { label: "Capture", submenu: captureSubmenu(state, actions) },
+  // No page zoom: every window shares the app's origin, so it would also zoom the fixed-width capture panel.
   {
     label: "View",
     submenu: [
-      { role: "resetZoom" },
-      { role: "zoomIn" },
-      { role: "zoomOut" },
-      SEPARATOR,
-      { role: "togglefullscreen" },
-    ],
-  },
-  {
-    role: "windowMenu",
-    submenu: [
-      { role: "minimize" },
-      { role: "zoom" },
-      SEPARATOR,
       {
         checked: state.floatOnTop,
         click: (item) => {
@@ -147,6 +137,15 @@ export const appMenuTemplate = (
         label: "Keep Library on Top",
         type: "checkbox",
       },
+      SEPARATOR,
+      { role: "togglefullscreen" },
+    ],
+  },
+  {
+    role: "windowMenu",
+    submenu: [
+      { role: "minimize" },
+      { role: "zoom" },
       SEPARATOR,
       { role: "front" },
     ],

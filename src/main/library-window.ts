@@ -52,6 +52,7 @@ export interface LibraryWindow {
   /** Opens the library, on one capture when an id is given. */
   readonly open: (id?: CaptureId) => void;
   readonly isOpen: () => boolean;
+  readonly isFocused: () => boolean;
   readonly isVisible: () => boolean;
   /** Runs a command from the app menu on the shown capture. */
   readonly command: (command: LibraryCommand) => void;
@@ -66,6 +67,8 @@ export interface LibraryOptions {
   readonly url: string;
   readonly onOpened: () => void;
   readonly onClosed: () => void;
+  /** The library gained or lost the keyboard. */
+  readonly onFocusChange: () => void;
   readonly onRejected: (channel: string, reason: string) => void;
   readonly status: () => AppStatus;
   readonly pinToScreen: (id: CaptureId) => void;
@@ -214,6 +217,8 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
 
       options.onOpened();
     });
+    created.on("focus", options.onFocusChange);
+    created.on("blur", options.onFocusChange);
     created.on("closed", () => {
       nativeTheme.off("updated", followTheme);
       window = null;
@@ -243,6 +248,7 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
       }
     },
     isFloating: () => floatOnTop,
+    isFocused: () => window?.isFocused() ?? false,
     isOpen: () => window !== null,
     isVisible: () => window?.isVisible() ?? false,
     open,
