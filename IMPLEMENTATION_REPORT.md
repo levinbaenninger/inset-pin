@@ -48,7 +48,7 @@ The experiment should record these choices next to its findings, because each on
 | Library on open | Two panes from 768 px wide, opening the newest capture. Narrower windows show one pane at a time. | `src/renderer/library/router.tsx` |
 | Exported image | **Copy image** and file drag carry the pin, drawn into the PNG. The stored `crop.png` stays without it. | `drawPinMark` in `src/main/pin-mark.ts` |
 | Dragged file name | The thought's first line, made safe for a file name. The named copy waits in the system temp folder under `Inset Context Pin/<id>`, is removed when the capture is deleted, and the folder is cleared at every launch. | `exportFileName` in `src/main/library-view.ts`, `src/main/library-window.ts` |
-| Leaving an edited thought | Choosing another capture with an unsaved change asks **Keep editing** or **Leave without saving**. Arrow keys inside the editor never move through the list. | `useBlocker` in `src/renderer/library/capture-page.tsx` |
+| Leaving an edited thought | Choosing another capture with an unsaved change asks **Keep editing**, **Discard** or **Save**; ⌘↩ (Ctrl+Enter) saves and goes on to the chosen capture. Arrow keys inside the editor never move through the list. | `useBlocker` in `src/renderer/library/capture-page.tsx` |
 
 ## What was tested
 
