@@ -1,4 +1,8 @@
-import { Alert02Icon, Search01Icon } from "@hugeicons/core-free-icons";
+import {
+  Alert02Icon,
+  Cancel01Icon,
+  Search01Icon,
+} from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { CaptureIdSchema } from "@shared/capture-record";
 import type { CaptureId } from "@shared/capture-record";
@@ -14,6 +18,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   InputGroup,
   InputGroupAddon,
+  InputGroupButton,
   InputGroupInput,
 } from "@/components/ui/input-group";
 import { isMac } from "@/shared/platform";
@@ -119,7 +124,10 @@ const useListKeys = (
         return;
       }
 
-      if (event.key === "f" && (isMac ? event.metaKey : event.ctrlKey)) {
+      if (
+        event.key.toLowerCase() === "f" &&
+        (isMac ? event.metaKey : event.ctrlKey)
+      ) {
         event.preventDefault();
         search();
 
@@ -197,11 +205,12 @@ export const RecentList = () => {
       <header className="app-drag flex flex-col gap-3 px-4 pt-5 pb-3">
         <div className="flex items-baseline justify-between gap-2 px-1 max-md:pr-(--titlebar-inset-right)">
           <h1 className="text-base font-semibold">Recent captures</h1>
-          <span className="text-muted-foreground text-xs tabular-nums">
-            {query === ""
-              ? captures.length
-              : `${visible.length} of ${captures.length}`}
-          </span>
+          {/* Only a search makes the count worth reading. */}
+          {query === "" ? null : (
+            <span className="text-muted-foreground text-xs tabular-nums">
+              {visible.length} of {captures.length}
+            </span>
+          )}
         </div>
         <InputGroup className="app-no-drag">
           <InputGroupAddon>
@@ -220,9 +229,25 @@ export const RecentList = () => {
             }}
             placeholder="Search thoughts"
             ref={searchRef}
+            // The clear button below replaces WebKit's own, which ignores the theme.
+            className="[&::-webkit-search-cancel-button]:appearance-none"
             type="search"
             value={query}
           />
+          {query === "" ? null : (
+            <InputGroupAddon align="inline-end">
+              <InputGroupButton
+                aria-label="Clear search"
+                onClick={() => {
+                  setQuery("");
+                  searchRef.current?.focus();
+                }}
+                size="icon-xs"
+              >
+                <HugeiconsIcon icon={Cancel01Icon} />
+              </InputGroupButton>
+            </InputGroupAddon>
+          )}
         </InputGroup>
       </header>
       <nav
