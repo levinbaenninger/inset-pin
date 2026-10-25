@@ -100,7 +100,19 @@ export const stepSelection = (
   return ids[Math.min(Math.max(index + offset, 0), ids.length - 1)] ?? null;
 };
 
-/** After a delete, select the next older capture, else the newer one. */
+/** The ids the list shows, in its order: main lists newest first with read-only entries last. */
+export const visibleIds = (
+  captures: readonly CaptureSummary[],
+  query: string
+): readonly CaptureId[] =>
+  captures.flatMap((capture) =>
+    matchesQuery(capture, query) ? [capture.id] : []
+  );
+
+/**
+ * After a delete, select the next older capture the list shows, else the newer
+ * one. A capture the search hides gives way to the first one it shows.
+ */
 export const selectionAfterRemoval = (
   ids: readonly CaptureId[],
   removed: CaptureId
@@ -108,7 +120,7 @@ export const selectionAfterRemoval = (
   const index = ids.indexOf(removed);
 
   if (index === -1) {
-    return null;
+    return ids[0] ?? null;
   }
 
   return ids[index + 1] ?? ids[index - 1] ?? null;

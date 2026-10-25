@@ -7,6 +7,7 @@ import {
   matchesQuery,
   selectionAfterRemoval,
   stepSelection,
+  visibleIds,
 } from "./list-model";
 
 const id = (n: number) =>
@@ -116,5 +117,29 @@ describe(selectionAfterRemoval, () => {
     expect(selectionAfterRemoval(ids, id(2))).toBe(id(3));
     expect(selectionAfterRemoval(ids, id(3))).toBe(id(2));
     expect(selectionAfterRemoval([id(1)], id(1))).toBeNull();
+  });
+
+  it("selects the first shown capture when the removed one was hidden", () => {
+    expect(selectionAfterRemoval(ids, id(9))).toBe(id(1));
+    expect(selectionAfterRemoval([], id(9))).toBeNull();
+  });
+});
+
+describe(visibleIds, () => {
+  it("keeps the list's order and only what the search shows", () => {
+    const captures = [
+      saved(1, at(22, 8), "Total ignores the discount"),
+      saved(2, at(22, 7), "Button looks disabled"),
+      saved(3, at(21, 9), "Discount applied twice"),
+      unreadable,
+    ];
+
+    expect(visibleIds(captures, "discount")).toStrictEqual([id(1), id(3)]);
+    expect(visibleIds(captures, "")).toStrictEqual([
+      id(1),
+      id(2),
+      id(3),
+      id(99),
+    ]);
   });
 });
