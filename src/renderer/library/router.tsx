@@ -48,7 +48,7 @@ const RootLayout = () => {
   return (
     <ListQueryProvider>
       <CaptureCommandsProvider>
-        <div className="bg-background text-foreground grid h-svh md:grid-cols-[minmax(17rem,22rem)_1fr]">
+        <div className="bg-background text-foreground grid h-svh grid-cols-1 md:grid-cols-[minmax(17rem,22rem)_1fr]">
           <aside
             className={cn(
               "min-h-0 md:flex md:border-r",
