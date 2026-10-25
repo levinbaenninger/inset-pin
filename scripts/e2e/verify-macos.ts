@@ -632,6 +632,15 @@ const checkLibrary = async () => {
     await windowShows(thought),
     windowText().replaceAll(/\s+/gu, " ").slice(0, 160)
   );
+  osa('tell application "Finder" to activate');
+  await delay(500);
+  trayItem("Recent captures…");
+  await delay(800);
+  record(
+    "library comes forward when asked for again behind another app",
+    frontmostPid() === appPid(),
+    frontmost()
+  );
   mark = events().length;
   closeWindow();
   record(

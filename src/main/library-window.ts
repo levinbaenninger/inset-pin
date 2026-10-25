@@ -27,6 +27,15 @@ const TITLE_BAR_HEIGHT = 40;
 
 const isMac = process.platform === "darwin";
 
+/** Explicitly requested from the menu bar: bring it in front of the active app. */
+const bringToFront = (): void => {
+  if (isMac) {
+    // Undo app.hide() from a dismissed capture panel, then take focus from the app in front.
+    app.show();
+    app.focus({ steal: true });
+  }
+};
+
 /** The page's background and text colours in the current theme, from src/renderer/styles.css. */
 const themeColors = (): { background: string; foreground: string } =>
   nativeTheme.shouldUseDarkColors
@@ -211,6 +220,7 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
         window.restore();
       }
 
+      bringToFront();
       window.show();
       window.focus();
 
@@ -250,11 +260,7 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
     harden(created.webContents, "library");
     created.once("ready-to-show", () => {
       created.show();
-
-      if (process.platform === "darwin") {
-        // Explicitly requested from the menu bar: bring it in front of the active app.
-        app.focus({ steal: true });
-      }
+      bringToFront();
 
       options.onOpened();
     });
