@@ -252,7 +252,8 @@ export const RecentList = () => {
       </header>
       <nav
         aria-label="Captures"
-        className="min-h-0 flex-1 overflow-y-auto px-2 pb-4"
+        // Room for the scrollbar stays, so rows keep their width when a search shortens the list.
+        className="min-h-0 flex-1 [scrollbar-gutter:stable] overflow-y-auto px-2 pb-4"
       >
         {visible.length === 0 ? (
           <p className="text-muted-foreground px-2 py-6 text-sm">

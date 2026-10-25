@@ -169,6 +169,42 @@
   }
 }
 
+/*
+ * Thin scrollbars that follow the theme, on every platform: Windows draws wide
+ * light ones, and macOS draws a boxed track when scroll bars always show. The
+ * thumb shows while the pointer is over the scrolling area.
+ */
+@layer base {
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 9999px;
+    background-clip: content-box;
+    background-color: transparent;
+  }
+
+  :hover::-webkit-scrollbar-thumb {
+    background-color: color-mix(in oklab, var(--foreground) 22%, transparent);
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: color-mix(in oklab, var(--foreground) 40%, transparent);
+  }
+
+  ::-webkit-scrollbar-button {
+    display: none;
+  }
+}
+
 /* Matches LAYERS in src/main/pin-mark.ts, so the panel, the library and copied images show one mark. */
 @layer components {
   .pin-marker {
