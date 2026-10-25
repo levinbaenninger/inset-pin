@@ -40,6 +40,8 @@ import { useLocalKeys } from "@/shared/keys";
 import { isMac } from "@/shared/platform";
 import { useExpiringState } from "@/shared/use-expiring-state";
 
+import { useCaptureShortcuts } from "./capture-commands";
+import { captureKeyLabels } from "./capture-keys";
 import { formatCaptureTime, readOnlyText, sourceText, viaText } from "./format";
 import { selectionAfterRemoval, visibleIds } from "./list-model";
 import { useListQuery } from "./list-query";
@@ -263,22 +265,46 @@ const CopyButton = ({
   icon,
   label,
   onClick,
+  shortcut,
 }: {
   readonly copied: boolean;
   readonly icon: typeof Copy01Icon;
   readonly label: string;
   readonly onClick: () => void;
+  readonly shortcut: string;
 }) => (
-  <Button onClick={onClick} size="sm" variant="outline">
+  <Button
+    onClick={onClick}
+    size="sm"
+    title={`${label} (${shortcut})`}
+    variant="outline"
+  >
     <HugeiconsIcon data-icon="inline-start" icon={copied ? Tick02Icon : icon} />
     {copied ? "Copied" : label}
   </Button>
 );
 
-const DeleteButton = ({ onDelete }: { readonly onDelete: () => void }) => (
-  <AlertDialog>
+interface DeleteButtonProps {
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+  readonly onDelete: () => void;
+  readonly shortcut: string;
+}
+
+const DeleteButton = ({
+  onDelete,
+  onOpenChange,
+  open,
+  shortcut,
+}: DeleteButtonProps) => (
+  <AlertDialog onOpenChange={onOpenChange} open={open}>
     <AlertDialogTrigger asChild>
-      <Button className="ml-auto" size="sm" variant="ghost">
+      <Button
+        className="ml-auto"
+        size="sm"
+        title={`Delete (${shortcut})`}
+        variant="ghost"
+      >
         <HugeiconsIcon data-icon="inline-start" icon={Delete02Icon} />
         Delete
       </Button>
@@ -307,6 +333,8 @@ const SavedCaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
   const captures = rootRoute.useLoaderData();
   const { query } = useListQuery();
   const [editing, setEditing] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const keys = captureKeyLabels(isMac);
 
   const [status, setStatus] = useState<{
     readonly text: string;
@@ -387,6 +415,23 @@ const SavedCaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
     setEditing(true);
   };
 
+  useCaptureShortcuts(
+    {
+      askDelete: () => {
+        setConfirmingDelete(true);
+      },
+      copyImage: () => {
+        void copy("image");
+      },
+      copyNote: () => {
+        void copy("note");
+      },
+      edit: startEditing,
+      id: capture.id,
+    },
+    !editing
+  );
+
   return (
     <article className="flex flex-col gap-5">
       <section aria-label="Thought" className="flex flex-col gap-2">
@@ -410,6 +455,7 @@ const SavedCaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
           onClick={() => {
             void copy("note");
           }}
+          shortcut={keys.copyNote}
         />
         <CopyButton
           copied={copied === "image"}
@@ -418,11 +464,13 @@ const SavedCaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
           onClick={() => {
             void copy("image");
           }}
+          shortcut={keys.copyImage}
         />
         <Button
           disabled={editing}
           onClick={startEditing}
           size="sm"
+          title={`Edit thought (${keys.edit})`}
           variant="outline"
         >
           <HugeiconsIcon data-icon="inline-start" icon={PencilEdit02Icon} />
@@ -432,6 +480,9 @@ const SavedCaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
           onDelete={() => {
             void remove();
           }}
+          onOpenChange={setConfirmingDelete}
+          open={confirmingDelete}
+          shortcut={keys.delete}
         />
       </div>
       <p

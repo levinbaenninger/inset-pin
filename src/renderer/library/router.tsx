@@ -12,6 +12,7 @@ import {
 import { cn } from "@/lib/utils";
 import { libraryBridge } from "@/shared/bridge";
 
+import { CaptureCommandsProvider } from "./capture-commands";
 import { CapturePage } from "./capture-page";
 import { ListQueryProvider } from "./list-query";
 import { NoSelection } from "./no-selection";
@@ -46,27 +47,29 @@ const RootLayout = () => {
 
   return (
     <ListQueryProvider>
-      <div className="bg-background text-foreground grid h-svh md:grid-cols-[minmax(17rem,22rem)_1fr]">
-        <aside
-          className={cn(
-            "min-h-0 md:flex md:border-r",
-            showingCapture ? "hidden" : "flex"
-          )}
-        >
-          <RecentList />
-        </aside>
-        <main
-          className={cn(
-            "min-h-0 min-w-0 flex-col md:flex",
-            showingCapture ? "flex" : "hidden"
-          )}
-        >
-          <TitleBarStrip />
-          <div className="min-h-0 flex-1 [scrollbar-gutter:stable] overflow-y-auto">
-            <Outlet />
-          </div>
-        </main>
-      </div>
+      <CaptureCommandsProvider>
+        <div className="bg-background text-foreground grid h-svh md:grid-cols-[minmax(17rem,22rem)_1fr]">
+          <aside
+            className={cn(
+              "min-h-0 md:flex md:border-r",
+              showingCapture ? "hidden" : "flex"
+            )}
+          >
+            <RecentList />
+          </aside>
+          <main
+            className={cn(
+              "min-h-0 min-w-0 flex-col md:flex",
+              showingCapture ? "flex" : "hidden"
+            )}
+          >
+            <TitleBarStrip />
+            <div className="min-h-0 flex-1 [scrollbar-gutter:stable] overflow-y-auto">
+              <Outlet />
+            </div>
+          </main>
+        </div>
+      </CaptureCommandsProvider>
     </ListQueryProvider>
   );
 };
