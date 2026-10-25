@@ -91,6 +91,8 @@ const captureRoute = createRoute({
 });
 
 export const router = createRouter({
+  // invalidate() resolves only once the lists are fresh, so after an edit or a delete nothing stale shows.
+  defaultStaleReloadMode: "blocking",
   history: createHashHistory(),
   routeTree: rootRoute.addChildren([indexRoute, captureRoute]),
 });
