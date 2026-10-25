@@ -34,10 +34,12 @@ const content = {
   thought: "hello",
 };
 
-const setup = () => {
+const setup = (
+  target: () => typeof panel | readonly (typeof panel)[] | null = () => panel
+) => {
   const sends = new Map<string, SendListener>();
   const invokes = new Map<string, InvokeListener>();
-  const saved: { id: string; content: DraftContent }[] = [];
+  const saved: { id: string; content: DraftContent; from: number }[] = [];
   const rejected: string[] = [];
 
   const ipc: IpcRegistrar = {
@@ -61,8 +63,8 @@ const setup = () => {
     openScreenSettings: noop,
     relaunch: noop,
     reportHeight: noop,
-    save: (input) => {
-      saved.push(input);
+    save: (input, sender) => {
+      saved.push({ ...input, from: sender.id });
     },
   };
 
@@ -72,7 +74,7 @@ const setup = () => {
     onRejected: (channel, reason) => {
       rejected.push(`${channel}: ${reason}`);
     },
-    target: () => panel,
+    target,
   });
 
   const send = (
@@ -98,7 +100,7 @@ describe(serveContract, () => {
 
     send("save", fromPanel, { content, id: ID });
 
-    expect(saved).toStrictEqual([{ content, id: ID }]);
+    expect(saved).toStrictEqual([{ content, from: 7, id: ID }]);
   });
 
   it.each([
@@ -160,6 +162,19 @@ describe(serveContract, () => {
     const { invoke } = setup();
 
     await expect(invoke("getView", fromPanel)).resolves.toBe('{"kind":"none"}');
+  });
+
+  it("accepts any of several windows of a kind, tells the handler which, and nothing once they are gone", () => {
+    const other = { ...panel, id: 9 };
+    let windows: readonly (typeof panel)[] = [panel, other];
+    const { send, rejected, saved } = setup(() => windows);
+
+    send("save", { ...fromPanel, sender: { id: 9 } }, { content, id: ID });
+    windows = [];
+    send("save", fromPanel, { content, id: ID });
+
+    expect(saved).toStrictEqual([{ content, from: 9, id: ID }]);
+    expect(rejected).toStrictEqual(["capture:save: untrusted sender"]);
   });
 
   it("requires a handler for every method at compile time", () => {
