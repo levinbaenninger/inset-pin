@@ -1,6 +1,6 @@
 # Inset Context Pin
 
-Inset Context Pin is a menu-bar and tray utility for one capture experiment. You point at a detail in your real work, press a shortcut, and type what matters about it. The app saves a cropped screenshot with a pin on that detail next to your thought.
+Inset Context Pin is a small app for one capture experiment. You point at a detail in your real work, press a shortcut, and type what matters about it. The app saves a cropped screenshot with a pin on that detail next to your thought.
 
 It is a prototype for testing whether pointing at a place can replace describing it. It is not a note app. [IMPLEMENTATION_REPORT.md](IMPLEMENTATION_REPORT.md) lists what was tested, on which system, and what is still open.
 
@@ -21,7 +21,7 @@ The builds are not signed with a developer certificate, so each system warns onc
 
 5. Press `⌥⌘P` once. If the panel asks for screen access, open **System Settings > Privacy & Security > Screen & System Audio Recording**, turn on **Inset Context Pin**, and click **Quit and Reopen** in the panel.
 
-The app has no Dock icon. The first time it starts, a welcome window shows how to capture. After that, look for the pin in the menu bar.
+The first time it starts, a welcome window shows how to capture. The app has a Dock icon and a pin in the menu bar; **Settings…** (`⌘,`) can hide either.
 
 ### Windows
 
@@ -36,7 +36,7 @@ The capture flow was tested on Windows 11 with real input. [IMPLEMENTATION_REPOR
 1. Move the pointer over the detail that matters, in any app.
 2. Press `⌥⌘P` on macOS or `Ctrl+Alt+P` on Windows. A small panel opens beside the pointer with a crop around that point and a ring on it.
 3. Type what matters in **What matters here?**.
-4. Optional: click or drag in the preview to move the pin, or use the arrow keys to nudge it. The two buttons above the preview, **Tighten** and **Widen context**, show less or more of the screen. A pinch on the trackpad over the preview does the same.
+4. Optional: adjust what is saved. The frame in the preview is the crop, with the screen around it dimmed. Drag the frame to move it, drag a corner or an edge to crop, and pinch on the trackpad to show more or less; **Tighten** and **Widen context** above the preview do that in steps. Click or drag to move the pin, or nudge it with the arrow keys.
 5. Press `⌘↩` or `Ctrl+Enter`, or click **Save**. The panel closes and you are back in your work.
 
 To set a capture aside, press `Escape` or click anywhere outside the panel. The draft stays in memory. Press the shortcut again to bring the same draft back. The panel then says **Unsaved draft from** with its time, because the app does not take a new screenshot while a draft exists. Save or discard it to capture something new.
@@ -49,7 +49,7 @@ To quit, choose **Quit Inset Context Pin** from the pin icon. If a draft has a t
 
 ## Read, edit, and export captures
 
-Choose **Recent captures…** from the pin icon, or start the app again while it runs. The window shows your captures grouped by day, newest first, and opens the newest one beside the list. In a narrow window the list and a capture each take the whole window. Before the first capture it shows the welcome instead, and the first capture appears there as soon as you save it.
+Click the Dock icon, choose **Recent captures…** or one of the newest captures from the pin icon, or start the app again while it runs. The window shows your captures grouped by day, newest first, and opens the newest one beside the list. In a narrow window the list and a capture each take the whole window. Before the first capture it shows the welcome instead, and the first capture appears there as soon as you save it.
 
 - Search the thoughts with the field at the top, or with `⌘F` or `Ctrl+F`. Every word you type must appear.
 - Move through the list with `↑` and `↓`.
@@ -57,8 +57,19 @@ Choose **Recent captures…** from the pin icon, or start the app again while it
 - Drag the image itself into another app to drop it as a file. The file carries the pin too and is named after the thought.
 - **Edit thought** changes the text, also with `Enter`. `⌘↩` saves it and `Escape` cancels. Choosing another capture with an unsaved change asks first; `⌘↩` there saves and goes on.
 - **Delete** asks once, then opens the next capture the list shows. `Backspace` or `Delete` asks too.
-- Right-click a capture in the list for the same commands.
+- **Pin** keeps the capture in a small window above every other app, also with `⌘P` or `Ctrl+P`. Click the pinned capture for **Close**, **Copy image** and **Show in library**; drag it anywhere.
+- Right-click a capture in the list for the same commands. On macOS the **Capture** menu lists them with their keys.
 - `⌘W` or `Ctrl+W` closes the window.
+
+## Settings
+
+Choose **Settings…** from the app menu (`⌘,`) or the pin icon.
+
+- **Open at Login** starts the app when you log in.
+- **Show app icon in** (macOS): the Dock and the menu bar, the Dock only, or the menu bar only. Without the Dock icon the app has no menu bar of its own.
+- **Copy after saving** puts each saved capture on the clipboard, the image with its pin and the thought, ready to paste.
+
+## Where captures are stored
 
 The app stores each capture as a folder with `capture.json` and `crop.png`.
 
@@ -76,7 +87,7 @@ pnpm install
 pnpm dev
 ```
 
-`pnpm dev` starts the app with hot reload. It runs in the menu bar or tray. It opens the welcome window only while there are no captures.
+`pnpm dev` starts the app with hot reload. It opens the welcome window only while there are no captures.
 
 The first run downloads the Electron binary into `node_modules/electron`. If a terminal inside another Electron app sets `ELECTRON_RUN_AS_NODE`, unset it first, or Electron starts as plain Node and stops with "bad option".
 
