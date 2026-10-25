@@ -1,6 +1,12 @@
 import { originOf } from "@shared/inset-url";
 import { eventChannel, methodChannel } from "@shared/ipc";
-import type { Contract, EventName, EventPayload, Handlers } from "@shared/ipc";
+import type {
+  Contract,
+  EventName,
+  EventPayload,
+  Handlers,
+  Sender,
+} from "@shared/ipc";
 import type { z } from "zod";
 
 export interface SenderFrame {
@@ -33,8 +39,8 @@ export interface EventTarget {
 export interface ServeOptions {
   readonly ipc: IpcRegistrar;
   readonly appOrigin: string;
-  /** The one webContents allowed to call this contract and to receive its events. */
-  readonly target: () => EventTarget | null;
+  /** The webContents allowed to call this contract and to receive its events: one window, or several of a kind. */
+  readonly target: () => EventTarget | readonly EventTarget[] | null;
   readonly onRejected: (channel: string, reason: string) => void;
 }
 
@@ -47,18 +53,27 @@ export interface ContractServer<C extends Contract> {
 
 type Parsed = z.output<z.ZodType>;
 
-type ParsedHandler = (input: Parsed) => Parsed;
+type ParsedHandler = (input: Parsed, sender: Sender) => Parsed;
+
+const targetsOf = (
+  target: EventTarget | readonly EventTarget[] | null
+): readonly EventTarget[] => {
+  if (target === null) {
+    return [];
+  }
+
+  return "send" in target ? [target] : target;
+};
 
 export const isTrustedSender = (
   event: IpcSenderEvent,
-  expected: { readonly id: number } | null,
+  expected: readonly { readonly id: number }[],
   appOrigin: string
 ): boolean => {
   const frame = event.senderFrame;
 
   return (
-    expected !== null &&
-    event.sender.id === expected.id &&
+    expected.some((one) => event.sender.id === one.id) &&
     frame !== null &&
     frame.parent === null &&
     originOf(frame.url) === appOrigin
@@ -80,7 +95,9 @@ export const serveContract = <C extends Contract>(
   ):
     | { readonly ok: true; readonly input: Parsed }
     | { readonly ok: false; readonly reason: string } => {
-    if (!isTrustedSender(event, options.target(), options.appOrigin)) {
+    if (
+      !isTrustedSender(event, targetsOf(options.target()), options.appOrigin)
+    ) {
       return { ok: false, reason: "untrusted sender" };
     }
 
@@ -111,14 +128,14 @@ export const serveContract = <C extends Contract>(
           throw new Error(`${channel} rejected: ${accepted.reason}`);
         }
 
-        return await handler(accepted.input);
+        return await handler(accepted.input, { id: event.sender.id });
       });
     } else {
       options.ipc.on(channel, (event, ...args) => {
         const accepted = accept(spec.input, event, args);
 
         if (accepted.ok) {
-          handler(accepted.input);
+          handler(accepted.input, { id: event.sender.id });
         } else {
           options.onRejected(channel, accepted.reason);
         }
@@ -128,10 +145,10 @@ export const serveContract = <C extends Contract>(
 
   return {
     emit: (name, payload) => {
-      const target = options.target();
-
-      if (target !== null && !target.isDestroyed()) {
-        target.send(eventChannel(contract, name), payload);
+      for (const target of targetsOf(options.target())) {
+        if (!target.isDestroyed()) {
+          target.send(eventChannel(contract, name), payload);
+        }
       }
     },
   };

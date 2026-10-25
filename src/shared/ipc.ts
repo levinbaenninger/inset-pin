@@ -76,11 +76,16 @@ export type Client<C extends Contract> = {
   ) => () => void;
 };
 
+/** Which webContents sent a message, for contracts served to several windows. */
+export interface Sender {
+  readonly id: number;
+}
+
 type MethodHandler<M> =
   M extends InvokeSpec<infer I extends z.ZodType, infer O>
-    ? (input: z.output<I>) => O | Promise<O>
+    ? (input: z.output<I>, sender: Sender) => O | Promise<O>
     : M extends SendSpec<infer I extends z.ZodType>
-      ? (input: z.output<I>) => void
+      ? (input: z.output<I>, sender: Sender) => void
       : never;
 
 export type Handlers<C extends Contract> = {
