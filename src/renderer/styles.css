@@ -263,3 +263,35 @@
 [data-platform="mac"] {
   --titlebar-height: 3.25rem;
 }
+
+/* The crop in the capture panel: a light frame with corner marks, the screen around it dimmed. */
+@layer components {
+  .crop-frame {
+    pointer-events: none;
+    border: 1px solid rgb(255 255 255 / 0.9);
+    box-shadow:
+      0 0 0 1px rgb(0 0 0 / 0.35),
+      0 0 0 100vmax rgb(0 0 0 / 0.45);
+    background:
+      linear-gradient(white, white) top left / 10px 3px,
+      linear-gradient(white, white) top left / 3px 10px,
+      linear-gradient(white, white) top right / 10px 3px,
+      linear-gradient(white, white) top right / 3px 10px,
+      linear-gradient(white, white) bottom left / 10px 3px,
+      linear-gradient(white, white) bottom left / 3px 10px,
+      linear-gradient(white, white) bottom right / 10px 3px,
+      linear-gradient(white, white) bottom right / 3px 10px;
+    background-repeat: no-repeat;
+    /* Keeps the white marks visible on a white screen. */
+    filter: drop-shadow(0 0 1px rgb(0 0 0 / 0.6));
+  }
+}
+
+/* After a drag the preview settles on the new crop; during one it follows the pointer exactly. */
+@layer components {
+  .crop-settle > * {
+    transition-property: left, top, width, height;
+    transition-duration: 200ms;
+    transition-timing-function: ease-out;
+  }
+}

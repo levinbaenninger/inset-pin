@@ -3,8 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   clampPin,
   defaultCrop,
-  fitPreview,
+  fitView,
   imageToPreview,
+  moveCrop,
   normalizeGeometry,
   pinInCrop,
   pixelsPerDip,
@@ -12,6 +13,7 @@ import {
   previewToImage,
   pt,
   rect,
+  resizeCrop,
   scaleCrop,
   screenToImage,
   size,
@@ -190,25 +192,105 @@ describe(normalizeGeometry, () => {
   });
 });
 
+describe(moveCrop, () => {
+  const crop = rect<"image">(960, 600, 960, 600);
+  const pin = pt<"image">(1200, 700);
+
+  it("moves by the drag", () => {
+    expect(moveCrop(crop, pt(100, -50), pin, retina)).toStrictEqual({
+      height: 600,
+      width: 960,
+      x: 1060,
+      y: 550,
+    });
+  });
+
+  it("stops at the image edge, and at the pin first", () => {
+    expect(moveCrop(crop, pt(0, 5000), pt(1200, 1500), retina)).toMatchObject({
+      y: 1200,
+    });
+    expect(moveCrop(crop, pt(-5000, 5000), pin, retina)).toMatchObject({
+      x: 241,
+      y: 700,
+    });
+  });
+
+  it("never leaves the pin outside", () => {
+    const moved = moveCrop(crop, pt(900, 0), pin, retina);
+
+    expect(moved.x).toBe(1200);
+    expect(pin.x).toBeGreaterThanOrEqual(moved.x);
+  });
+});
+
+describe(resizeCrop, () => {
+  const crop = rect<"image">(960, 600, 960, 600);
+  const pin = pt<"image">(1200, 700);
+
+  it("moves only the dragged edges", () => {
+    expect(
+      resizeCrop(crop, "se", pt(2400, 1500), pin, retina, 2)
+    ).toStrictEqual({ height: 900, width: 1440, x: 960, y: 600 });
+    expect(resizeCrop(crop, "w", pt(100, 0), pin, retina, 2)).toStrictEqual({
+      height: 600,
+      width: 1820,
+      x: 100,
+      y: 600,
+    });
+  });
+
+  it("stops at the image", () => {
+    expect(
+      resizeCrop(crop, "nw", pt(-300, -300), pin, retina, 2)
+    ).toStrictEqual({ height: 1200, width: 1920, x: 0, y: 0 });
+  });
+
+  it("stops at the pin and at the smallest crop", () => {
+    expect(resizeCrop(crop, "w", pt(1900, 0), pin, retina, 2).x).toBe(1200);
+    expect(resizeCrop(crop, "e", pt(0, 0), pin, retina, 2)).toMatchObject({
+      width: 320,
+      x: 960,
+    });
+    expect(resizeCrop(crop, "n", pt(0, 9999), pin, retina, 2)).toMatchObject({
+      height: 500,
+      y: 700,
+    });
+  });
+});
+
 describe("preview mapping", () => {
   const crop = rect<"image">(960, 600, 960, 600);
-  const fit = fitPreview(crop, size(360, 240));
+  const box = size<"preview">(356, 220);
+  const view = fitView(crop, retina, box);
 
-  it("contain-fits the crop into the box", () => {
-    expect(fit).toStrictEqual({
-      box: { height: 225, width: 360 },
-      scale: 0.375,
+  it("centres the crop with context around it", () => {
+    expect(view.scale).toBeCloseTo((220 * 0.78) / 600);
+    expect(imageToPreview(pt(1440, 900), view)).toStrictEqual({
+      x: 178,
+      y: 110,
     });
   });
 
   it("maps preview to image and back", () => {
-    expect(previewToImage(pt(180, 112.5), crop, fit)).toStrictEqual({
-      x: 1440,
-      y: 900,
+    expect(
+      previewToImage(imageToPreview(pt(1200, 700), view), view)
+    ).toStrictEqual({ x: 1200, y: 700 });
+  });
+
+  it("keeps the view on the image near an edge", () => {
+    expect(fitView(rect(0, 0, 960, 600), retina, box).origin).toStrictEqual({
+      x: 0,
+      y: 0,
     });
-    expect(imageToPreview(pt(1200, 700), crop, fit)).toStrictEqual({
-      x: 90,
-      y: 37.5,
+  });
+
+  it("shows the whole image when the crop is the whole image", () => {
+    const whole = fitView(rect(0, 0, 2880, 1800), retina, box);
+
+    expect(whole.scale).toBeCloseTo(220 / 1800);
+    expect(imageToPreview(pt(1440, 900), whole)).toStrictEqual({
+      x: 178,
+      y: 110,
     });
   });
 });

@@ -24,13 +24,14 @@ The experiment should record these choices next to its findings, because each on
 | Choice | Value | Where |
 | --- | --- | --- |
 | Default crop around the point | 480 × 300 DIP of context | `DEFAULT_CROP_DIP` in `src/shared/geometry.ts` |
-| Smallest crop after **Tighten** | 160 × 100 DIP | `MIN_CROP_DIP` |
+| Smallest crop | 160 × 100 DIP, after **Tighten**, a pinch or dragging an edge | `MIN_CROP_DIP` |
 | **Widen context** step | Each side × √2, so one click doubles the area | `WIDEN_STEP` |
 | Panel width | 380 DIP, height from content | `POPOVER_WIDTH_DIP` |
 | Panel placement | Right of the point with a 16 DIP gap, else left, clamped to the work area | `placePopover` |
 | Pin nudge | Arrow keys move 1 DIP, Shift moves 10 DIP | `src/renderer/capture/pin-preview.tsx` |
 | Pin mark | A hollow ring with a centre dot, so the detail under it stays readable | `.pin-marker` in `src/renderer/styles.css` |
-| Pinch over the preview | A trackpad pinch (ctrl+wheel) widens or tightens by one step | `usePinch` in `src/renderer/capture/pin-preview.tsx` |
+| Pinch over the preview | A trackpad pinch (ctrl+wheel) scales the crop about the pin continuously; 120 units of wheel delta double or halve its width | `usePinch`, `PINCH_DOUBLING_DELTA` in `src/renderer/capture/pin-preview.tsx` |
+| Editing the crop | The preview shows the crop as a frame at 78 % of a fixed 356 × 220 box, with the screen around it dimmed. Dragging the frame moves it, dragging a corner or an edge crops (any shape), and a click or a drag on the pin moves the pin. The frame stops at the image edge, at the pin and at the smallest crop. The view holds still during a drag and settles on the new crop after it. | `PinPreview`, `fitView`, `moveCrop`, `resizeCrop` |
 | Reopened draft | The panel says **Unsaved draft from** with the capture time and asks to save or discard before capturing something new | `reopened` in `viewOf`, `src/main/draft.ts` |
 | Discard with text | Asks **Click again to discard**. A second click within 4 s discards, and Escape takes the question back. An empty draft discards at once. | `useArmedDiscard` in `src/renderer/capture/draft-editor.tsx` |
 | Save requires text | A thought must contain a non-blank character | `canSaveThought` in `src/shared/capture-record.ts` |
