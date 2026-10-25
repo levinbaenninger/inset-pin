@@ -62,7 +62,7 @@ const RootLayout = () => {
           )}
         >
           <TitleBarStrip />
-          <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="min-h-0 flex-1 [scrollbar-gutter:stable] overflow-y-auto">
             <Outlet />
           </div>
         </main>
