@@ -41,7 +41,8 @@ import { isMac } from "@/shared/platform";
 import { useExpiringState } from "@/shared/use-expiring-state";
 
 import { formatCaptureTime, readOnlyText, sourceText, viaText } from "./format";
-import { selectionAfterRemoval } from "./list-model";
+import { selectionAfterRemoval, visibleIds } from "./list-model";
+import { useListQuery } from "./list-query";
 import { SavedImage } from "./saved-image";
 
 const api = libraryBridge();
@@ -272,6 +273,7 @@ const SavedCaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
   const navigate = useNavigate();
   const router = useRouter();
   const captures = rootRoute.useLoaderData();
+  const { query } = useListQuery();
   const [editing, setEditing] = useState(false);
 
   const [status, setStatus] = useState<{
@@ -322,10 +324,7 @@ const SavedCaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
   );
 
   const remove = async (): Promise<void> => {
-    const next = selectionAfterRemoval(
-      captures.map((item) => item.id),
-      capture.id
-    );
+    const next = selectionAfterRemoval(visibleIds(captures, query), capture.id);
 
     const result = await api.remove(capture.id);
 
@@ -335,9 +334,18 @@ const SavedCaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
       return;
     }
 
-    await (next === null
-      ? navigate({ to: "/" })
-      : navigate({ params: { captureId: next }, to: "/captures/$captureId" }));
+    if (next !== null) {
+      await navigate({
+        params: { captureId: next },
+        to: "/captures/$captureId",
+      });
+
+      return;
+    }
+
+    // The empty pane opens the newest capture the list shows, so it must not see the deleted one.
+    await router.invalidate();
+    await navigate({ to: "/" });
   };
 
   const startEditing = (): void => {

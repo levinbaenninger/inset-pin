@@ -19,8 +19,14 @@ import {
 import { isMac } from "@/shared/platform";
 
 import { dayLabel, readOnlyText, timeOfDay } from "./format";
-import { groupByDay, matchesQuery, stepSelection } from "./list-model";
+import {
+  groupByDay,
+  matchesQuery,
+  stepSelection,
+  visibleIds,
+} from "./list-model";
 import type { CaptureGroup } from "./list-model";
+import { useListQuery } from "./list-query";
 import { SavedImage } from "./saved-image";
 
 const rootRoute = getRouteApi("__root__");
@@ -151,7 +157,7 @@ const useListKeys = (
 export const RecentList = () => {
   const captures = rootRoute.useLoaderData();
   const params = useParams({ strict: false });
-  const [query, setQuery] = useState("");
+  const { query, setQuery } = useListQuery();
   const [today, setToday] = useState(() => new Date());
 
   // Coming back to the window after midnight moves "Today" and "Yesterday" along.
@@ -177,11 +183,7 @@ export const RecentList = () => {
 
   const groups = useMemo(() => groupByDay(visible, today), [today, visible]);
 
-  const ids = useMemo(
-    () =>
-      groups.flatMap((group) => group.captures.map((capture) => capture.id)),
-    [groups]
-  );
+  const ids = useMemo(() => visibleIds(captures, query), [captures, query]);
 
   const focusSearch = useCallback((): void => {
     searchRef.current?.focus();
