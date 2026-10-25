@@ -55,7 +55,7 @@ const RootLayout = () => {
       </aside>
       <main
         className={cn(
-          "min-h-0 flex-col md:flex",
+          "min-h-0 min-w-0 flex-col md:flex",
           showingCapture ? "flex" : "hidden"
         )}
       >
