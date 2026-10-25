@@ -330,10 +330,25 @@ export const RecentList = () => {
 
   const ids = useMemo(() => visibleIds(captures, query), [captures, query]);
 
+  const showSearch = useCallback(async (): Promise<void> => {
+    const field = searchRef.current;
+
+    if (field === null) {
+      return;
+    }
+
+    // In one pane a capture hides the list, so the search goes back to it first.
+    if (field.offsetParent === null) {
+      await navigate({ to: "/" });
+    }
+
+    field.focus();
+    field.select();
+  }, [navigate]);
+
   const focusSearch = useCallback((): void => {
-    searchRef.current?.focus();
-    searchRef.current?.select();
-  }, []);
+    void showSearch();
+  }, [showSearch]);
 
   useListKeys(ids, selected, focusSearch);
 
