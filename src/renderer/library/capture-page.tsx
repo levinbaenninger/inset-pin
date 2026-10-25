@@ -351,7 +351,7 @@ const SavedCaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
         {editing ? (
           <ThoughtEditor capture={capture} onDone={finishEdit} />
         ) : (
-          <p className="max-w-prose text-lg leading-relaxed whitespace-pre-wrap">
+          <p className="max-w-prose text-lg leading-relaxed wrap-break-word whitespace-pre-wrap">
             {capture.thought}
           </p>
         )}
