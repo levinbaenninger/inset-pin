@@ -211,39 +211,131 @@ export const pinInCrop = (
   crop: Rect<"image">
 ): Point<"crop"> => pt(pin.x - crop.x, pin.y - crop.y);
 
-export interface PreviewFit {
-  readonly scale: number;
-  readonly box: Size<"preview">;
-}
-
-export const fitPreview = (
-  crop: Size<"image">,
-  maxBox: Size<"preview">
-): PreviewFit => {
-  const scale = Math.min(
-    maxBox.width / crop.width,
-    maxBox.height / crop.height
+/** Moves the crop over the image; it stays inside the image and around the pin. */
+export const moveCrop = (
+  crop: Rect<"image">,
+  delta: Point<"image">,
+  pin: Point<"image">,
+  image: Size<"image">
+): Rect<"image"> =>
+  containPin(
+    shiftInside(
+      rect(
+        Math.round(crop.x + delta.x),
+        Math.round(crop.y + delta.y),
+        crop.width,
+        crop.height
+      ),
+      image
+    ),
+    pin
   );
 
-  return { box: size(crop.width * scale, crop.height * scale), scale };
+/** A corner or an edge of the crop, by compass direction. */
+export type CropHandle = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
+
+/**
+ * Moves the handle's edges to the point. An edge stops at the image, at the
+ * pin and at the smallest crop, so the crop keeps the pin and its minimum size.
+ */
+export const resizeCrop = (
+  crop: Rect<"image">,
+  handle: CropHandle,
+  point: Point<"image">,
+  pin: Point<"image">,
+  image: Size<"image">,
+  ppd: number
+): Rect<"image"> => {
+  const min = minCropSize(image, ppd);
+  let left = crop.x;
+  let top = crop.y;
+  let right = crop.x + crop.width;
+  let bottom = crop.y + crop.height;
+
+  if (handle.includes("w")) {
+    left = clamp(Math.round(point.x), 0, Math.min(pin.x, right - min.width));
+  }
+
+  if (handle.includes("e")) {
+    right = clamp(
+      Math.round(point.x),
+      Math.max(pin.x + 1, left + min.width),
+      image.width
+    );
+  }
+
+  if (handle.includes("n")) {
+    top = clamp(Math.round(point.y), 0, Math.min(pin.y, bottom - min.height));
+  }
+
+  if (handle.includes("s")) {
+    bottom = clamp(
+      Math.round(point.y),
+      Math.max(pin.y + 1, top + min.height),
+      image.height
+    );
+  }
+
+  return rect(left, top, right - left, bottom - top);
+};
+
+/** How much of the preview the crop fills, so the context around it shows and its edges can be dragged outwards. */
+export const CROP_FILL = 0.78;
+
+/** What the preview shows: preview = (image − origin) × scale. */
+export interface PreviewView {
+  readonly origin: Point<"image">;
+  readonly scale: number;
+}
+
+const viewOrigin = (center: number, span: number, total: number): number =>
+  span >= total
+    ? (total - span) / 2
+    : clamp(center - span / 2, 0, total - span);
+
+/**
+ * Centres the crop in the box at CROP_FILL of its size, never showing more
+ * than the image needs; near an edge the view stays on the image.
+ */
+export const fitView = (
+  crop: Rect<"image">,
+  image: Size<"image">,
+  box: Size<"preview">
+): PreviewView => {
+  const scale = Math.max(
+    Math.min(
+      (box.width * CROP_FILL) / crop.width,
+      (box.height * CROP_FILL) / crop.height
+    ),
+    Math.min(box.width / image.width, box.height / image.height)
+  );
+
+  return {
+    origin: pt(
+      viewOrigin(crop.x + crop.width / 2, box.width / scale, image.width),
+      viewOrigin(crop.y + crop.height / 2, box.height / scale, image.height)
+    ),
+    scale,
+  };
 };
 
 export const previewToImage = (
   point: Point<"preview">,
-  crop: Rect<"image">,
-  fit: PreviewFit
+  view: PreviewView
 ): Point<"image"> =>
   pt(
-    Math.floor(crop.x + point.x / fit.scale),
-    Math.floor(crop.y + point.y / fit.scale)
+    Math.floor(view.origin.x + point.x / view.scale),
+    Math.floor(view.origin.y + point.y / view.scale)
   );
 
 export const imageToPreview = (
   point: Point<"image">,
-  crop: Rect<"image">,
-  fit: PreviewFit
+  view: PreviewView
 ): Point<"preview"> =>
-  pt((point.x - crop.x) * fit.scale, (point.y - crop.y) * fit.scale);
+  pt(
+    (point.x - view.origin.x) * view.scale,
+    (point.y - view.origin.y) * view.scale
+  );
 
 const horizontalPlacement = (
   anchorX: number,
