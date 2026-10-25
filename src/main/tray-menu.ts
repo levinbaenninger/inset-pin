@@ -1,3 +1,4 @@
+import type { CaptureId } from "@shared/capture-record";
 import { shortcutLabel } from "@shared/shortcut";
 
 import type { TrayState } from "./draft";
@@ -6,7 +7,19 @@ export type TrayAction =
   | "showDraft"
   | "captureAfterDelay"
   | "openLibrary"
+  | "openSettings"
   | "quit";
+
+export interface RecentCapture {
+  readonly id: CaptureId;
+  readonly title: string;
+}
+
+/** How many captures the menus list by name. */
+export const RECENT_IN_MENU = 5;
+
+/** Menu items stay one short line. */
+const TITLE_MAX = 40;
 
 export type TrayItem =
   | { readonly kind: "separator" }
@@ -15,6 +28,12 @@ export type TrayItem =
       readonly label: string;
       readonly enabled: boolean;
       readonly action: TrayAction | null;
+    }
+  /** Opens the library on this capture. */
+  | {
+      readonly kind: "capture";
+      readonly label: string;
+      readonly id: CaptureId;
     };
 
 export interface TrayModel {
@@ -22,6 +41,8 @@ export interface TrayModel {
   readonly shortcutRegistered: boolean;
   readonly countdownPending: boolean;
   readonly isMac: boolean;
+  /** Newest first; only the first RECENT_IN_MENU are listed. */
+  readonly recent: readonly RecentCapture[];
 }
 
 const SEPARATOR: TrayItem = { kind: "separator" };
@@ -62,21 +83,45 @@ const captureLabel = (model: TrayModel): string => {
     : "New capture: save or discard the draft first";
 };
 
+const shortTitle = (title: string): string =>
+  title.length > TITLE_MAX
+    ? `${title.slice(0, TITLE_MAX - 1).trimEnd()}…`
+    : title;
+
+const recentItems = (recent: readonly RecentCapture[]): readonly TrayItem[] =>
+  recent.slice(0, RECENT_IN_MENU).map((capture) => ({
+    id: capture.id,
+    kind: "capture",
+    label: shortTitle(capture.title),
+  }));
+
+const captureItem = (model: TrayModel): TrayItem => ({
+  action: "captureAfterDelay",
+  enabled: model.draft === "none" && !model.countdownPending,
+  kind: "item",
+  label: captureLabel(model),
+});
+
+/** The Dock icon's menu on macOS, which adds its own window and Quit items below. */
+export const dockMenu = (model: TrayModel): readonly TrayItem[] => {
+  const recent = recentItems(model.recent);
+
+  return [
+    ...draftItems(model.draft),
+    captureItem(model),
+    ...(recent.length > 0 ? [SEPARATOR, ...recent] : []),
+  ];
+};
+
 export const trayTooltip = (model: Pick<TrayModel, "isMac">): string =>
   `Inset Context Pin: point at a detail and press ${shortcutLabel(model.isMac)}`;
 
 export const trayMenu = (model: TrayModel): readonly TrayItem[] => {
   const shortcut = shortcutLabel(model.isMac);
-  const canCapture = model.draft === "none" && !model.countdownPending;
 
   return [
     ...draftItems(model.draft),
-    {
-      action: "captureAfterDelay",
-      enabled: canCapture,
-      kind: "item",
-      label: captureLabel(model),
-    },
+    captureItem(model),
     {
       action: null,
       enabled: false,
@@ -86,6 +131,7 @@ export const trayMenu = (model: TrayModel): readonly TrayItem[] => {
         : `${shortcut} is in use by another app`,
     },
     SEPARATOR,
+    ...recentItems(model.recent),
     {
       action: "openLibrary",
       enabled: true,
@@ -93,6 +139,12 @@ export const trayMenu = (model: TrayModel): readonly TrayItem[] => {
       label: "Recent captures…",
     },
     SEPARATOR,
+    {
+      action: "openSettings",
+      enabled: true,
+      kind: "item",
+      label: "Settings…",
+    },
     {
       action: "quit",
       enabled: true,

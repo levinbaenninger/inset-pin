@@ -48,18 +48,20 @@ const RootLayout = () => {
   return (
     <ListQueryProvider>
       <CaptureCommandsProvider>
-        <div className="bg-background text-foreground grid h-svh grid-cols-1 md:grid-cols-[minmax(17rem,22rem)_1fr]">
+        {/* On macOS the list shows the window's translucent material, like a sidebar. */}
+        <div className="bg-background text-foreground grid h-svh grid-cols-1 in-data-[platform=mac]:bg-transparent md:grid-cols-[minmax(17rem,22rem)_1fr]">
           <aside
             className={cn(
               "min-h-0 md:flex md:border-r",
               showingCapture ? "hidden" : "flex"
             )}
+            data-material=""
           >
             <RecentList />
           </aside>
           <main
             className={cn(
-              "min-h-0 min-w-0 flex-col md:flex",
+              "bg-background min-h-0 min-w-0 flex-col md:flex",
               showingCapture ? "flex" : "hidden"
             )}
           >

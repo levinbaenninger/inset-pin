@@ -1,17 +1,25 @@
+import { CaptureIdSchema } from "@shared/capture-record";
 import { describe, expect, it } from "vitest";
 
-import { trayMenu, trayTooltip } from "./tray-menu";
+import { dockMenu, trayMenu, trayTooltip } from "./tray-menu";
 import type { TrayModel } from "./tray-menu";
 
-const labels = (model: TrayModel): string[] =>
-  trayMenu(model).map((item) =>
-    item.kind === "separator" ? "---" : item.label
-  );
+const labels = (model: TrayModel, menu = trayMenu): string[] =>
+  menu(model).map((item) => (item.kind === "separator" ? "---" : item.label));
+
+const ID = "3f1c2b9e-4a7d-4e21-9b0c-5d8e6f7a1b2c";
+
+const recent = (count: number): TrayModel["recent"] =>
+  Array.from({ length: count }, (_, index) => ({
+    id: CaptureIdSchema.parse(ID.replace(/.$/u, String(index))),
+    title: `Thought ${index}`,
+  }));
 
 const base: TrayModel = {
   countdownPending: false,
   draft: "none",
   isMac: true,
+  recent: [],
   shortcutRegistered: true,
 };
 
@@ -23,8 +31,32 @@ describe(trayMenu, () => {
       "---",
       "Recent captures…",
       "---",
+      "Settings…",
       "Quit Inset Context Pin",
     ]);
+  });
+
+  it("lists the five newest captures by name, shortened to one line", () => {
+    const model = {
+      ...base,
+      recent: [
+        {
+          id: CaptureIdSchema.parse(ID),
+          title: "A thought that runs on far longer than a menu item should",
+        },
+        ...recent(6),
+      ],
+    };
+
+    expect(labels(model).slice(3, 9)).toStrictEqual([
+      "A thought that runs on far longer than…",
+      "Thought 0",
+      "Thought 1",
+      "Thought 2",
+      "Thought 3",
+      "Recent captures…",
+    ]);
+    expect(trayMenu(model)[3]).toMatchObject({ id: ID, kind: "capture" });
   });
 
   it("explains a shortcut conflict with the Windows label", () => {
@@ -56,6 +88,18 @@ describe(trayMenu, () => {
       kind: "item",
       label: "Capturing in 3 seconds…",
     });
+  });
+});
+
+describe(dockMenu, () => {
+  it("offers the delayed capture and the recent captures", () => {
+    expect(labels({ ...base, recent: recent(2) }, dockMenu)).toStrictEqual([
+      "New capture in 3 seconds",
+      "---",
+      "Thought 0",
+      "Thought 1",
+    ]);
+    expect(labels(base, dockMenu)).toStrictEqual(["New capture in 3 seconds"]);
   });
 });
 

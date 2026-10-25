@@ -1,10 +1,19 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 
-import { CaptureIdSchema } from "@shared/capture-record";
+import { CaptureIdSchema, deriveTitle } from "@shared/capture-record";
 import type { PointVia } from "@shared/capture-record";
-import { captureContract } from "@shared/contracts";
-import { CAPTURE_ACCELERATOR, shortcutLabel } from "@shared/shortcut";
+import {
+  captureContract,
+  pinContract,
+  settingsContract,
+} from "@shared/contracts";
+import type { IconPlace, SettingsView } from "@shared/settings";
+import {
+  CAPTURE_ACCELERATOR,
+  shortcutLabel,
+  TRAY_CAPTURE_DELAY_MS,
+} from "@shared/shortcut";
 import {
   app,
   dialog,
@@ -16,15 +25,25 @@ import {
   shell,
 } from "electron";
 
+import { appMenuTemplate, HELP_URL } from "./app-menu";
+import type { AppMenuActions, AppMenuState } from "./app-menu";
 import { captureDisplay, sampleAnchor } from "./capture";
+import { createCaptureExport } from "./capture-export";
 import { createDraftController } from "./draft";
 import { e2eLog } from "./e2e-log";
 import { serveContract } from "./ipc-kit";
+import { toDetail } from "./library-view";
 import { createLibraryWindow } from "./library-window";
+import { createPinWindows } from "./pin-windows";
 import { handleInsetProtocol, registerInsetScheme } from "./protocol";
+import { nodeSettingsFs, openSettingsStore } from "./settings-store";
+import { createSettingsWindow } from "./settings-window";
 import { failNextWrite, nodeStoreFs, openCaptureStore } from "./store";
 import { createCaptureSurface } from "./surface";
-import { createTray } from "./tray";
+import { createTray, toMenuItem } from "./tray";
+import type { MenuRunner, TrayIcon } from "./tray";
+import { dockMenu, trayMenu } from "./tray-menu";
+import type { TrayAction, TrayModel } from "./tray-menu";
 import {
   appOrigin,
   pageUrl,
@@ -91,27 +110,14 @@ const trayIconPath = (): string => {
   );
 };
 
+const ignore = (): void => undefined;
+
 const start = async (): Promise<void> => {
   await app.whenReady();
-
-  if (isMac) {
-    app.dock?.hide();
-  }
-
-  // macOS routes Cmd+C/V/X/Z/A and Cmd+W through the application menu; Windows needs none.
-  Menu.setApplicationMenu(
-    isMac
-      ? Menu.buildFromTemplate([
-          { role: "appMenu" },
-          { role: "fileMenu" },
-          { role: "editMenu" },
-          { role: "windowMenu" },
-        ])
-      : null
-  );
   secureSession();
 
-  const capturesDir = path.join(app.getPath("userData"), "captures");
+  const dataDir = app.getPath("userData");
+  const capturesDir = path.join(dataDir, "captures");
 
   const store = await explainFailure(
     openCaptureStore(capturesDir, {
@@ -124,24 +130,52 @@ const start = async (): Promise<void> => {
       `${PRODUCT_NAME} can't open its captures folder:\n${capturesDir}\n\n${cause}\n\nCheck that you can read and write this folder, then open ${PRODUCT_NAME} again.`
   );
 
+  const settings = await openSettingsStore(dataDir, nodeSettingsFs);
+  const exporter = createCaptureExport(store);
+
   let shortcutRegistered = false;
+  let countdown: NodeJS.Timeout | null = null;
+  let tray: TrayIcon | null = null;
+
+  // Set once every window exists; until then there is no menu to rebuild.
+  const menus = { refresh: ignore };
+
+  const pins = createPinWindows({
+    preload: preloadPath("pin"),
+    store,
+    url: pageUrl("pin"),
+  });
 
   const library = createLibraryWindow({
+    exporter,
     onClosed: () => {
       e2eLog("libraryClosed");
+      menus.refresh();
     },
     onOpened: () => {
       e2eLog("libraryOpened");
+      menus.refresh();
     },
     onRejected: logRejected,
+    pinToScreen: pins.open,
     preload: preloadPath("library"),
-    shortcutRegistered: () => shortcutRegistered,
+    status: () => ({
+      iconIn: settings.current().iconIn,
+      shortcutRegistered,
+    }),
     store,
     url: pageUrl("library"),
   });
 
+  const settingsWindow = createSettingsWindow({
+    preload: preloadPath("settings"),
+    url: pageUrl("settings"),
+  });
+
   const surface = createCaptureSurface({
-    otherWindowVisible: library.isVisible,
+    // The panel never activates the app, so the app in front keeps the keyboard without app.hide().
+    otherWindowVisible: () =>
+      library.isVisible() || settingsWindow.isVisible() || pins.anyVisible(),
     preload: preloadPath("capture"),
     url: pageUrl("capture"),
   });
@@ -163,6 +197,14 @@ const start = async (): Promise<void> => {
       const result = await store.publish(record, png);
 
       e2eLog(result.ok ? "saved" : "saveFailed", { draftId: record.id });
+
+      if (result.ok && settings.current().copyAfterSave) {
+        const copied = await exporter.copyBoth(record.id);
+
+        if (!copied.ok) {
+          showNotification(`Saved, but not copied. ${copied.message}`);
+        }
+      }
 
       return result;
     },
@@ -228,22 +270,43 @@ const start = async (): Promise<void> => {
     }
   );
 
-  draft.subscribe(() => {
-    captureServer.emit("view", draft.view());
-  });
-  surface.onDismissRequest(() => {
-    draft.dismiss();
-  });
-  surface.onShown((bounds) => {
-    e2eLog("panelShown", { bounds, draftId: currentDraftId() });
-  });
-  surface.onHidden(() => {
-    e2eLog("panelHidden");
-  });
-  await explainFailure(
-    surface.load(),
-    (cause) =>
-      `The capture panel failed to load.\n\n${cause}\n\nOpen ${PRODUCT_NAME} again. If this keeps happening, reinstall it.`
+  const pinServer = serveContract(
+    pinContract,
+    {
+      close: (_input, sender) => {
+        const id = pins.captureOf(sender.id);
+
+        if (id !== null) {
+          pins.close(id);
+        }
+      },
+      copyImage: async (_input, sender) => {
+        const id = pins.captureOf(sender.id);
+
+        return id === null
+          ? { message: "This pin has no capture.", ok: false }
+          : await exporter.copyImage(id);
+      },
+      get: (_input, sender) => {
+        const id = pins.captureOf(sender.id);
+        const entry = id === null ? undefined : store.get(id);
+
+        return entry === undefined ? null : toDetail(entry);
+      },
+      openInLibrary: (_input, sender) => {
+        const id = pins.captureOf(sender.id);
+
+        if (id !== null) {
+          library.open(id);
+        }
+      },
+    },
+    {
+      appOrigin: appOrigin(),
+      ipc: ipcMain,
+      onRejected: logRejected,
+      target: pins.webContents,
+    }
   );
 
   const pointNow = (via: PointVia): void => {
@@ -255,27 +318,205 @@ const start = async (): Promise<void> => {
     });
   };
 
+  // From a menu: the delay lets the user move the pointer back over their work.
+  const captureAfterDelay = (): void => {
+    if (countdown !== null || draft.tray() !== "none") {
+      return;
+    }
+
+    countdown = setTimeout(() => {
+      countdown = null;
+      menus.refresh();
+      pointNow("trayDelayed");
+    }, TRAY_CAPTURE_DELAY_MS);
+    menus.refresh();
+  };
+
+  const menuModel = (): TrayModel => ({
+    countdownPending: countdown !== null,
+    draft: draft.tray(),
+    isMac,
+    recent: store
+      .list()
+      .flatMap((entry) =>
+        entry.kind === "ok"
+          ? [{ id: entry.record.id, title: deriveTitle(entry.record.thought) }]
+          : []
+      ),
+    shortcutRegistered,
+  });
+
+  const run = (action: TrayAction): void => {
+    if (action === "showDraft") {
+      draft.invoke({ kind: "reopen" });
+    } else if (action === "openLibrary") {
+      library.open();
+    } else if (action === "openSettings") {
+      settingsWindow.open();
+    } else if (action === "quit") {
+      app.quit();
+    } else {
+      captureAfterDelay();
+    }
+  };
+
+  const runner: MenuRunner = {
+    openCapture: (id) => {
+      library.open(id);
+    },
+    run,
+  };
+
+  const menuActions: AppMenuActions = {
+    captureAfterDelay,
+    libraryCommand: library.command,
+    openHelp: () => {
+      void shell.openExternal(HELP_URL);
+    },
+    openLibrary: () => {
+      library.open();
+    },
+    openSettings: settingsWindow.open,
+    setFloatOnTop: (on) => {
+      library.setFloating(on);
+      menus.refresh();
+    },
+  };
+
+  // The draft reports every keystroke; menus are rebuilt only when what they show changes.
+  let shownMenus = "";
+
+  menus.refresh = () => {
+    const model = menuModel();
+
+    const appState: AppMenuState = {
+      canCapture: model.draft === "none" && !model.countdownPending,
+      floatOnTop: library.isFloating(),
+      libraryOpen: library.isOpen(),
+    };
+
+    const key = JSON.stringify([model, appState, tray !== null]);
+
+    if (key === shownMenus) {
+      return;
+    }
+
+    shownMenus = key;
+    tray?.refresh();
+
+    if (isMac) {
+      app.dock?.setMenu(
+        Menu.buildFromTemplate(
+          dockMenu(model).map((item) => toMenuItem(item, runner))
+        )
+      );
+      Menu.setApplicationMenu(
+        Menu.buildFromTemplate(appMenuTemplate(appState, menuActions))
+      );
+    }
+  };
+
+  /** macOS: the Dock, the menu bar or both. Elsewhere the notification-area icon is the only one. */
+  const placeIcon = (place: IconPlace): void => {
+    const wantsTray = !isMac || place !== "dock";
+
+    if (wantsTray && tray === null) {
+      tray = createTray({
+        iconPath: trayIconPath,
+        items: () => trayMenu(menuModel()),
+        runner,
+      });
+    } else if (!wantsTray && tray !== null) {
+      tray.destroy();
+      tray = null;
+    }
+
+    if (isMac) {
+      app.setActivationPolicy(place === "menuBar" ? "accessory" : "regular");
+    }
+
+    shownMenus = "";
+    menus.refresh();
+  };
+
+  const settingsView = (): SettingsView => ({
+    openAtLogin: app.getLoginItemSettings().openAtLogin,
+    settings: settings.current(),
+    version: app.getVersion(),
+  });
+
+  const settingsServer = serveContract(
+    settingsContract,
+    {
+      fitHeight: settingsWindow.fitHeight,
+      getView: settingsView,
+      setOpenAtLogin: (on) => {
+        app.setLoginItemSettings({ openAtLogin: on });
+        settingsServer.emit("view", settingsView());
+      },
+      update: (change) => {
+        const before = settings.current().iconIn;
+
+        const apply = async (): Promise<void> => {
+          try {
+            await settings.update(change);
+          } catch (error) {
+            console.warn(`Settings not saved: ${errorMessage(error)}`);
+          }
+
+          if (settings.current().iconIn !== before) {
+            placeIcon(settings.current().iconIn);
+            // Turning into an accessory can send the app's windows away.
+            settingsWindow.open();
+          }
+
+          settingsServer.emit("view", settingsView());
+        };
+
+        void apply();
+      },
+    },
+    {
+      appOrigin: appOrigin(),
+      ipc: ipcMain,
+      onRejected: logRejected,
+      target: () => settingsWindow.webContents,
+    }
+  );
+
+  draft.subscribe(() => {
+    captureServer.emit("view", draft.view());
+    menus.refresh();
+  });
+  store.subscribe(() => {
+    pinServer.emit("changed", null);
+    menus.refresh();
+  });
+  surface.onDismissRequest(() => {
+    draft.dismiss();
+  });
+  surface.onShown((bounds) => {
+    e2eLog("panelShown", { bounds, draftId: currentDraftId() });
+  });
+  surface.onHidden(() => {
+    e2eLog("panelHidden");
+  });
+  await explainFailure(
+    Promise.all([surface.load(), settingsWindow.load()]),
+    (cause) =>
+      `${PRODUCT_NAME} failed to load its windows.\n\n${cause}\n\nOpen ${PRODUCT_NAME} again. If this keeps happening, reinstall it.`
+  );
+
   shortcutRegistered =
     globalShortcut.register(CAPTURE_ACCELERATOR, () => {
       pointNow("shortcut");
     }) && globalShortcut.isRegistered(CAPTURE_ACCELERATOR);
 
-  createTray({
-    captureNow: () => {
-      pointNow("trayDelayed");
-    },
-    draftState: draft.tray,
-    iconPath: trayIconPath,
-    openLibrary: library.open,
-    quit: () => {
-      app.quit();
-    },
-    shortcutRegistered,
-    showDraft: () => {
-      draft.invoke({ kind: "reopen" });
-    },
-    subscribe: draft.subscribe,
-  });
+  if (!isMac) {
+    Menu.setApplicationMenu(null);
+  }
+
+  placeIcon(settings.current().iconIn);
 
   if (!shortcutRegistered) {
     showNotification(
@@ -283,7 +524,10 @@ const start = async (): Promise<void> => {
     );
   }
 
-  // Opening the app again while it runs would otherwise look like nothing happened.
+  // A click on the Dock icon, or opening the app again while it runs, shows the library.
+  app.on("activate", () => {
+    library.open();
+  });
   app.on("second-instance", () => {
     library.open();
   });
@@ -292,6 +536,7 @@ const start = async (): Promise<void> => {
       event.preventDefault();
     } else {
       surface.allowClose();
+      settingsWindow.allowClose();
     }
   });
   app.on("will-quit", () => {

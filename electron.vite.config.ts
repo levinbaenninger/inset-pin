@@ -22,6 +22,8 @@ export default defineConfig({
         input: {
           capture: path.resolve(preload, "capture.ts"),
           library: path.resolve(preload, "library.ts"),
+          pin: path.resolve(preload, "pin.ts"),
+          settings: path.resolve(preload, "settings.ts"),
         },
         output: { format: "cjs", entryFileNames: "[name].cjs" },
       },
@@ -35,6 +37,8 @@ export default defineConfig({
         input: {
           capture: path.resolve(renderer, "capture.html"),
           library: path.resolve(renderer, "library.html"),
+          pin: path.resolve(renderer, "pin.html"),
+          settings: path.resolve(renderer, "settings.html"),
         },
       },
     },

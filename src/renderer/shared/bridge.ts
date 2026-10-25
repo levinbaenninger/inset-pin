@@ -1,4 +1,9 @@
-import type { CaptureContract, LibraryContract } from "@shared/contracts";
+import type {
+  CaptureContract,
+  LibraryContract,
+  PinContract,
+  SettingsContract,
+} from "@shared/contracts";
 import type { Client } from "@shared/ipc";
 
 declare global {
@@ -6,6 +11,8 @@ declare global {
   interface Window {
     readonly insetCapture?: Client<CaptureContract>;
     readonly insetLibrary?: Client<LibraryContract>;
+    readonly insetPin?: Client<PinContract>;
+    readonly insetSettings?: Client<SettingsContract>;
   }
 }
 
@@ -27,6 +34,28 @@ export const libraryBridge = (): Client<LibraryContract> => {
   if (api === undefined) {
     throw new Error(
       "The library bridge is only available in the library window."
+    );
+  }
+
+  return api;
+};
+
+export const pinBridge = (): Client<PinContract> => {
+  const api = window.insetPin;
+
+  if (api === undefined) {
+    throw new Error("The pin bridge is only available in a pinned capture.");
+  }
+
+  return api;
+};
+
+export const settingsBridge = (): Client<SettingsContract> => {
+  const api = window.insetSettings;
+
+  if (api === undefined) {
+    throw new Error(
+      "The settings bridge is only available in the settings window."
     );
   }
 
