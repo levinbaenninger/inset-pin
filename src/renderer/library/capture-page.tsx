@@ -334,8 +334,10 @@ const SavedCaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
       return;
     }
 
+    // The delete was confirmed, so an unsaved edit of the deleted thought must not hold the navigation.
     if (next !== null) {
       await navigate({
+        ignoreBlocker: true,
         params: { captureId: next },
         to: "/captures/$captureId",
       });
@@ -345,7 +347,7 @@ const SavedCaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
 
     // The empty pane opens the newest capture the list shows, so it must not see the deleted one.
     await router.invalidate();
-    await navigate({ to: "/" });
+    await navigate({ ignoreBlocker: true, to: "/" });
   };
 
   const startEditing = (): void => {
