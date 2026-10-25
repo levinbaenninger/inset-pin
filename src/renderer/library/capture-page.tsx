@@ -141,7 +141,34 @@ const ThoughtEditor = ({ capture, onDone }: ThoughtEditorProps) => {
     void save();
   }, [save]);
 
-  useLocalKeys({ onEscape: cancel, onSave: saveNow });
+  // Asked when another capture was chosen: saving goes on to it, like Save and quit in the panel.
+  const saveAndLeave = useCallback(async (): Promise<void> => {
+    if (!savable) {
+      return;
+    }
+
+    setSaving(true);
+    const result = await updateThought(capture.id, thought);
+
+    if (result.ok) {
+      leaving.proceed?.();
+
+      return;
+    }
+
+    leaving.reset?.();
+    await onDone(result);
+    setSaving(false);
+  }, [capture.id, leaving, onDone, savable, thought]);
+
+  const saveAndLeaveNow = useCallback((): void => {
+    void saveAndLeave();
+  }, [saveAndLeave]);
+
+  useLocalKeys({
+    onEscape: cancel,
+    onSave: leaving.status === "blocked" ? saveAndLeaveNow : saveNow,
+  });
 
   return (
     <>
@@ -155,9 +182,9 @@ const ThoughtEditor = ({ capture, onDone }: ThoughtEditorProps) => {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Leave without saving?</AlertDialogTitle>
+            <AlertDialogTitle>Save your change?</AlertDialogTitle>
             <AlertDialogDescription>
-              Your change to this thought is not saved yet.
+              You chose another capture before saving this thought.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -174,8 +201,13 @@ const ThoughtEditor = ({ capture, onDone }: ThoughtEditorProps) => {
               }}
               variant="destructive"
             >
-              Leave without saving
+              Discard
             </AlertDialogAction>
+            <Button disabled={!savable} onClick={saveAndLeaveNow}>
+              {saving ? <Spinner data-icon="inline-start" /> : null}
+              Save
+              <Kbd>{saveShortcutLabel(isMac)}</Kbd>
+            </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
