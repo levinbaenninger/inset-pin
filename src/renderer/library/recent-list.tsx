@@ -1,6 +1,10 @@
 import {
   Alert02Icon,
   Cancel01Icon,
+  Copy01Icon,
+  Delete02Icon,
+  Image01Icon,
+  PencilEdit02Icon,
   Search01Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -12,9 +16,18 @@ import {
   Link,
   useNavigate,
   useParams,
+  useRouter,
 } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   InputGroup,
   InputGroupAddon,
@@ -23,6 +36,9 @@ import {
 } from "@/components/ui/input-group";
 import { isMac } from "@/shared/platform";
 
+import { useCaptureCommands } from "./capture-commands";
+import type { CaptureCommands } from "./capture-commands";
+import { captureKeyLabels } from "./capture-keys";
 import { dayLabel, readOnlyText, timeOfDay } from "./format";
 import {
   groupByDay,
@@ -39,10 +55,32 @@ const rootRoute = getRouteApi("__root__");
 const ROW =
   "flex gap-3 rounded-lg px-2 py-2 outline-none hover:bg-muted/60 focus-visible:ring-3 focus-visible:ring-ring/50 aria-[current=page]:bg-muted";
 
-const CaptureRow = ({ capture }: { readonly capture: CaptureSummary }) => (
+/** Where a right-click opened the menu, and on which capture. */
+interface RowMenuAt {
+  readonly id: CaptureId;
+  readonly x: number;
+  readonly y: number;
+}
+
+type OpenRowMenu = (at: RowMenuAt) => void;
+
+const CaptureRow = ({
+  capture,
+  onMenu,
+}: {
+  readonly capture: CaptureSummary;
+  readonly onMenu: OpenRowMenu;
+}) => (
   <Link
     className={ROW}
     data-capture-id={capture.id}
+    onContextMenu={(event) => {
+      // A read-only entry has nothing to copy, edit or delete.
+      if (capture.kind === "ok") {
+        event.preventDefault();
+        onMenu({ id: capture.id, x: event.clientX, y: event.clientY });
+      }
+    }}
     params={{ captureId: capture.id }}
     to="/captures/$captureId"
   >
@@ -80,7 +118,13 @@ const CaptureRow = ({ capture }: { readonly capture: CaptureSummary }) => (
 const groupLabel = (group: CaptureGroup): string =>
   group.kind === "readOnly" ? "Read-only" : dayLabel(group.day, group.relative);
 
-const Groups = ({ groups }: { readonly groups: readonly CaptureGroup[] }) => (
+const Groups = ({
+  groups,
+  onMenu,
+}: {
+  readonly groups: readonly CaptureGroup[];
+  readonly onMenu: OpenRowMenu;
+}) => (
   <div className="flex flex-col gap-4">
     {groups.map((group) => (
       <section
@@ -92,12 +136,89 @@ const Groups = ({ groups }: { readonly groups: readonly CaptureGroup[] }) => (
           {groupLabel(group)}
         </h2>
         {group.captures.map((capture) => (
-          <CaptureRow capture={capture} key={capture.id} />
+          <CaptureRow capture={capture} key={capture.id} onMenu={onMenu} />
         ))}
       </section>
     ))}
   </div>
 );
+
+/**
+ * A right-click selects the capture, like Finder, and its menu acts on the
+ * capture shown beside the list. Not modal, so the delete question it opens
+ * never leaves the page unclickable.
+ */
+const RowMenu = ({
+  menu,
+  onClose,
+}: {
+  readonly menu: RowMenuAt | null;
+  readonly onClose: () => void;
+}) => {
+  const commands = useCaptureCommands();
+  const keys = captureKeyLabels(isMac);
+
+  const run = (pick: (shown: CaptureCommands) => () => void) => () => {
+    const shown = commands.current;
+
+    if (menu !== null && shown?.id === menu.id) {
+      pick(shown)();
+    }
+  };
+
+  return (
+    <DropdownMenu
+      modal={false}
+      onOpenChange={(open) => {
+        if (!open) {
+          onClose();
+        }
+      }}
+      open={menu !== null}
+    >
+      <DropdownMenuTrigger asChild>
+        <span
+          aria-hidden="true"
+          className="pointer-events-none fixed top-(--y) left-(--x) size-0"
+          style={{ "--x": `${menu?.x ?? 0}px`, "--y": `${menu?.y ?? 0}px` }}
+        />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="start"
+        // Focus stays where the command put it, such as in the thought editor.
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+        }}
+        sideOffset={2}
+      >
+        <DropdownMenuItem onSelect={run((shown) => shown.copyNote)}>
+          <HugeiconsIcon icon={Copy01Icon} />
+          Copy note
+          <DropdownMenuShortcut>{keys.copyNote}</DropdownMenuShortcut>
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={run((shown) => shown.copyImage)}>
+          <HugeiconsIcon icon={Image01Icon} />
+          Copy image
+          <DropdownMenuShortcut>{keys.copyImage}</DropdownMenuShortcut>
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={run((shown) => shown.edit)}>
+          <HugeiconsIcon icon={PencilEdit02Icon} />
+          Edit thought
+          <DropdownMenuShortcut>{keys.edit}</DropdownMenuShortcut>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          onSelect={run((shown) => shown.askDelete)}
+          variant="destructive"
+        >
+          <HugeiconsIcon icon={Delete02Icon} />
+          Delete
+          <DropdownMenuShortcut>{keys.delete}</DropdownMenuShortcut>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+};
 
 const ARROW_OFFSETS = new Map<string, 1 | -1>([
   ["ArrowDown", 1],
@@ -148,9 +269,20 @@ const useListKeys = (
           params: { captureId: next },
           to: "/captures/$captureId",
         });
-        document
-          .querySelector(`[data-capture-id="${next}"]`)
-          ?.scrollIntoView({ block: "nearest" });
+
+        const row = document.querySelector<HTMLElement>(
+          `[data-capture-id="${next}"]`
+        );
+
+        // Focus follows a row that had it, so Enter acts on the capture now shown.
+        if (
+          document.activeElement instanceof HTMLElement &&
+          document.activeElement.dataset.captureId !== undefined
+        ) {
+          row?.focus({ preventScroll: true });
+        }
+
+        row?.scrollIntoView({ block: "nearest" });
       }
     };
 
@@ -181,6 +313,9 @@ export const RecentList = () => {
     };
   }, []);
   const searchRef = useRef<HTMLInputElement>(null);
+  const navigate = useNavigate();
+  const router = useRouter();
+  const [menu, setMenu] = useState<RowMenuAt | null>(null);
   const parsed = CaptureIdSchema.safeParse(params.captureId);
   const selected = parsed.success ? parsed.data : null;
 
@@ -199,6 +334,34 @@ export const RecentList = () => {
   }, []);
 
   useListKeys(ids, selected, focusSearch);
+
+  const openMenu = useCallback(
+    async (at: RowMenuAt): Promise<void> => {
+      if (at.id !== selected) {
+        await navigate({
+          params: { captureId: at.id },
+          to: "/captures/$captureId",
+        });
+      }
+
+      // An unsaved edit can keep the old capture; then there is nothing to open.
+      if (router.state.location.pathname === `/captures/${at.id}`) {
+        setMenu(at);
+      }
+    },
+    [navigate, router, selected]
+  );
+
+  const showMenu = useCallback(
+    (at: RowMenuAt): void => {
+      void openMenu(at);
+    },
+    [openMenu]
+  );
+
+  const closeMenu = useCallback((): void => {
+    setMenu(null);
+  }, []);
 
   return (
     <div className="flex min-h-0 w-full flex-col">
@@ -260,8 +423,9 @@ export const RecentList = () => {
             No captures match “{query.trim()}”.
           </p>
         ) : null}
-        <Groups groups={groups} />
+        <Groups groups={groups} onMenu={showMenu} />
       </nav>
+      <RowMenu menu={menu} onClose={closeMenu} />
     </div>
   );
 };

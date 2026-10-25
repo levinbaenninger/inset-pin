@@ -53,10 +53,11 @@ Choose **Recent captures…** from the pin icon, or start the app again while it
 
 - Search the thoughts with the field at the top, or with `⌘F` or `Ctrl+F`. Every word you type must appear.
 - Move through the list with `↑` and `↓`.
-- **Copy note** copies the thought. **Copy image** copies the crop with the pin drawn on it. Each button shows **Copied** when it has worked.
+- **Copy note** copies the thought, also with `⌘C` or `Ctrl+C` when no text is selected. **Copy image** copies the crop with the pin drawn on it, also with `⇧⌘C` or `Ctrl+Shift+C`. Each button shows **Copied** when it has worked.
 - Drag the image itself into another app to drop it as a file. The file carries the pin too and is named after the thought.
-- **Edit thought** changes the text. `⌘↩` saves it and `Escape` cancels. Choosing another capture with an unsaved change asks first.
-- **Delete** asks once, then opens the next capture.
+- **Edit thought** changes the text, also with `Enter`. `⌘↩` saves it and `Escape` cancels. Choosing another capture with an unsaved change asks first; `⌘↩` there saves and goes on.
+- **Delete** asks once, then opens the next capture the list shows. `Backspace` or `Delete` asks too.
+- Right-click a capture in the list for the same commands.
 - `⌘W` or `Ctrl+W` closes the window.
 
 The app stores each capture as a folder with `capture.json` and `crop.png`.
