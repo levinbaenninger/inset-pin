@@ -43,5 +43,5 @@ export const viaText = (via: PointVia): string =>
 
 export const readOnlyText = (why: ReadOnlyWhy): string =>
   why === "newerVersion"
-    ? "Saved by a newer version of Inset. It is kept unchanged and can't be shown here."
-    : "This capture's file can't be read. It is kept unchanged on disk.";
+    ? "Saved by a newer version of Inset. It stays on disk unchanged."
+    : "Its file can't be read. It stays on disk unchanged.";
