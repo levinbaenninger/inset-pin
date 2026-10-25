@@ -160,6 +160,18 @@ A second pass worked through the panel and the library with the taste skill's ru
 
 The skill's checks ran on the result. `lint.mjs --app` over `src/renderer` reported 0 failures and 7 warnings. Three come from vendored shadcn files (the dialog's backdrop blur and two `transition-all`), and one from a test's zero padding. The other three are the pin's white and dark halo, which keeps it visible on any screenshot. `inspect.mjs --app` on the library reported 0 failures and one warning. The warning is the empty space under a single capture in a 1440 × 900 window, larger than the library's 960 × 680 default.
 
+### Library pass with layout-breaking data
+
+A third pass drove the library in the browser preview with a stubbed bridge and data chosen to break it: 34 captures over two weeks, a thought that is one long URL, a multi-line thought and a read-only entry, light and dark, at 1100 and 560 px wide. It found and fixed these:
+
+- A long URL scrolled the capture sideways and squeezed the list to its minimum width; in a narrow window it made the list wider than the window.
+- Saving an edit showed the old thought for a moment. The router reloaded in the background, so `invalidate()` returned before the new thought had loaded. Reloads now block until the data is fresh (`defaultStaleReloadMode: "blocking"`), which also makes each `↑`/`↓` step wait for its local IPC round trip.
+- Deleting during a search selected the next capture of the whole list, which the search could hide. Deleting with an unsaved edit left the window on "This capture no longer exists". `⌘↩` in the unsaved-edit question saved behind it and dropped the chosen capture.
+- `⌘F` did nothing in the one-pane layout while a capture was shown.
+- Asking for the library again while it sat behind another app did not bring it forward on macOS (found by reading the code).
+
+The search got a themed clear button and shows its count only while searching. The scrollbars are thin, follow the theme and keep their room. The shown capture got keys and a right-click menu, see the table above.
+
 ### Code review
 
 Two independent reviews (Claude Opus and GPT Sol) read the full diff against the brief. They found no high-severity issue. These medium and low findings were fixed and have tests where a test is possible:
@@ -190,6 +202,7 @@ The first CI run on pull request #1 passed all four jobs: lint, typecheck, tests
 
 - **Windows beyond the dev runs.** A complete run of the unpacked app is still open, see above. The NSIS installer, SmartScreen on first start, the arm64 zip, the notification's sender name in a packaged build, and displays scaled above 100% or with mixed scale were not tried. The Windows script requires 100% scale, because it compares window positions with screen pixels one to one.
 - **This round on macOS.** The welcome, the quit question in the panel, `color-scheme`, the library's page padding and the changed notification text also apply to macOS, and none of them ran there. `verify-macos.ts` was updated for the welcome and the quit question but not run.
+- **The library pass on the real desktop.** Bringing an open library forward and the check added for it to `verify-macos.ts` did not run. The one run of the script in this pass failed before the library, at the first checks that read the window through accessibility: the welcome text, **Unsaved draft from** and the **Discard** button. Inset Shelf was running in development at the same time, also as a process named Electron, so the script now finds the app by process id. That is not shown to be the cause: asked by process id, System Events also reported no windows for an instance whose welcome had just opened.
 - **Intel Macs.** The x64 macOS build is produced but was not run.
 - **A second display during the macOS runs.** The macOS pin-to-pixel check ran on the built-in display only. The spike covered two displays with mixed scale, but the full panel flow did not. On Windows the full flow ran on a second display at the same scale.
 - **Negative display origins** on real hardware.
