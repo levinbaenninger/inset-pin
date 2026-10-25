@@ -1,9 +1,8 @@
 import { Alert02Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { AppStatus } from "@shared/contracts";
-import { saveShortcutLabel, shortcutLabel } from "@shared/shortcut";
+import { shortcutLabel } from "@shared/shortcut";
 import { useEffect, useState } from "react";
-import type { ReactNode } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Kbd } from "@/components/ui/kbd";
@@ -27,30 +26,15 @@ const useStatus = (): AppStatus | null => {
   return status;
 };
 
-const Step = ({
-  children,
-  number,
-}: {
-  readonly children: ReactNode;
-  readonly number: number;
-}) => (
-  <li className="flex gap-3">
-    <span className="bg-muted text-muted-foreground flex size-6 shrink-0 items-center justify-center rounded-full text-xs font-medium tabular-nums">
-      {number}
-    </span>
-    <span className="pt-0.5">{children}</span>
-  </li>
-);
-
-/** Where the pin icon lives; Windows hides new icons behind the ^ arrow at first. */
+/** Where the window can be found again; Windows hides new icons behind the ^ arrow at first. */
 const findTheApp = isMac
-  ? "Open this window again from the pin in the menu bar."
-  : "Open this window again from the pin in the notification area of the taskbar. If you can’t see it, click ^ next to the clock.";
+  ? "Reopen this window from the Dock or the pin in the menu bar."
+  : "Reopen this window from the pin in the taskbar’s notification area, behind ^ if you can’t see it.";
 
 /**
  * The library before the first capture. It opens at launch, so a new
- * participant sees how to capture and where the app lives, and the first
- * capture appears right here.
+ * participant sees how to capture and where the app lives; the first
+ * capture replaces it.
  */
 export const Welcome = () => {
   const status = useStatus();
@@ -73,8 +57,8 @@ export const Welcome = () => {
             Inset Context Pin is running
           </h1>
           <p className="text-muted-foreground text-balance">
-            Point at a detail on your screen and write down what matters about
-            it. Inset keeps a cropped picture with a pin on that spot.
+            Point at anything on your screen, press <Kbd>{shortcut}</Kbd> and
+            note what matters. Try it on this line.
           </p>
         </div>
         {status?.shortcutRegistered === false ? (
@@ -82,25 +66,12 @@ export const Welcome = () => {
             <HugeiconsIcon icon={Alert02Icon} />
             <AlertTitle>{shortcut} is in use by another app</AlertTitle>
             <AlertDescription>
-              Choose “New capture in 3 seconds” from the pin icon instead, then
-              move the pointer over your detail.
+              Use “New capture in 3 seconds” from the pin icon instead.
             </AlertDescription>
           </Alert>
         ) : null}
-        <ol className="flex flex-col gap-3 text-sm">
-          <Step number={1}>Move the pointer over the detail, in any app.</Step>
-          <Step number={2}>
-            Press <Kbd>{shortcut}</Kbd>. A small panel opens beside the pointer.
-          </Step>
-          <Step number={3}>
-            Type what matters and press <Kbd>{saveShortcutLabel(isMac)}</Kbd>.
-          </Step>
-        </ol>
-        <p className="text-sm">
-          Try it here: point at this sentence and press <Kbd>{shortcut}</Kbd>.
-        </p>
         <p className="text-muted-foreground border-t pt-4 text-xs leading-relaxed">
-          Your captures appear in this window. {findTheApp}
+          Captures appear here. {findTheApp}
         </p>
       </div>
     </div>

@@ -129,7 +129,7 @@ const QuitQuestion = ({ answer }: QuitQuestionProps) => {
           }}
           size="sm"
           type="button"
-          variant="ghost"
+          variant="ghost-destructive"
         >
           Discard and quit
         </Button>
@@ -278,23 +278,15 @@ export const DraftEditor = ({ view }: DraftEditorProps) => {
             }}
             size="sm"
             type="button"
-            variant={armed ? "destructive" : "ghost"}
+            variant={armed ? "destructive" : "ghost-destructive"}
           >
             {armed ? "Click again to discard" : "Discard"}
           </Button>
-          {/* While Discard asks, its label fills the row; the hint stays for screen readers only. */}
-          <p
-            aria-live="polite"
-            className={
-              armed
-                ? "sr-only"
-                : "text-muted-foreground ml-auto truncate text-xs"
-            }
-          >
-            {armed ? "Esc keeps it" : "Esc keeps the draft"}
+          <p aria-live="polite" className="sr-only">
+            {armed ? "Esc keeps it" : ""}
           </p>
           <Button
-            className={armed ? "ml-auto" : undefined}
+            className="ml-auto"
             disabled={busy || !savable}
             size="sm"
             type="submit"

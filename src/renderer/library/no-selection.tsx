@@ -32,10 +32,7 @@ export const NoSelection = () => {
 
   return (
     <div className="text-muted-foreground flex h-full items-center justify-center p-8 text-sm">
-      <p className="max-w-xs text-center text-balance">
-        Choose a capture to read it, copy it, or drag its image into another
-        app.
-      </p>
+      <p className="max-w-xs text-center text-balance">No capture selected</p>
     </div>
   );
 };

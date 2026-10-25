@@ -186,7 +186,7 @@ const ThoughtEditor = ({ capture, onDone }: ThoughtEditorProps) => {
           <AlertDialogHeader>
             <AlertDialogTitle>Save your change?</AlertDialogTitle>
             <AlertDialogDescription>
-              You chose another capture before saving this thought.
+              This thought has an unsaved change.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -237,9 +237,6 @@ const ThoughtEditor = ({ capture, onDone }: ThoughtEditorProps) => {
           value={thought}
         />
         <div className="flex items-center justify-end gap-2">
-          <span className="text-muted-foreground mr-auto text-xs">
-            Esc cancels
-          </span>
           <Button
             disabled={saving}
             onClick={cancel}
@@ -303,7 +300,7 @@ const DeleteButton = ({
         className="ml-auto"
         size="sm"
         title={`Delete (${shortcut})`}
-        variant="ghost"
+        variant="ghost-destructive"
       >
         <HugeiconsIcon data-icon="inline-start" icon={Delete02Icon} />
         Delete
@@ -312,10 +309,7 @@ const DeleteButton = ({
     <AlertDialogContent>
       <AlertDialogHeader>
         <AlertDialogTitle>Delete this capture?</AlertDialogTitle>
-        <AlertDialogDescription>
-          The thought and its image are removed from this computer. This can’t
-          be undone.
-        </AlertDialogDescription>
+        <AlertDialogDescription>This can’t be undone.</AlertDialogDescription>
       </AlertDialogHeader>
       <AlertDialogFooter>
         <AlertDialogCancel>Cancel</AlertDialogCancel>
@@ -510,10 +504,6 @@ const SavedCaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
             size="full"
           />
         </div>
-        <figcaption className="text-muted-foreground text-xs">
-          Drag the image into another app, or use Copy image. Both include the
-          pin.
-        </figcaption>
       </figure>
     </article>
   );
@@ -525,7 +515,7 @@ export const CapturePage = () => {
   if (detail === null) {
     return (
       <Unavailable
-        description="It may have been deleted. The list shows everything that is saved."
+        description="It may have been deleted."
         title="This capture no longer exists"
       />
     );
