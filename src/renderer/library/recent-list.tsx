@@ -106,7 +106,7 @@ const CaptureRow = ({
       </>
     ) : (
       <>
-        <div className="bg-muted text-muted-foreground flex aspect-[8/5] w-20 shrink-0 items-center justify-center rounded-md">
+        <div className="bg-muted text-muted-foreground flex aspect-[8/5] w-20 shrink-0 items-center justify-center self-start rounded-md">
           <HugeiconsIcon icon={Alert02Icon} size={16} />
         </div>
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
