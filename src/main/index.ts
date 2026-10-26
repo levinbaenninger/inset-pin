@@ -34,6 +34,7 @@ import { e2eLog } from "./e2e-log";
 import { serveContract } from "./ipc-kit";
 import { toDetail } from "./library-view";
 import { createLibraryWindow } from "./library-window";
+import type { LibraryWindow } from "./library-window";
 import { createPinWindows } from "./pin-windows";
 import { handleInsetProtocol, registerInsetScheme } from "./protocol";
 import { nodeSettingsFs, openSettingsStore } from "./settings-store";
@@ -140,8 +141,15 @@ const start = async (): Promise<void> => {
   // Set once every window exists; until then there is no menu to rebuild.
   const menus = { refresh: ignore };
 
+  // A pin and the library open each other, so a pin reaches the library through this once it exists.
+  let openLibrary: LibraryWindow["open"] = ignore;
+
   const pins = createPinWindows({
+    copyImage: exporter.copyImage,
     preload: preloadPath("pin"),
+    showInLibrary: (id) => {
+      openLibrary(id);
+    },
     store,
     url: pageUrl("pin"),
   });
@@ -169,6 +177,8 @@ const start = async (): Promise<void> => {
     store,
     url: pageUrl("library"),
   });
+
+  openLibrary = library.open;
 
   const settingsWindow = createSettingsWindow({
     preload: preloadPath("settings"),
