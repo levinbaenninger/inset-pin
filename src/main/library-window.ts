@@ -72,6 +72,7 @@ export interface LibraryOptions {
   readonly onRejected: (channel: string, reason: string) => void;
   readonly status: () => AppStatus;
   readonly pinToScreen: (id: CaptureId) => void;
+  readonly openSettings: () => void;
 }
 
 const OK: ActionResult = { ok: true };
@@ -109,6 +110,7 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
         return entry === undefined ? null : toDetail(entry);
       },
       list: () => store.list().map(toSummary),
+      openSettings: options.openSettings,
       pinToScreen: options.pinToScreen,
       remove: async (id) => {
         const result = await store.remove(id);

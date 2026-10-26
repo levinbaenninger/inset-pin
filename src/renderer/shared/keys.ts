@@ -38,3 +38,39 @@ export const useLocalKeys = (keys: LocalKeys): void => {
     };
   }, [onEscape, onSave]);
 };
+
+/** Ctrl with this key and nothing else; AltGr arrives as Ctrl+Alt and types characters. */
+const isCtrlKey = (event: KeyboardEvent, key: string): boolean =>
+  event.key.toLowerCase() === key &&
+  event.ctrlKey &&
+  !event.metaKey &&
+  !event.altKey &&
+  !event.shiftKey;
+
+const closeWindow = (): void => {
+  window.close();
+};
+
+/**
+ * Windows has no app menu, so a page takes the keys macOS finds there:
+ * Ctrl+W closes the window, and the page's own keys such as Ctrl+, for
+ * Settings. On macOS the menu has them.
+ */
+export const handleMenuKeys = (
+  keys: Readonly<Record<string, () => void>>
+): void => {
+  if (isMac) {
+    return;
+  }
+
+  const all = { w: closeWindow, ...keys };
+
+  window.addEventListener("keydown", (event) => {
+    const run = Object.entries(all).find(([key]) => isCtrlKey(event, key))?.[1];
+
+    if (run !== undefined) {
+      event.preventDefault();
+      run();
+    }
+  });
+};

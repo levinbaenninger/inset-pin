@@ -6,7 +6,8 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import { libraryBridge } from "@/shared/bridge";
-import { isMac, markPlatform } from "@/shared/platform";
+import { handleMenuKeys } from "@/shared/keys";
+import { markPlatform } from "@/shared/platform";
 import { followSystemTheme } from "@/shared/theme";
 
 import { router } from "./router";
@@ -31,20 +32,11 @@ libraryBridge().on("show", (id) => {
   }
 });
 
-// macOS closes the window with Cmd+W through its app menu; Windows has no menu, so Ctrl+W is handled here.
-if (!isMac) {
-  window.addEventListener("keydown", (event) => {
-    if (
-      event.key.toLowerCase() === "w" &&
-      event.ctrlKey &&
-      !event.altKey &&
-      !event.shiftKey
-    ) {
-      event.preventDefault();
-      window.close();
-    }
-  });
-}
+handleMenuKeys({
+  ",": () => {
+    libraryBridge().openSettings();
+  },
+});
 
 const root = document.querySelector("#root");
 

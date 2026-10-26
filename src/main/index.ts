@@ -144,6 +144,11 @@ const start = async (): Promise<void> => {
   // A pin and the library open each other, so a pin reaches the library through this once it exists.
   let openLibrary: LibraryWindow["open"] = ignore;
 
+  const settingsWindow = createSettingsWindow({
+    preload: preloadPath("settings"),
+    url: pageUrl("settings"),
+  });
+
   const pins = createPinWindows({
     copyImage: exporter.copyImage,
     preload: preloadPath("pin"),
@@ -168,6 +173,9 @@ const start = async (): Promise<void> => {
       menus.refresh();
     },
     onRejected: logRejected,
+    openSettings: () => {
+      settingsWindow.open();
+    },
     pinToScreen: pins.open,
     preload: preloadPath("library"),
     status: () => ({
@@ -179,11 +187,6 @@ const start = async (): Promise<void> => {
   });
 
   openLibrary = library.open;
-
-  const settingsWindow = createSettingsWindow({
-    preload: preloadPath("settings"),
-    url: pageUrl("settings"),
-  });
 
   const surface = createCaptureSurface({
     // The panel never activates the app, so the app in front keeps the keyboard without app.hide().
