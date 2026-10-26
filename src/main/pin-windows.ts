@@ -1,5 +1,6 @@
 import type { CaptureId } from "@shared/capture-record";
-import { BrowserWindow, screen } from "electron";
+import type { ActionResult } from "@shared/contracts";
+import { BrowserWindow, Menu, screen } from "electron";
 import type { WebContents } from "electron";
 
 import { MIN_WIDTH, pinSize, fitToCrop } from "./pin-size";
@@ -55,6 +56,9 @@ export const createPinWindows = (options: {
   readonly store: CaptureStore;
   readonly preload: string;
   readonly url: string;
+  /** The pin's right-click menu on Windows. */
+  readonly copyImage: (id: CaptureId) => Promise<ActionResult>;
+  readonly showInLibrary: (id: CaptureId) => void;
 }): PinWindows => {
   const windows = new Map<CaptureId, BrowserWindow>();
 
@@ -70,6 +74,37 @@ export const createPinWindows = (options: {
       }
     }
   });
+
+  /**
+   * The whole pin moves the window, so a right-click on Windows opens the
+   * system's window menu; the pin's own commands are more use there.
+   */
+  const replaceSystemMenu = (window: BrowserWindow, id: CaptureId): void => {
+    window.on("system-context-menu", (event) => {
+      event.preventDefault();
+      Menu.buildFromTemplate([
+        {
+          click: () => {
+            void options.copyImage(id);
+          },
+          label: "Copy image",
+        },
+        {
+          click: () => {
+            options.showInLibrary(id);
+          },
+          label: "Show in library",
+        },
+        { type: "separator" },
+        {
+          click: () => {
+            close(id);
+          },
+          label: "Close",
+        },
+      ]).popup({ window });
+    });
+  };
 
   const open = (id: CaptureId): void => {
     const existing = windows.get(id);
@@ -118,6 +153,7 @@ export const createPinWindows = (options: {
 
     if (isWindows) {
       fitToCropOnWindows(window, { height, width });
+      replaceSystemMenu(window, id);
     } else {
       window.setAspectRatio(width / height);
     }
@@ -133,6 +169,10 @@ export const createPinWindows = (options: {
     }
 
     harden(window.webContents, "pin");
+    // The page's own title would name every pin in Alt+Tab "Pinned capture".
+    window.on("page-title-updated", (event) => {
+      event.preventDefault();
+    });
     window.once("ready-to-show", () => {
       window.showInactive();
     });
