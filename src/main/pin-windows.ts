@@ -2,7 +2,8 @@ import type { CaptureId } from "@shared/capture-record";
 import { BrowserWindow, screen } from "electron";
 import type { WebContents } from "electron";
 
-import { MIN_WIDTH, pinSize } from "./pin-size";
+import { MIN_WIDTH, pinSize, fitToCrop } from "./pin-size";
+import type { PinSize } from "./pin-size";
 import type { CaptureStore } from "./store";
 import { harden, secureWebPreferences } from "./window-security";
 
@@ -12,6 +13,8 @@ const CASCADE = 28;
 
 const isMac = process.platform === "darwin";
 
+const isWindows = process.platform === "win32";
+
 export interface PinWindows {
   readonly open: (id: CaptureId) => void;
   readonly close: (id: CaptureId) => void;
@@ -20,6 +23,29 @@ export interface PinWindows {
   readonly anyVisible: () => boolean;
   readonly webContents: () => readonly WebContents[];
 }
+
+/**
+ * Windows applies an aspect ratio to a frameless window's outer frame, its
+ * invisible resize borders included, so the crop would open and resize
+ * stretched. The page letterboxes the crop while the user resizes, and the
+ * window then snaps to the crop's shape.
+ */
+const fitToCropOnWindows = (window: BrowserWindow, opened: PinSize): void => {
+  let before = opened;
+
+  window.on("resized", () => {
+    const [width = opened.width, height = opened.height] =
+      window.getContentSize();
+
+    const snapped = fitToCrop(opened, before, { height, width });
+
+    before = snapped;
+
+    if (snapped.width !== width || snapped.height !== height) {
+      window.setContentSize(snapped.width, snapped.height);
+    }
+  });
+};
 
 /**
  * Captures pinned to the screen: small windows that float above other apps on
@@ -89,7 +115,13 @@ export const createPinWindows = (options: {
     });
 
     windows.set(id, window);
-    window.setAspectRatio(width / height);
+
+    if (isWindows) {
+      fitToCropOnWindows(window, { height, width });
+    } else {
+      window.setAspectRatio(width / height);
+    }
+
     // "floating" sits above normal windows and below menus and the Dock.
     window.setAlwaysOnTop(true, "floating");
 

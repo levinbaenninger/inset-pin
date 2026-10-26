@@ -106,17 +106,26 @@ const Pin = ({ capture }: { readonly capture: Saved }) => {
   useLocalKeys({ onEscape: close });
 
   return (
-    <main className="group app-drag relative h-svh w-svw overflow-hidden bg-black select-none">
-      <img
-        alt={thought}
-        className="absolute inset-0 size-full"
-        draggable={false}
-        src={image.url}
-      />
-      <PinMarker
-        left={percent(pin.x, image.widthPx)}
-        top={percent(pin.y, image.heightPx)}
-      />
+    <main className="group app-drag relative flex h-svh w-svw items-center justify-center overflow-hidden bg-black select-none">
+      {/* The crop keeps its shape while Windows resizes the window freely (src/main/pin-windows.ts). */}
+      <div
+        className="relative aspect-(--image-aspect) w-(--image-w)"
+        style={{
+          "--image-aspect": `${image.widthPx} / ${image.heightPx}`,
+          "--image-w": `min(100svw, 100svh * ${image.widthPx / image.heightPx})`,
+        }}
+      >
+        <img
+          alt={thought}
+          className="block size-full"
+          draggable={false}
+          src={image.url}
+        />
+        <PinMarker
+          left={percent(pin.x, image.widthPx)}
+          top={percent(pin.y, image.heightPx)}
+        />
+      </div>
       <div
         className="absolute inset-x-1.5 top-1.5 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 data-focused:opacity-100"
         data-focused={focused ? "" : undefined}
