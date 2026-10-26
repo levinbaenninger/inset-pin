@@ -1,6 +1,6 @@
 # Implementation report
 
-This report covers Inset Context Pin version 0.1.0 as of 23 October 2026. It records what the prototype implements, what was tested and on which system, and what remains open. No user test has run yet, so the user-test sections are empty on purpose.
+This report covers Inset Context Pin version 0.1.0 as of 26 October 2026. It records what the prototype implements, what was tested and on which system, and what remains open. No user test has run yet, so the user-test sections are empty on purpose.
 
 ## What the prototype does
 
@@ -42,11 +42,12 @@ The experiment should record these choices next to its findings, because each on
 | Starting the app again | Opens the library, so a second start never looks like nothing happened | `second-instance` in `src/main/index.ts` |
 | Tray icon on Windows | A white pin on a dark taskbar and a black pin on a light one, following the taskbar's own theme | `trayIconPath` in `src/main/index.ts` |
 | Panel corners on Windows | The panel window is transparent and draws 22 px corners, the preview's 10 px plus the 12 px padding, with a 1 px border instead of the system frame and shadow. macOS keeps its system corners. | `.capture-surface` in `src/renderer/styles.css`, `src/main/surface.ts` |
-| Library window on Windows | Only the caption buttons, drawn over the page; no title bar, icon or window name. `Ctrl+W` closes it, like `⌘W` on macOS. | `src/main/library-window.ts`, `src/renderer/library/main.tsx` |
+| Library window on Windows | Only the caption buttons, drawn over the page; no title bar, icon or window name. `Ctrl+W` closes it and `Ctrl+,` opens Settings, like `⌘W` and `⌘,` on macOS. **Keep library on top** in the tray menu stands in for the View menu's item. | `src/main/library-window.ts`, `handleMenuKeys` in `src/renderer/shared/keys.ts`, `src/main/tray-menu.ts` |
 | Failed save while hidden | Notification and a tray item **Show unsaved draft (save failed)**. The panel does not reopen by itself. | `src/main/tray-menu.ts` |
 | Source label | The display name only, such as "Built-in Retina Display". No app, file, or URL. | `src/main/capture.ts` |
 | Fallback condition | Each record stores `invokedVia` as `shortcut` or `trayDelayed` | `CaptureRecordV1Schema` |
 | Library on open | Two panes from 768 px wide, opening the newest capture. Narrower windows show one pane at a time. | `src/renderer/library/router.tsx` |
+| List thumbnails | One 8:5 box per row, like a row that can't be shown. A wider or taller crop sits whole inside it, with the pin on the image. | `Thumbnail` in `src/renderer/library/saved-image.tsx` |
 | Exported image | **Copy image** and file drag carry the pin, drawn into the PNG. The stored `crop.png` stays without it. | `drawPinMark` in `src/main/pin-mark.ts` |
 | Dragged file name | The thought's first line, made safe for a file name. The named copy waits in the system temp folder under `Inset Context Pin/<id>`, is removed when the capture is deleted, and the folder is cleared at every launch. | `exportFileName` in `src/main/library-view.ts`, `src/main/library-window.ts` |
 | Library keys and menu | `Enter` edits, `Backspace` or `Delete` asks to delete, `⇧⌘C` (Ctrl+Shift+C) copies the image, `⌘P` (Ctrl+P) pins it to the screen, and the copy command (`⌘C`, Ctrl+C, Edit > Copy) copies the note when no text is selected. A right-click on a row selects it and offers the same five commands. On macOS the **Capture** menu lists them with their keys, enabled only while the library has the keyboard. There is no page zoom, because all windows share one origin and it would also zoom the capture panel. | `useCaptureShortcuts` in `src/renderer/library/capture-commands.tsx`, `RowMenu` in `src/renderer/library/recent-list.tsx`, `src/main/app-menu.ts` |
@@ -54,7 +55,7 @@ The experiment should record these choices next to its findings, because each on
 | Settings | A small window like a Mac app's Settings, with the sidebar material on macOS: Open at Login, Show app icon in, Copy after saving. Kept in `settings.json` next to the captures folder. | `src/main/settings-window.ts`, `src/shared/settings.ts` |
 | Copy after saving | Off by default. When on, every saved capture puts the image with its pin and the thought on the clipboard, as one item. | `copyBoth` in `src/main/capture-export.ts` |
 | Recent captures in menus | The tray menu and the Dock menu name the five newest captures, cut to 40 characters; one opens the library on it. | `RECENT_IN_MENU` in `src/main/tray-menu.ts` |
-| Pin to Screen | `⌘P` (Ctrl+P), **Pin**, the row menu or **Capture > Pin to Screen** opens the capture in a frameless window at the crop's own size, at most 420 × 320 DIP and at least 120 DIP wide, at the top right of the screen under the pointer. It floats above other apps on every Space and full-screen app, shows the thought on the image, and keeps its shape when resized. A click shows **Close**, **Copy image** and **Show in library**; `Escape` closes it. Deleting the capture closes it. Pins are on screen like any window, so they appear in new captures. | `src/main/pin-windows.ts`, `src/renderer/pin/pin-app.tsx` |
+| Pin to Screen | `⌘P` (Ctrl+P), **Pin**, the row menu or **Capture > Pin to Screen** opens the capture in a frameless window at the crop's own size, at most 420 × 320 DIP and at least 120 DIP wide, at the top right of the screen under the pointer. It floats above other apps on every Space and full-screen app, shows the thought on the image, and keeps its shape when resized. A click shows **Close**, **Copy image** and **Show in library**; `Escape` closes it, and so does `⌘W` (`Ctrl+W`). Deleting the capture closes it. On Windows the window resizes freely and snaps to the crop's shape when the resize ends, while the page letterboxes the crop; a right-click shows the same three commands instead of the system's window menu. Pins are on screen like any window, so they appear in new captures. | `src/main/pin-windows.ts`, `fitToCrop` in `src/main/pin-size.ts`, `src/renderer/pin/pin-app.tsx` |
 | Library window on macOS | The traffic lights sit over the list, which shows the window's translucent sidebar material; the capture keeps the page background. **View > Keep Library on Top** floats it. | `src/main/library-window.ts` |
 | Leaving an edited thought | Choosing another capture with an unsaved change asks **Keep editing**, **Discard** or **Save**; ⌘↩ (Ctrl+Enter) saves and goes on to the chosen capture. Arrow keys inside the editor never move through the list. | `useBlocker` in `src/renderer/library/capture-page.tsx` |
 
@@ -79,7 +80,7 @@ Negative display origins were not available physically. Unit tests cover them wi
 
 ### Automated tests
 
-`pnpm test` runs 177 Vitest tests in 16 files. They cover:
+`pnpm test` runs 186 Vitest tests in 16 files. They cover:
 
 - Coordinate conversion with negative origins, mixed scale, and image sizes that differ from `bounds × scaleFactor`.
 - Default crop, widen, and tighten near image edges, with the pin staying on the same image pixel.
@@ -90,6 +91,7 @@ Negative display origins were not available physically. Unit tests cover them wi
 - The pin drawn into exported images (colour and byte order, the readable centre, edges), the exported file name, the reopened-draft flag, and the library's search, day grouping and keyboard selection.
 - Moving and resizing the crop (image edges, the pin, the smallest crop) and fitting the preview view around it.
 - The settings file, the app menu, the recent captures in the tray and Dock menus, the size of a pinned capture, and IPC served to several windows of one kind.
+- A pin's snap to the crop's shape after a resize, ampersands in the menus' capture names, and **Keep library on top** in the Windows tray menu.
 
 ### Real desktop runs (macOS, dev build)
 
@@ -195,6 +197,48 @@ It found three defects, all fixed. The first draft of the View menu had page zoo
 
 The crop editor was checked in the browser preview only, with a stubbed bridge and a mouse: dragging a corner, moving the frame, a click that places the pin, and ctrl+wheel.
 
+### Windows pass
+
+A fifth pass, on 26 October 2026, ran the Mac app pass's features on Windows and compared them with macOS.
+
+Test system: Windows 11 Enterprise 10.0.26100, x64, Electron 45.0.0, dark mode for apps and the taskbar, and three displays at 100% scale. The primary is 2560 × 1440 at (0, 0). The other two have negative origins: 2560 × 1440 at (−2560, 5) and 1920 × 1200 at (−2225, 1445). Sessions testing Inset Shelf and Inset Window Links used the same desktop; after one collision, all three took `%TEMP%\inset-desktop-test.lock` before any input.
+
+The app ran from `out/` with a separate data folder. It held nine sample captures chosen to break the layout, plus one read-only entry. The samples included an ampersand in the thought, one long URL, three lines, a 160 × 100 crop, a 1600 × 200 strip, a 300 × 900 sidebar and a scale-2 crop. Input came from the harness helper (`SendInput` and UI Automation), in a scratch copy with commands for dragging, the mouse wheel and the `,` and `Delete` keys added; `scripts/e2e/windows-helper.cs` does not have them. Page state was read, and some pages were screenshotted, through Chromium's debugging port.
+
+Observed with real input:
+
+- **Negative origins.** Captures on both displays with negative origins opened the panel inside that display, and the pixel under the pin was magenta. That includes the top-left corner of the left display, where the crop is clamped to the image edge. `verify-windows.ts` covered the lower display too.
+- **The crop editor.** Dragging a corner took the crop from 480 × 300 to 408 × 250. Moving the frame and a click that places the pin also worked. `Ctrl`+wheel widened the crop and brought it back to the same size. `Ctrl`+wheel zoomed neither the panel nor the library.
+- **Copy after saving,** turned on with a click in Settings. Each save put the thought and the 480 × 300 image on the clipboard.
+- **The library's keys.** `Ctrl+F`, typing a search, `Escape` to clear it, `↓` and `↑` all worked. So did `Ctrl+C` with nothing selected (the note) and `Ctrl+Shift+C` (the image). `Enter`, typing and `Ctrl+Enter` saved an edit. `Backspace` opened the delete question, and `Escape` closed it. The right-click menu showed its five commands with their Windows keys.
+- **Settings** opened from the tray, under a dark system title bar, and its content was not cut off.
+- **Pins.** `Ctrl+P` opened a pin at the top right of the display under the pointer, and a click showed its buttons. **Copy image** copied the crop with the pin drawn on it. **Show in library** brought the library forward on that capture. Dragging the pin, resizing it from a corner and an edge, and `Escape` all worked.
+- **The tray menu** listed the five newest captures. The narrow, one-pane library was correct under the real caption buttons; the window was narrowed with a drag.
+
+These were checked only through the debugging port: going to a capture by its address, deleting a pinned capture (its pin closed and the library opened the next capture), and both pages in light mode. Light mode was emulated with `prefers-color-scheme`, so the Windows theme was not changed.
+
+It found these defects, all fixed. The thumbnails were checked by measuring every row and screenshotting the list through the debugging port; the others again with real input.
+
+- **Ampersands in the tray menu.** `Q&A: totals & discounts` showed as `QA: totals  discounts`. Windows menus, and Electron's macOS menus, read a single `&` as an access-key mark and drop it. Capture names in the menus now double it. The macOS Dock menu had the same defect; that was found in Electron's source, not observed.
+- **List thumbnails stretched to the row's height.** Every thumbnail had an empty band under the image. A 1600 × 200 crop's pin sat in that band, below the image, and a 300 × 900 crop made an 80 × 240 thumbnail. All thumbnails now share one 8:5 box, with the crop whole inside it: the strip measures 80 × 10, centred, with its pin on it, and the sidebar 16.7 × 50. This affected macOS too.
+- **Pins opened and resized stretched.** On Windows, Electron's `setAspectRatio` applies the ratio to a frameless window's outer frame. That frame includes 16 × 8 DIP of invisible resize borders, and Electron resizes the window at once. A 160 × 100 crop opened at 157 × 100. A 300 × 900 crop opened at 120 × 400 instead of 120 × 360, 11% too tall. Passing `extraSize` changed nothing.
+  - On Windows the pin now opens at its exact size. During a resize the page letterboxes the crop, and when the resize ends the window snaps to the crop's shape.
+  - Checked: 160 × 100 and 120 × 360 when opened, 200 × 600 after widening the tall pin, and 133 × 400 after shortening it.
+- **Right-click on a pin.** It opened Windows' window menu (Restore, Move, Size, Minimize, Maximize, Close), because the whole pin moves the window. It now opens **Copy image**, **Show in library** and **Close**; both commands were tried.
+- **Pin titles.** Every pin window took the page's title, "Pinned capture". A pin is unowned and not a tool window, so Windows lists it in Alt+Tab under that title; this follows from the window style and was not looked at in Alt+Tab. The window now keeps the thought's first line as its title.
+- **`Ctrl+W`** did nothing in Settings or a pin, where macOS closes them with `⌘W` from **File > Close**. One handler now gives the library, Settings and pins `Ctrl+W` on Windows.
+
+Two items from the macOS menus had no Windows counterpart and were added:
+
+- `Ctrl+,` in the library opens Settings, like `⌘,`.
+- **Keep library on top** in the tray menu, enabled while the library is open, like **View > Keep Library on Top**. The tick showed, and the window's `WS_EX_TOPMOST` style followed it.
+
+Help, which opens the README on macOS, was left out.
+
+The first `verify-windows.ts` run of this pass stopped at "Escape gives the keyboard back to the app in front". A Window Links fixture window had come forward over the marker during the run, and it shows behind the panel in the run's own screenshot. After the sessions agreed on the lock, the next complete run passed all 72 checks, this one included, with the fixes in place.
+
+One observation is a design question, not a defect. One notch of a mouse wheel arrives as 100 units, so `Ctrl`+wheel scales the crop by 1.78× per notch. One **Widen context** click scales it by 1.41×.
+
 ### Code review
 
 Two independent reviews (Claude Opus and GPT Sol) read the full diff against the brief. They found no high-severity issue. These medium and low findings were fixed and have tests where a test is possible:
@@ -223,17 +267,17 @@ The first CI run on pull request #1 passed all four jobs: lint, typecheck, tests
 
 ## What was not tested
 
-- **Windows beyond the dev runs.** A complete run of the unpacked app is still open, see above. The NSIS installer, SmartScreen on first start, the arm64 zip, the notification's sender name in a packaged build, and displays scaled above 100% or with mixed scale were not tried. The Windows script requires 100% scale, because it compares window positions with screen pixels one to one.
+- **Windows beyond the dev runs.** A complete run of the unpacked app is still open, see above. The NSIS installer, SmartScreen on first start, the arm64 zip, the notification's sender name in a packaged build, and displays scaled above 100% or with mixed scale were not tried. The pin's resize snap and the 16 × 8 DIP border were measured at 100% scale only. **Open at Login** was not tried on Windows; in a dev build it would register Electron itself. No real touchpad pinch ran on Windows, only mouse-wheel notches. The Windows script requires 100% scale, because it compares window positions with screen pixels one to one.
 - **This round on macOS.** The welcome, the quit question in the panel, `color-scheme`, the library's page padding and the changed notification text also apply to macOS, and none of them ran there. `verify-macos.ts` was updated for the welcome and the quit question but not run.
 - **The library pass on the real desktop.** Bringing an open library forward and the check added for it to `verify-macos.ts` did not run. The one run of the script in this pass failed before the library, at the first checks that read the window through accessibility: the welcome text, **Unsaved draft from** and the **Discard** button. Inset Shelf was running in development at the same time, also as a process named Electron, so the script now finds the app by process id. That is not shown to be the cause: asked by process id, System Events also reported no windows for an instance whose welcome had just opened.
-- **The Mac app pass, beyond what is listed above.** A click on the Dock icon, the Dock menu, Open at Login, Copy after saving, **Keep Library on Top**, dragging and resizing a pin, pins on other Spaces and over full-screen apps, and deleting a pinned capture were not tried in the real app. The crop editor did not run in Electron, and no real trackpad pinch was tried. None of it ran on Windows. `verify-macos.ts` did not run; its launch check (no window, focus stays in front) was observed once by hand with the Dock icon showing.
+- **The Mac app pass, beyond what is listed above.** A click on the Dock icon, the Dock menu, Open at Login, Copy after saving, **Keep Library on Top**, dragging and resizing a pin, pins on other Spaces and over full-screen apps, and deleting a pinned capture were not tried in the real app on macOS. The crop editor did not run in Electron on macOS, and no real trackpad pinch was tried. The Windows pass covered most of this on Windows. The new thumbnails, the pin page's letterbox, the doubled ampersands in the Dock menu and the pin's window title, now kept from the thought on every system, did not run on macOS. `verify-macos.ts` did not run; its launch check (no window, focus stays in front) was observed once by hand with the Dock icon showing.
 - **Intel Macs.** The x64 macOS build is produced but was not run.
 - **A second display during the macOS runs.** The macOS pin-to-pixel check ran on the built-in display only. The spike covered two displays with mixed scale, but the full panel flow did not. On Windows the full flow ran on a second display at the same scale.
-- **Negative display origins** on real hardware.
+- **Negative display origins on a Mac.** On Windows, two displays with negative origins passed, see the Windows pass.
 - **Permission refusal and the first-run grant.** The app shows a panel with **Open System Settings** and **Quit and Reopen** when macOS reports that screen access is missing. This path was not observed. Every test run launched the app from a terminal host that already had screen access, and macOS attributes the grant to that host. A packaged app opened from Finder asks for its own grant, and that first run is untested.
 - **Shortcut conflict detection does not work across apps on macOS.** `scripts/e2e/hotkey-holder.swift` registered `⌥⌘P` through Carbon in a separate process. Electron's `globalShortcut.register` still returned true, so the tray kept showing "Capture under pointer: ⌥⌘P" instead of the conflict notice. The tray item **New capture in 3 seconds** is always present and was verified, so a participant whose shortcut is taken still has a working entry. The conflict notice appears only when Electron itself reports a failure. On Windows it does, see the Windows runs.
 - **Pasting and dropping into a real receiving app.** On Windows the copied image and note were read back from the clipboard only. In the packaged macOS app, **Copy image** was clicked and the clipboard read back with AppleScript. It held the 960 × 600 crop with the pin ring in the right colour, and the button showed **Copied**. Pasting into another application and dragging the file into one were not tried.
-- **Library keys, pinch and delete in the real app.** `↑`/`↓`, `⌘F`, `Enter`, `Backspace`, `⇧⌘C`, the right-click menu, the unsaved-edit guard and opening the next capture after **Delete** were checked only in the browser preview with a stubbed bridge. There, `document.execCommand("copy")` stood in for `⌘C` and Edit > Copy; that the real menu command reaches the page with nothing selected is expected from Chromium but was not observed. Pinch (ctrl+wheel) over the panel preview was not tried at all. Sending keys to the real library needs it in front, and macOS did not bring the menu-bar app forward from a script.
+- **Library keys, pinch and delete in the real app.** `↑`/`↓`, `⌘F`, `Enter`, `Backspace`, `⇧⌘C`, the right-click menu, the unsaved-edit guard and opening the next capture after **Delete** were checked only in the browser preview with a stubbed bridge. There, `document.execCommand("copy")` stood in for `⌘C` and Edit > Copy; that the real menu command reaches the page with nothing selected is expected from Chromium but was not observed. Pinch (ctrl+wheel) over the panel preview was not tried at all. Sending keys to the real library needs it in front, and macOS did not bring the menu-bar app forward from a script. On Windows these keys, the right-click menu and `Ctrl`+wheel ran in the real app (see the Windows pass); the unsaved-edit guard and opening the next capture after a **Delete** confirmed with real input did not.
 - **A `⌘W` miss.** In one of five dev runs after the UX changes, `⌘W` did not close the library, which stayed open until the app quit. Every later run, three dev and two packaged, closed it. The cause is unknown.
 - **Screen readers.** The panel has labels and keyboard paths, but no screen reader test ran.
 - **The problem panel followed by a new capture.** When the problem panel is visible and the user presses the shortcut again, the app hides the panel and waits 150 ms before it captures. Whether that wait keeps the panel out of the image was not observed.

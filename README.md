@@ -57,13 +57,14 @@ Click the Dock icon, choose **Recent captures…** or one of the newest captures
 - Drag the image itself into another app to drop it as a file. The file carries the pin too and is named after the thought.
 - **Edit thought** changes the text, also with `Enter`. `⌘↩` saves it and `Escape` cancels. Choosing another capture with an unsaved change asks first; `⌘↩` there saves and goes on.
 - **Delete** asks once, then opens the next capture the list shows. `Backspace` or `Delete` asks too.
-- **Pin** keeps the capture in a small window above every other app, also with `⌘P` or `Ctrl+P`. Click the pinned capture for **Close**, **Copy image** and **Show in library**; drag it anywhere.
+- **Pin** keeps the capture in a small window above every other app, also with `⌘P` or `Ctrl+P`. Click the pinned capture for **Close**, **Copy image** and **Show in library**, or right-click it on Windows; drag it anywhere, and drag an edge to resize it. `Escape` closes it.
 - Right-click a capture in the list for the same commands. On macOS the **Capture** menu lists them with their keys.
-- `⌘W` or `Ctrl+W` closes the window.
+- `⌘W` or `Ctrl+W` closes the window, also Settings and a pinned capture.
+- To keep the library above other apps, choose **View > Keep Library on Top** on macOS, or **Keep library on top** from the pin icon on Windows.
 
 ## Settings
 
-Choose **Settings…** from the app menu (`⌘,`) or the pin icon.
+Choose **Settings…** from the app menu (`⌘,`) or the pin icon. On Windows, `Ctrl+,` in the library opens it too.
 
 - **Open at Login** starts the app when you log in.
 - **Show app icon in** (macOS): the Dock and the menu bar, the Dock only, or the menu bar only. Without the Dock icon the app has no menu bar of its own.
