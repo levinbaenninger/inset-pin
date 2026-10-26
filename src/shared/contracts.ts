@@ -184,6 +184,8 @@ export const libraryContract = defineContract({
     copyNote: invoke(CaptureIdSchema, out<ActionResult>()),
     get: invoke(CaptureIdSchema, out<CaptureDetail | null>()),
     list: invoke(z.void(), out<CaptureSummary[]>()),
+    /** Ctrl+, on Windows, where no app menu offers Settings. */
+    openSettings: send(z.void()),
     pinToScreen: send(CaptureIdSchema),
     remove: invoke(CaptureIdSchema, out<ActionResult>()),
     startImageDrag: send(CaptureIdSchema),
