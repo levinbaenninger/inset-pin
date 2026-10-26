@@ -8,6 +8,7 @@ export type TrayAction =
   | "captureAfterDelay"
   | "openLibrary"
   | "openSettings"
+  | "toggleLibraryOnTop"
   | "quit";
 
 export interface RecentCapture {
@@ -28,6 +29,8 @@ export type TrayItem =
       readonly label: string;
       readonly enabled: boolean;
       readonly action: TrayAction | null;
+      /** A checkbox item, ticked or not. */
+      readonly checked?: boolean;
     }
   /** Opens the library on this capture. */
   | {
@@ -41,6 +44,8 @@ export interface TrayModel {
   readonly shortcutRegistered: boolean;
   readonly countdownPending: boolean;
   readonly isMac: boolean;
+  readonly libraryOpen: boolean;
+  readonly libraryOnTop: boolean;
   /** Newest first; only the first RECENT_IN_MENU are listed. */
   readonly recent: readonly RecentCapture[];
 }
@@ -141,6 +146,18 @@ export const trayMenu = (model: TrayModel): readonly TrayItem[] => {
       kind: "item",
       label: "Recent captures…",
     },
+    // macOS has it in the View menu; Windows has no app menu.
+    ...(model.isMac
+      ? []
+      : [
+          {
+            action: "toggleLibraryOnTop",
+            checked: model.libraryOnTop,
+            enabled: model.libraryOpen,
+            kind: "item",
+            label: "Keep library on top",
+          } as const,
+        ]),
     SEPARATOR,
     {
       action: "openSettings",

@@ -352,6 +352,8 @@ const start = async (): Promise<void> => {
     countdownPending: countdown !== null,
     draft: draft.tray(),
     isMac,
+    libraryOnTop: library.isFloating(),
+    libraryOpen: library.isOpen(),
     recent: store
       .list()
       .flatMap((entry) =>
@@ -369,6 +371,9 @@ const start = async (): Promise<void> => {
       library.open();
     } else if (action === "openSettings") {
       settingsWindow.open();
+    } else if (action === "toggleLibraryOnTop") {
+      library.setFloating(!library.isFloating());
+      menus.refresh();
     } else if (action === "quit") {
       app.quit();
     } else {

@@ -19,6 +19,8 @@ const base: TrayModel = {
   countdownPending: false,
   draft: "none",
   isMac: true,
+  libraryOnTop: false,
+  libraryOpen: false,
   recent: [],
   shortcutRegistered: true,
 };
@@ -81,6 +83,31 @@ describe(trayMenu, () => {
     expect(
       labels({ ...base, isMac: false, shortcutRegistered: false })[1]
     ).toBe("Ctrl+Alt+P is in use by another app");
+  });
+
+  it("keeps the library on top from the Windows menu, while it is open", () => {
+    const windows = { ...base, isMac: false };
+
+    expect(labels(windows)).toStrictEqual([
+      "New capture in 3 seconds",
+      "Capture under pointer: Ctrl+Alt+P",
+      "---",
+      "Recent captures…",
+      "Keep library on top",
+      "---",
+      "Settings…",
+      "Quit Inset Context Pin",
+    ]);
+    expect(trayMenu(windows)[4]).toStrictEqual({
+      action: "toggleLibraryOnTop",
+      checked: false,
+      enabled: false,
+      kind: "item",
+      label: "Keep library on top",
+    });
+    expect(
+      trayMenu({ ...windows, libraryOnTop: true, libraryOpen: true })[4]
+    ).toMatchObject({ checked: true, enabled: true });
   });
 
   it("restores a draft instead of starting a new capture", () => {

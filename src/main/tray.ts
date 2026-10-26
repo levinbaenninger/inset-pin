@@ -29,7 +29,7 @@ export const toMenuItem = (
 
   const { action } = item;
 
-  return {
+  const options: MenuItemConstructorOptions = {
     click:
       action === null
         ? undefined
@@ -39,6 +39,13 @@ export const toMenuItem = (
     enabled: item.enabled,
     label: item.label,
   };
+
+  if (item.checked !== undefined) {
+    options.type = "checkbox";
+    options.checked = item.checked;
+  }
+
+  return options;
 };
 
 export interface TrayOptions {
