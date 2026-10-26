@@ -88,11 +88,14 @@ const shortTitle = (title: string): string =>
     ? `${title.slice(0, TITLE_MAX - 1).trimEnd()}…`
     : title;
 
+/** Menus on both systems read a single & as the mark of an access key and drop it; && shows one. */
+const literalLabel = (text: string): string => text.replaceAll("&", "&&");
+
 const recentItems = (recent: readonly RecentCapture[]): readonly TrayItem[] =>
   recent.slice(0, RECENT_IN_MENU).map((capture) => ({
     id: capture.id,
     kind: "capture",
-    label: shortTitle(capture.title),
+    label: literalLabel(shortTitle(capture.title)),
   }));
 
 const captureItem = (model: TrayModel): TrayItem => ({

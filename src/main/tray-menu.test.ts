@@ -59,6 +59,24 @@ describe(trayMenu, () => {
     expect(trayMenu(model)[3]).toMatchObject({ id: ID, kind: "capture" });
   });
 
+  it("keeps an ampersand in a capture's name, after shortening it", () => {
+    const model = {
+      ...base,
+      recent: [
+        { id: CaptureIdSchema.parse(ID), title: "Q&A: totals & discounts" },
+        {
+          id: CaptureIdSchema.parse(ID.replace(/.$/u, "d")),
+          title: "Terms & conditions differ between the quote & the invoice",
+        },
+      ],
+    };
+
+    expect(labels(model).slice(3, 5)).toStrictEqual([
+      "Q&&A: totals && discounts",
+      "Terms && conditions differ between the q…",
+    ]);
+  });
+
   it("explains a shortcut conflict with the Windows label", () => {
     expect(
       labels({ ...base, isMac: false, shortcutRegistered: false })[1]
