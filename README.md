@@ -6,7 +6,9 @@ It is a prototype for testing whether pointing at a place can replace describing
 
 ## Install a test build
 
-Download a build from the [Releases page](https://github.com/levinbaenninger/inset-pin/releases). The **Preview build** release always holds the latest commit on `main`. Versioned releases hold tagged builds. Each pull request also uploads builds as workflow artifacts on its CI run.
+Install once. After that the app updates itself from the **Preview build** release, which always holds the latest commit on `main`.
+
+Download a build from the [Releases page](https://github.com/levinbaenninger/inset-pin/releases). Versioned releases hold tagged builds. Each pull request also uploads builds as workflow artifacts on its CI run, but those copies don't update themselves.
 
 The builds are not signed with a developer certificate, so each system warns once.
 
@@ -23,11 +25,17 @@ The builds are not signed with a developer certificate, so each system warns onc
 
 The first time it starts, a welcome window shows how to capture. The app has a Dock icon and a pin in the menu bar; **Settings…** (`⌘,`) can hide either.
 
+The app checks for a new build when it starts and every four hours, and downloads it in the background. When the download is ready, a notification says so and the pin menu offers **Restart to update to v…**. If you don't restart, the update installs when you quit. The pin menu always shows the running version and **Check for updates**. Every build is signed with the same certificate, so macOS keeps the screen access you granted.
+
+If you installed version 0.1.0, install a new build by hand one last time. Version 0.1.0 was signed ad-hoc, and macOS rejects an update for an app without a stable signature. Quit the app, repeat steps 1 to 5, and grant screen access again if macOS asks. Later builds arrive on their own.
+
 ### Windows
 
 1. Download `inset-context-pin-<version>-win-x64.exe` for the installer, or `-win-x64.zip` to run it without installing. Use `-win-arm64.zip` on an Arm device.
 2. If SmartScreen shows **Windows protected your PC**, click **More info**, then **Run anyway**.
 3. Start **Inset Context Pin**. The first time, a welcome window shows how to capture. After that, the app lives in the notification area of the taskbar as a pin. Windows hides new icons behind the `^` arrow next to the clock at first. Drag the pin onto the taskbar to keep it in view.
+
+The installer copy updates itself the same way. It checks on start and every four hours, and installs a downloaded update when you quit or choose **Restart to update**. The portable zips can't update themselves. To get a new portable build, download it again.
 
 The capture flow was tested on Windows 11 with real input. [IMPLEMENTATION_REPORT.md](IMPLEMENTATION_REPORT.md) lists what passed and what is still open, such as a complete run of the unpacked app and displays scaled above 100%.
 
@@ -130,9 +138,21 @@ It sends keys only while the marker or the app is in front, and clicks only on t
 
 ## Release
 
-`.github/workflows/release.yml` publishes builds to GitHub Releases. It has not run yet. Its first run happens when this branch reaches `main`.
+`.github/workflows/release.yml` publishes builds to GitHub Releases.
 
-- A push to `main` replaces the **Preview build** prerelease with fresh macOS and Windows builds.
-- A tag such as `v0.2.0` publishes a versioned release. The tag must match `version` in `package.json`.
+- A push to `main` builds macOS and Windows and updates the **Preview build** prerelease in place. That release is the update feed. Every installed copy reads `latest-mac.yml` or `latest.yml` from it. The workflow uploads the new installers first and the update metadata last, then deletes the old files. While it replaces `latest-mac.yml` and `latest.yml`, they are missing for a few seconds, and a check in that window fails and retries four hours later.
+- A tag such as `v0.2.0` publishes a versioned release. The tag must match `version` in `package.json`. Installed copies don't read versioned releases, so they keep following the preview builds.
 
-To cut a release, bump `version` in `package.json`, merge it, then run `git tag v<version>` and `git push origin v<version>`.
+`version` in `package.json` holds the release base. A preview build replaces its last number with the workflow run number, so `0.1.0` becomes `0.1.57`. The run number only grows, so each preview build is newer than the last. The workflow changes the version during the build and never commits it.
+
+To cut a versioned release, raise `version` in `package.json`, for example from `0.1.0` to `0.2.0`, and merge it. Then run `git tag v0.2.0` and `git push origin v0.2.0`. Previews built after that merge are `0.2.<run number>`. Never lower the base, or installed copies stop updating until the previews catch up.
+
+### Signing
+
+The macOS app is signed with a self-signed certificate, "Inset Prototype Signing". electron-builder only accepts certificates that macOS trusts, so `scripts/sign-mac.ts` signs the app with `codesign` after packing. The designated requirement names this certificate, so it is the same in every build. Squirrel.Mac installs an update only when the new app matches the running app's designated requirement, and macOS keeps privacy grants for the same reason.
+
+- Locally the hook uses the `inset-signing` keychain in `~/Library/Keychains`. Unlock it before you package.
+- In CI the release workflow imports the `MAC_SIGNING_P12_BASE64` and `MAC_SIGNING_P12_PASSWORD` secrets into a temporary keychain and sets `INSET_REQUIRE_SIGNING=1`, so a missing identity fails the release.
+- Without a keychain, as on pull requests from forks, the hook signs ad-hoc and warns. Those builds can't update an installed copy.
+
+To test an update locally, run `pnpm build`, then build two versions with `pnpm exec electron-builder --mac zip --arm64 --publish never -c.extraMetadata.version=<version> -c.directories.output=<dir>`. Serve the newer build's folder over HTTP and start the older app with `INSET_UPDATE_FEED_URL=<url>`. After the update, Squirrel.Mac relaunches the app without your environment variables, so the relaunched copy opens your real data. Stop it right away.
