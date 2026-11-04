@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readdirSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 
 import { CaptureIdSchema, deriveTitle } from "@shared/capture-record";
@@ -25,6 +25,8 @@ import {
   Notification,
   shell,
 } from "electron";
+// electron-updater defines autoUpdater as a getter, which an ESM named import cannot see.
+import electronUpdater from "electron-updater";
 
 import { appMenuTemplate, HELP_URL } from "./app-menu";
 import type { AppMenuActions, AppMenuState } from "./app-menu";
@@ -38,6 +40,7 @@ import { createLibraryWindow } from "./library-window";
 import type { LibraryWindow } from "./library-window";
 import { createPinWindows } from "./pin-windows";
 import { handleInsetProtocol, registerInsetScheme } from "./protocol";
+import { createQuitGate } from "./quit-gate";
 import { nodeSettingsFs, openSettingsStore } from "./settings-store";
 import { createSettingsWindow } from "./settings-window";
 import { failNextWrite, nodeStoreFs, openCaptureStore } from "./store";
@@ -46,7 +49,7 @@ import { createTray, toMenuItem } from "./tray";
 import type { MenuRunner, TrayIcon } from "./tray";
 import { dockMenu, trayMenu } from "./tray-menu";
 import type { TrayAction, TrayModel } from "./tray-menu";
-import { startUpdater } from "./updater";
+import { fromAutoUpdater, startUpdater } from "./updater";
 import type { Updater } from "./updater";
 import {
   appOrigin,
@@ -116,9 +119,13 @@ const trayIconPath = (): string => {
 
 const ignore = (): void => undefined;
 
-/** Only the NSIS install can update on Windows; a portable copy has no uninstaller beside it. */
+/**
+ * Only release builds carry the feed in app-update.yml; CI builds of a pull request don't.
+ * On Windows only the NSIS install can update; a portable copy has no uninstaller beside it.
+ */
 const canSelfUpdate = (): boolean =>
   app.isPackaged &&
+  existsSync(path.join(process.resourcesPath, "app-update.yml")) &&
   (process.platform !== "win32" ||
     readdirSync(path.dirname(process.execPath)).some((file) =>
       file.startsWith("Uninstall ")
@@ -156,6 +163,9 @@ const start = async (): Promise<void> => {
 
   // A pin and the library open each other, so a pin reaches the library through this once it exists.
   let openLibrary: LibraryWindow["open"] = ignore;
+
+  // The draft resumes a quit it held through the quit gate, which needs the draft first.
+  let resumeQuit = ignore;
 
   const settingsWindow = createSettingsWindow({
     preload: preloadPath("settings"),
@@ -238,7 +248,7 @@ const start = async (): Promise<void> => {
       return result;
     },
     quit: () => {
-      app.quit();
+      resumeQuit();
     },
     surface,
   });
@@ -379,22 +389,26 @@ const start = async (): Promise<void> => {
     version: app.getVersion(),
   });
 
-  /** False while a draft waits for the user; otherwise lets the hidden windows close. */
-  const releaseForQuit = (): boolean => {
-    if (draft.holdQuitIfNeeded() === "hold") {
-      return false;
-    }
+  const quitGate = createQuitGate({
+    holdIfNeeded: draft.holdQuitIfNeeded,
+    quit: () => {
+      app.quit();
+    },
+    // quitAndInstall closes every window before before-quit fires, so the gate releases them first.
+    releaseWindows: () => {
+      surface.allowClose();
+      settingsWindow.allowClose();
+    },
+    restartToUpdate: () => {
+      updater?.install();
+    },
+  });
 
-    surface.allowClose();
-    settingsWindow.allowClose();
+  resumeQuit = quitGate.resume;
 
-    return true;
-  };
-
-  // quitAndInstall closes every window before before-quit fires, so the hidden windows must be released first.
   const installUpdate = (): void => {
-    if (updater?.state().kind === "ready" && releaseForQuit()) {
-      updater.install();
+    if (updater?.state().kind === "ready") {
+      quitGate.restartToUpdate();
     }
   };
 
@@ -597,7 +611,7 @@ const start = async (): Promise<void> => {
     library.open();
   });
   app.on("before-quit", (event) => {
-    if (!releaseForQuit()) {
+    if (!quitGate.allowQuit()) {
       event.preventDefault();
     }
   });
@@ -608,6 +622,7 @@ const start = async (): Promise<void> => {
   if (canSelfUpdate()) {
     updater = startUpdater({
       feedUrl: process.env.INSET_UPDATE_FEED_URL,
+      source: fromAutoUpdater(electronUpdater.autoUpdater),
       onChange: () => {
         menus.refresh();
       },
