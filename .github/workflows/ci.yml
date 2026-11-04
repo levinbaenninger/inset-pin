@@ -61,7 +61,9 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm ${{ matrix.script }}
+      # Without the feed in app-update.yml, a pull request's build never replaces itself with a preview from main.
+      - run: pnpm ${{ matrix.script }} -c.publish=null
+        shell: bash
       - uses: actions/upload-artifact@v7
         with:
           name: inset-context-pin-${{ matrix.name }}
