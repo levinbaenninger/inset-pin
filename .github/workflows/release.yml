@@ -26,12 +26,16 @@ jobs:
             files: |
               release/*.dmg
               release/*.zip
+              release/*.blockmap
+              release/latest-mac.yml
           - name: Windows
             os: windows-latest
             script: package:win
             files: |
               release/*.exe
               release/*.zip
+              release/*.blockmap
+              release/latest.yml
     runs-on: ${{ matrix.os }}
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
@@ -47,6 +51,32 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: test "v$(node -p 'require("./package.json").version')" = "$GITHUB_REF_NAME"
+      # Installed copies update to the highest version, so every preview build needs a higher one than the last.
+      - name: Stamp preview version
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        shell: bash
+        run: |
+          base=$(node -p 'require("./package.json").version')
+          npm pkg set version="${base%.*}.$GITHUB_RUN_NUMBER"
+          node -p '"Building " + require("./package.json").version'
+      - name: Import signing identity
+        if: runner.os == 'macOS'
+        env:
+          P12_BASE64: ${{ secrets.MAC_SIGNING_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.MAC_SIGNING_P12_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/inset-signing.keychain-db"
+          password=$(openssl rand -hex 24)
+          echo "$P12_BASE64" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/signing.p12" -k "$keychain" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/signing.p12"
+          echo "INSET_SIGNING_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+          echo "INSET_REQUIRE_SIGNING=1" >> "$GITHUB_ENV"
       - run: pnpm ${{ matrix.script }}
       - uses: actions/upload-artifact@v7
         with:
@@ -58,6 +88,7 @@ jobs:
   publish:
     name: Publish
     needs: package
+    if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
@@ -74,12 +105,33 @@ jobs:
             --title "Inset Context Pin $GITHUB_REF_NAME" \
             --notes-file .github/release-notes.md \
             --verify-tag
+      # The preview release is the update feed. It is updated in place, never deleted, so installed copies never find it missing.
       - name: Publish rolling preview from main
-        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        if: github.ref == 'refs/heads/main'
         run: |
-          gh release delete preview --cleanup-tag --yes || true
-          gh release create preview dist/* \
-            --target "$GITHUB_SHA" \
-            --title "Preview build (main, ${GITHUB_SHA::7})" \
+          title="Preview build (main, ${GITHUB_SHA::7})"
+
+          if ! gh release view preview > /dev/null 2>&1; then
+            gh release create preview dist/* \
+              --target "$GITHUB_SHA" \
+              --title "$title" \
+              --notes-file .github/release-notes.md \
+              --prerelease
+            exit 0
+          fi
+
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/preview" \
+            -f sha="$GITHUB_SHA" -F force=true > /dev/null
+          gh release upload preview $(ls dist/* | grep -v '\.yml$') --clobber
+          gh release upload preview dist/*.yml --clobber
+
+          for asset in $(gh release view preview --json assets --jq '.assets[].name'); do
+            if [ ! -e "dist/$asset" ]; then
+              gh release delete-asset preview "$asset" --yes
+            fi
+          done
+
+          gh release edit preview \
+            --title "$title" \
             --notes-file .github/release-notes.md \
             --prerelease

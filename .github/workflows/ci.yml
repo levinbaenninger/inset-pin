@@ -61,7 +61,7 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm ${{ matrix.script }}
+      - run: pnpm ${{ matrix.script }} --config electron-builder.pr.yml
       - uses: actions/upload-artifact@v7
         with:
           name: inset-context-pin-${{ matrix.name }}

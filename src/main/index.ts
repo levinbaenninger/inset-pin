@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 
 import { CaptureIdSchema, deriveTitle } from "@shared/capture-record";
@@ -24,6 +25,8 @@ import {
   Notification,
   shell,
 } from "electron";
+// electron-updater defines autoUpdater as a getter, which an ESM named import cannot see.
+import electronUpdater from "electron-updater";
 
 import { appMenuTemplate, HELP_URL } from "./app-menu";
 import type { AppMenuActions, AppMenuState } from "./app-menu";
@@ -37,6 +40,7 @@ import { createLibraryWindow } from "./library-window";
 import type { LibraryWindow } from "./library-window";
 import { createPinWindows } from "./pin-windows";
 import { handleInsetProtocol, registerInsetScheme } from "./protocol";
+import { createQuitGate } from "./quit-gate";
 import { nodeSettingsFs, openSettingsStore } from "./settings-store";
 import { createSettingsWindow } from "./settings-window";
 import { failNextWrite, nodeStoreFs, openCaptureStore } from "./store";
@@ -45,6 +49,8 @@ import { createTray, toMenuItem } from "./tray";
 import type { MenuRunner, TrayIcon } from "./tray";
 import { dockMenu, trayMenu } from "./tray-menu";
 import type { TrayAction, TrayModel } from "./tray-menu";
+import { fromAutoUpdater, startUpdater } from "./updater";
+import type { Updater } from "./updater";
 import {
   appOrigin,
   pageUrl,
@@ -113,6 +119,18 @@ const trayIconPath = (): string => {
 
 const ignore = (): void => undefined;
 
+/**
+ * Only release builds carry the feed in app-update.yml; CI builds of a pull request don't.
+ * On Windows only the NSIS install can update; a portable copy has no uninstaller beside it.
+ */
+const canSelfUpdate = (): boolean =>
+  app.isPackaged &&
+  existsSync(path.join(process.resourcesPath, "app-update.yml")) &&
+  (process.platform !== "win32" ||
+    readdirSync(path.dirname(process.execPath)).some((file) =>
+      file.startsWith("Uninstall ")
+    ));
+
 const start = async (): Promise<void> => {
   await app.whenReady();
   secureSession();
@@ -141,8 +159,13 @@ const start = async (): Promise<void> => {
   // Set once every window exists; until then there is no menu to rebuild.
   const menus = { refresh: ignore };
 
+  let updater: Updater | null = null;
+
   // A pin and the library open each other, so a pin reaches the library through this once it exists.
   let openLibrary: LibraryWindow["open"] = ignore;
+
+  // The draft resumes a quit it held through the quit gate, which needs the draft first.
+  let resumeQuit = ignore;
 
   const settingsWindow = createSettingsWindow({
     preload: preloadPath("settings"),
@@ -225,7 +248,7 @@ const start = async (): Promise<void> => {
       return result;
     },
     quit: () => {
-      app.quit();
+      resumeQuit();
     },
     surface,
   });
@@ -362,7 +385,32 @@ const start = async (): Promise<void> => {
           : []
       ),
     shortcutRegistered,
+    update: updater?.state() ?? null,
+    version: app.getVersion(),
   });
+
+  const quitGate = createQuitGate({
+    holdIfNeeded: draft.holdQuitIfNeeded,
+    quit: () => {
+      app.quit();
+    },
+    // quitAndInstall closes every window before before-quit fires, so the gate releases them first.
+    releaseWindows: () => {
+      surface.allowClose();
+      settingsWindow.allowClose();
+    },
+    restartToUpdate: () => {
+      updater?.install();
+    },
+  });
+
+  resumeQuit = quitGate.resume;
+
+  const installUpdate = (): void => {
+    if (updater?.state().kind === "ready") {
+      quitGate.restartToUpdate();
+    }
+  };
 
   const run = (action: TrayAction): void => {
     if (action === "showDraft") {
@@ -374,6 +422,10 @@ const start = async (): Promise<void> => {
     } else if (action === "toggleLibraryOnTop") {
       library.setFloating(!library.isFloating());
       menus.refresh();
+    } else if (action === "checkForUpdates") {
+      updater?.check();
+    } else if (action === "installUpdate") {
+      installUpdate();
     } else if (action === "quit") {
       app.quit();
     } else {
@@ -390,6 +442,10 @@ const start = async (): Promise<void> => {
 
   const menuActions: AppMenuActions = {
     captureAfterDelay,
+    checkForUpdates: () => {
+      updater?.check();
+    },
+    installUpdate,
     libraryCommand: library.command,
     openHelp: () => {
       void shell.openExternal(HELP_URL);
@@ -415,6 +471,7 @@ const start = async (): Promise<void> => {
       floatOnTop: library.isFloating(),
       libraryFocused: library.isFocused(),
       libraryOpen: library.isOpen(),
+      update: model.update,
     };
 
     const key = JSON.stringify([model, appState, tray !== null]);
@@ -554,16 +611,28 @@ const start = async (): Promise<void> => {
     library.open();
   });
   app.on("before-quit", (event) => {
-    if (draft.holdQuitIfNeeded() === "hold") {
+    if (!quitGate.allowQuit()) {
       event.preventDefault();
-    } else {
-      surface.allowClose();
-      settingsWindow.allowClose();
     }
   });
   app.on("will-quit", () => {
     globalShortcut.unregisterAll();
   });
+
+  if (canSelfUpdate()) {
+    updater = startUpdater({
+      feedUrl: process.env.INSET_UPDATE_FEED_URL,
+      source: fromAutoUpdater(electronUpdater.autoUpdater),
+      onChange: () => {
+        menus.refresh();
+      },
+      onReady: (version) => {
+        showNotification(
+          `Version ${version} is ready. Choose “Restart to update” from the pin icon, or it installs when you quit.`
+        );
+      },
+    });
+  }
 
   // Until the first capture, the library is a welcome that says how to capture and where the app lives.
   if (store.list().length === 0) {

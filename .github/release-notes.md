@@ -1,4 +1,6 @@
-Unsigned test build of Inset Context Pin. See the README section "Install a test build" for the macOS Gatekeeper and Windows SmartScreen steps.
+Test build of Inset Context Pin. It is not signed with a developer certificate. See the README section "Install a test build" for the macOS Gatekeeper and Windows SmartScreen steps.
+
+Install once. The macOS app and the Windows installer update themselves from the Preview build release. The portable Windows zips don't.
 
 | Platform | File |
 | --- | --- |

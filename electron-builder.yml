@@ -13,6 +13,7 @@ extraResources:
     filter:
       - "*.png"
 asar: true
+afterPack: scripts/sign-mac.ts
 mac:
   category: public.app-category.productivity
   target:
@@ -20,7 +21,7 @@ mac:
       arch: [arm64, x64]
     - target: zip
       arch: [arm64, x64]
-  identity: "-"
+  identity: null
   hardenedRuntime: false
   extendInfo:
     LSUIElement: true
@@ -36,4 +37,6 @@ nsis:
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
-publish: null
+publish:
+  provider: generic
+  url: https://github.com/levinbaenninger/inset-pin/releases/download/preview

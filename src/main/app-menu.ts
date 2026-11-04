@@ -1,6 +1,9 @@
 import type { LibraryCommand } from "@shared/contracts";
 import type { MenuItemConstructorOptions } from "electron";
 
+import { canCheck } from "./update-state";
+import type { UpdateState } from "./update-state";
+
 export const HELP_URL = "https://github.com/levinbaenninger/inset-pin#readme";
 
 export interface AppMenuState {
@@ -11,6 +14,8 @@ export interface AppMenuState {
   readonly floatOnTop: boolean;
   /** No new capture while a draft waits to be saved or discarded. */
   readonly canCapture: boolean;
+  /** Null where the app can't update itself. */
+  readonly update: UpdateState | null;
 }
 
 export interface AppMenuActions {
@@ -20,9 +25,33 @@ export interface AppMenuActions {
   readonly libraryCommand: (command: LibraryCommand) => void;
   readonly setFloatOnTop: (on: boolean) => void;
   readonly openHelp: () => void;
+  readonly checkForUpdates: () => void;
+  readonly installUpdate: () => void;
 }
 
 const SEPARATOR: MenuItemConstructorOptions = { type: "separator" };
+
+const updateItems = (
+  update: UpdateState | null,
+  actions: AppMenuActions
+): MenuItemConstructorOptions[] => {
+  if (update === null) {
+    return [];
+  }
+
+  return [
+    update.kind === "ready"
+      ? {
+          click: actions.installUpdate,
+          label: `Restart to Update to v${update.version}`,
+        }
+      : {
+          click: actions.checkForUpdates,
+          enabled: canCheck(update),
+          label: "Check for Updates…",
+        },
+  ];
+};
 
 /**
  * The shown capture's commands with their keys, so the keys can be found.
@@ -67,6 +96,7 @@ export const appMenuTemplate = (
     label: "Inset Context Pin",
     submenu: [
       { role: "about" },
+      ...updateItems(state.update, actions),
       SEPARATOR,
       {
         accelerator: "CommandOrControl+,",

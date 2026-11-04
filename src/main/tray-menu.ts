@@ -2,6 +2,8 @@ import type { CaptureId } from "@shared/capture-record";
 import { shortcutLabel } from "@shared/shortcut";
 
 import type { TrayState } from "./draft";
+import { canCheck } from "./update-state";
+import type { UpdateState } from "./update-state";
 
 export type TrayAction =
   | "showDraft"
@@ -9,6 +11,8 @@ export type TrayAction =
   | "openLibrary"
   | "openSettings"
   | "toggleLibraryOnTop"
+  | "checkForUpdates"
+  | "installUpdate"
   | "quit";
 
 export interface RecentCapture {
@@ -48,6 +52,9 @@ export interface TrayModel {
   readonly libraryOnTop: boolean;
   /** Newest first; only the first RECENT_IN_MENU are listed. */
   readonly recent: readonly RecentCapture[];
+  readonly version: string;
+  /** Null where the app can't update itself: a dev run or a portable Windows copy. */
+  readonly update: UpdateState | null;
 }
 
 const SEPARATOR: TrayItem = { kind: "separator" };
@@ -110,6 +117,64 @@ const captureItem = (model: TrayModel): TrayItem => ({
   label: captureLabel(model),
 });
 
+const versionLabel = (version: string, update: UpdateState): string => {
+  if (update.kind === "upToDate") {
+    return `Version ${version} (up to date)`;
+  }
+
+  return update.kind === "error"
+    ? `Version ${version} (update failed)`
+    : `Version ${version}`;
+};
+
+const checkLabel = (update: UpdateState): string => {
+  if (update.kind === "checking") {
+    return "Checking for updates…";
+  }
+
+  if (update.kind === "available") {
+    return `Downloading v${update.version}…`;
+  }
+
+  return update.kind === "downloading"
+    ? `Downloading v${update.version}… ${update.percent}%`
+    : "Check for updates";
+};
+
+const updateItems = (
+  version: string,
+  update: UpdateState | null
+): TrayItem[] => {
+  const versionItem: TrayItem = {
+    action: null,
+    enabled: false,
+    kind: "item",
+    label:
+      update === null ? `Version ${version}` : versionLabel(version, update),
+  };
+
+  if (update === null) {
+    return [versionItem];
+  }
+
+  return [
+    versionItem,
+    update.kind === "ready"
+      ? {
+          action: "installUpdate",
+          enabled: true,
+          kind: "item",
+          label: `Restart to update to v${update.version}`,
+        }
+      : {
+          action: "checkForUpdates",
+          enabled: canCheck(update),
+          kind: "item",
+          label: checkLabel(update),
+        },
+  ];
+};
+
 /** The Dock icon's menu on macOS, which adds its own window and Quit items below. */
 export const dockMenu = (model: TrayModel): readonly TrayItem[] => {
   const recent = recentItems(model.recent);
@@ -158,6 +223,8 @@ export const trayMenu = (model: TrayModel): readonly TrayItem[] => {
             label: "Keep library on top",
           } as const,
         ]),
+    SEPARATOR,
+    ...updateItems(model.version, model.update),
     SEPARATOR,
     {
       action: "openSettings",
