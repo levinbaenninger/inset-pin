@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readdirSync } from "node:fs";
 import path from "node:path";
 
 import { CaptureIdSchema, deriveTitle } from "@shared/capture-record";
@@ -45,6 +46,8 @@ import { createTray, toMenuItem } from "./tray";
 import type { MenuRunner, TrayIcon } from "./tray";
 import { dockMenu, trayMenu } from "./tray-menu";
 import type { TrayAction, TrayModel } from "./tray-menu";
+import { startUpdater } from "./updater";
+import type { Updater } from "./updater";
 import {
   appOrigin,
   pageUrl,
@@ -113,6 +116,14 @@ const trayIconPath = (): string => {
 
 const ignore = (): void => undefined;
 
+/** Only the NSIS install can update on Windows; a portable copy has no uninstaller beside it. */
+const canSelfUpdate = (): boolean =>
+  app.isPackaged &&
+  (process.platform !== "win32" ||
+    readdirSync(path.dirname(process.execPath)).some((file) =>
+      file.startsWith("Uninstall ")
+    ));
+
 const start = async (): Promise<void> => {
   await app.whenReady();
   secureSession();
@@ -140,6 +151,8 @@ const start = async (): Promise<void> => {
 
   // Set once every window exists; until then there is no menu to rebuild.
   const menus = { refresh: ignore };
+
+  let updater: Updater | null = null;
 
   // A pin and the library open each other, so a pin reaches the library through this once it exists.
   let openLibrary: LibraryWindow["open"] = ignore;
@@ -362,7 +375,28 @@ const start = async (): Promise<void> => {
           : []
       ),
     shortcutRegistered,
+    update: updater?.state() ?? null,
+    version: app.getVersion(),
   });
+
+  /** False while a draft waits for the user; otherwise lets the hidden windows close. */
+  const releaseForQuit = (): boolean => {
+    if (draft.holdQuitIfNeeded() === "hold") {
+      return false;
+    }
+
+    surface.allowClose();
+    settingsWindow.allowClose();
+
+    return true;
+  };
+
+  // quitAndInstall closes every window before before-quit fires, so the hidden windows must be released first.
+  const installUpdate = (): void => {
+    if (updater?.state().kind === "ready" && releaseForQuit()) {
+      updater.install();
+    }
+  };
 
   const run = (action: TrayAction): void => {
     if (action === "showDraft") {
@@ -374,6 +408,10 @@ const start = async (): Promise<void> => {
     } else if (action === "toggleLibraryOnTop") {
       library.setFloating(!library.isFloating());
       menus.refresh();
+    } else if (action === "checkForUpdates") {
+      updater?.check();
+    } else if (action === "installUpdate") {
+      installUpdate();
     } else if (action === "quit") {
       app.quit();
     } else {
@@ -390,6 +428,10 @@ const start = async (): Promise<void> => {
 
   const menuActions: AppMenuActions = {
     captureAfterDelay,
+    checkForUpdates: () => {
+      updater?.check();
+    },
+    installUpdate,
     libraryCommand: library.command,
     openHelp: () => {
       void shell.openExternal(HELP_URL);
@@ -415,6 +457,7 @@ const start = async (): Promise<void> => {
       floatOnTop: library.isFloating(),
       libraryFocused: library.isFocused(),
       libraryOpen: library.isOpen(),
+      update: model.update,
     };
 
     const key = JSON.stringify([model, appState, tray !== null]);
@@ -554,16 +597,27 @@ const start = async (): Promise<void> => {
     library.open();
   });
   app.on("before-quit", (event) => {
-    if (draft.holdQuitIfNeeded() === "hold") {
+    if (!releaseForQuit()) {
       event.preventDefault();
-    } else {
-      surface.allowClose();
-      settingsWindow.allowClose();
     }
   });
   app.on("will-quit", () => {
     globalShortcut.unregisterAll();
   });
+
+  if (canSelfUpdate()) {
+    updater = startUpdater({
+      feedUrl: process.env.INSET_UPDATE_FEED_URL,
+      onChange: () => {
+        menus.refresh();
+      },
+      onReady: (version) => {
+        showNotification(
+          `Version ${version} is ready. Choose “Restart to update” from the pin icon, or it installs when you quit.`
+        );
+      },
+    });
+  }
 
   // Until the first capture, the library is a welcome that says how to capture and where the app lives.
   if (store.list().length === 0) {

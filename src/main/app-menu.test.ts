@@ -4,9 +4,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import { appMenuTemplate } from "./app-menu";
 import type { AppMenuActions, AppMenuState } from "./app-menu";
+import { IDLE } from "./update-state";
 
 const actions = (): AppMenuActions => ({
   captureAfterDelay: vi.fn<() => void>(),
+  checkForUpdates: vi.fn<() => void>(),
+  installUpdate: vi.fn<() => void>(),
   libraryCommand: vi.fn<(command: LibraryCommand) => void>(),
   openHelp: vi.fn<() => void>(),
   openLibrary: vi.fn<() => void>(),
@@ -19,6 +22,7 @@ const state: AppMenuState = {
   floatOnTop: false,
   libraryFocused: true,
   libraryOpen: true,
+  update: IDLE,
 };
 
 const submenu = (
@@ -90,6 +94,7 @@ describe(appMenuTemplate, () => {
         floatOnTop: false,
         libraryFocused: false,
         libraryOpen: false,
+        update: IDLE,
       },
       actions()
     );
@@ -124,5 +129,38 @@ describe(appMenuTemplate, () => {
 
     expect(roles).not.toContain("zoomIn");
     expect(roles).not.toContain("resetZoom");
+  });
+
+  it("checks for updates, then offers the restart once one has downloaded", () => {
+    const run = actions();
+
+    const app = (update: AppMenuState["update"]) =>
+      submenu(
+        appMenuTemplate({ ...state, update }, run),
+        "Inset Context Pin"
+      )[1];
+
+    expect(app(IDLE)).toMatchObject({
+      enabled: true,
+      label: "Check for Updates…",
+    });
+    expect(app({ kind: "checking" })).toMatchObject({ enabled: false });
+
+    const restart = app({ kind: "ready", version: "0.1.58" });
+
+    // @ts-expect-error the click handler ignores its arguments
+    restart?.click?.();
+
+    expect(restart?.label).toBe("Restart to Update to v0.1.58");
+    expect(run.installUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("has no update item where the app can't update itself", () => {
+    const labels = submenu(
+      appMenuTemplate({ ...state, update: null }, actions()),
+      "Inset Context Pin"
+    ).map((entry) => entry.label ?? entry.role ?? entry.type);
+
+    expect(labels.slice(0, 2)).toStrictEqual(["about", "separator"]);
   });
 });

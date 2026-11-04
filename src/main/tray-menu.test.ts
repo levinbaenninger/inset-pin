@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { dockMenu, trayMenu, trayTooltip } from "./tray-menu";
 import type { TrayModel } from "./tray-menu";
+import { IDLE } from "./update-state";
 
 const labels = (model: TrayModel, menu = trayMenu): string[] =>
   menu(model).map((item) => (item.kind === "separator" ? "---" : item.label));
@@ -23,6 +24,8 @@ const base: TrayModel = {
   libraryOpen: false,
   recent: [],
   shortcutRegistered: true,
+  update: IDLE,
+  version: "0.1.57",
 };
 
 describe(trayMenu, () => {
@@ -32,6 +35,9 @@ describe(trayMenu, () => {
       "Capture under pointer: ⌥⌘P",
       "---",
       "Recent captures…",
+      "---",
+      "Version 0.1.57",
+      "Check for updates",
       "---",
       "Settings…",
       "Quit Inset Context Pin",
@@ -95,6 +101,9 @@ describe(trayMenu, () => {
       "Recent captures…",
       "Keep library on top",
       "---",
+      "Version 0.1.57",
+      "Check for updates",
+      "---",
       "Settings…",
       "Quit Inset Context Pin",
     ]);
@@ -133,6 +142,75 @@ describe(trayMenu, () => {
       kind: "item",
       label: "Capturing in 3 seconds…",
     });
+  });
+});
+
+const updateItems = (update: TrayModel["update"]): string[] =>
+  labels({ ...base, update }).slice(5, 7);
+
+describe("the tray's update items", () => {
+  it("follows a check from start to the download", () => {
+    expect(updateItems({ kind: "checking" })).toStrictEqual([
+      "Version 0.1.57",
+      "Checking for updates…",
+    ]);
+    expect(updateItems({ kind: "available", version: "0.1.58" })).toStrictEqual(
+      ["Version 0.1.57", "Downloading v0.1.58…"]
+    );
+    expect(
+      updateItems({ kind: "downloading", percent: 42, version: "0.1.58" })
+    ).toStrictEqual(["Version 0.1.57", "Downloading v0.1.58… 42%"]);
+    expect(
+      trayMenu({ ...base, update: { kind: "checking" } })[6]
+    ).toMatchObject({ action: "checkForUpdates", enabled: false });
+  });
+
+  it("says when the app is up to date or the check failed, and checks again", () => {
+    expect(updateItems({ kind: "upToDate" })).toStrictEqual([
+      "Version 0.1.57 (up to date)",
+      "Check for updates",
+    ]);
+    expect(
+      trayMenu({
+        ...base,
+        update: { kind: "error", message: "offline" },
+      }).slice(5, 7)
+    ).toStrictEqual([
+      {
+        action: null,
+        enabled: false,
+        kind: "item",
+        label: "Version 0.1.57 (update failed)",
+      },
+      {
+        action: "checkForUpdates",
+        enabled: true,
+        kind: "item",
+        label: "Check for updates",
+      },
+    ]);
+  });
+
+  it("offers the restart once the update has downloaded", () => {
+    expect(
+      trayMenu({ ...base, update: { kind: "ready", version: "0.1.58" } })[6]
+    ).toStrictEqual({
+      action: "installUpdate",
+      enabled: true,
+      kind: "item",
+      label: "Restart to update to v0.1.58",
+    });
+  });
+});
+
+describe("a copy that can't update itself", () => {
+  it("shows only its version", () => {
+    expect(labels({ ...base, update: null }).slice(4, 8)).toStrictEqual([
+      "---",
+      "Version 0.1.57",
+      "---",
+      "Settings…",
+    ]);
   });
 });
 
