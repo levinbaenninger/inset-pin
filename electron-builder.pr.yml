@@ -1,0 +1,4 @@
+# Pull request builds leave out app-update.yml, so an installed one never replaces itself with a preview from main.
+# The CLI can't set publish to null: -c.publish=null arrives as the provider name "null".
+extends: ./electron-builder.yml
+publish: null

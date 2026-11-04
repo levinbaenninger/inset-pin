@@ -61,9 +61,7 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # Without the feed in app-update.yml, a pull request's build never replaces itself with a preview from main.
-      - run: pnpm ${{ matrix.script }} -c.publish=null
-        shell: bash
+      - run: pnpm ${{ matrix.script }} --config electron-builder.pr.yml
       - uses: actions/upload-artifact@v7
         with:
           name: inset-context-pin-${{ matrix.name }}
