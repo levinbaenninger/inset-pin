@@ -9,9 +9,17 @@ export interface EntryText {
   readonly pins: readonly { readonly label?: string }[];
 }
 
+/** What Copy Text (⌘C) puts on the clipboard: the title, then the description when there is one. */
+export const entryPlainText = (
+  entry: Pick<EntryText, "title" | "description">
+): string =>
+  [entry.title.trim(), entry.description.trim()]
+    .filter((part) => part !== "")
+    .join("\n\n");
+
 /**
- * A capture as plain text, as Copy Text and Copy after saving put it on the
- * clipboard: the title, then each part that has something in it.
+ * What Copy with Details (⌥⌘C) and Copy after saving put on the clipboard:
+ * the title, then each part that has something in it.
  */
 export const entryText = (entry: EntryText): string => {
   const steps = entry.steps

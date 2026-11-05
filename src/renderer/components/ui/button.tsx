@@ -8,7 +8,9 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground hover:bg-primary/80",
+        // Its focus ring is its own colour, one soft halo rather than a grey border inside a grey ring.
+        default:
+          "bg-primary text-primary-foreground hover:bg-primary/80 focus-visible:border-primary focus-visible:ring-primary/30",
         outline:
           "border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
         secondary:

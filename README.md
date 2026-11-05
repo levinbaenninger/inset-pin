@@ -43,8 +43,8 @@ The capture flow was tested on Windows 11 with real input. [IMPLEMENTATION_REPOR
 
 1. Move the pointer over the detail that matters, in any app.
 2. Press `⌥⌘P` on macOS or `Ctrl+Alt+P` on Windows. A small panel opens beside the pointer with a crop around that point. It has no pin yet.
-3. Click in the preview to place pin 1 ("Click to place pin 1" shows until you do). Each further click places the next numbered pin. Drag a pin to move it; click one, or press `1`–`9`, to select it, then nudge it with the arrow keys (`Shift` for 10 points) or remove it with `⌫`. `P` turns pin mode off and on, and `⇧P` drops a pin under the pointer.
-4. Type a **Title**. **Add…** adds a **Description** (`⌘D`), **Next steps** (`⇧⌘S`) and a **Due** date (`⇧⌘D`: Today, Tomorrow, This weekend, Next week, or Pick a date…). On Windows the keys use `Ctrl`.
+3. Click in the preview to place pin 1 ("Click to place pin 1" shows until you do). Each further click places the next numbered pin, and the title keeps the keyboard, so you can type on. Drag a pin to move it; click one, or press `1`–`9`, to select it, then nudge it with the arrow keys (one image pixel, `Shift` for 10) or remove it with `⌫`. `P` turns pin mode off and on, and `⇧P` drops a pin under the pointer.
+4. Type a **Title**. **Add…** adds a **Description** (`⌘D`), **Next steps** (`⇧⌘S`) and **Due** (`⇧⌘D`: Today, Tomorrow, This weekend, Next week, or Pick a date…). On Windows the keys use `Ctrl`.
 5. Optional: adjust the crop. Drag the frame to move it, drag a corner or an edge, or pinch; **Tighten** (`⌘=`) and **Widen** (`⌘−`) do it in steps. The crop always keeps every pin inside.
 6. Press `⌘↩` or `Ctrl+Enter`, or click **Save**. Saving needs a title.
 
@@ -56,18 +56,18 @@ To quit, choose **Quit Inset Context Pin** from the pin icon. If a draft has any
 
 ## The library
 
-Click the Dock icon, choose **Recent captures…** from the pin icon, or start the app again while it runs. The sidebar lists captures by day, newest first; drag its edge to resize it, or hide it with `⌃⌘S` (`Ctrl+B`). Each row shows the image with its pins, the title, and the due date and step progress.
+Click the Dock icon, choose **Recent captures…** from the pin icon, or start the app again while it runs. The sidebar lists captures by day, newest first; drag its edge to resize it, or hide it with `⌃⌘S` (`Ctrl+B`). Each row shows the image with its pins, the title, the step progress and, on the right, the Due chip ("Overdue" once the day has passed).
 
-- **Edit in place.** Title, description, next steps, due date and pin labels save as you type. The chips under the title add a missing field, and the same keys work: `⌘D`, `⇧⌘S`, `⇧⌘D`. `Return` edits the title.
-- **Pins.** Under the image, every pin is listed as "1 · label". Press `P` or click **Add pins** to place more, drag a pin to move it, and `⌫` removes the selected one.
-- **Search** with `⌘F` or `Ctrl+F`. It looks in titles, descriptions, steps and pin labels. `due:today`, `due:tomorrow`, `due:week`, `due:overdue`, `due:any` and `due:none` filter by due date; the filter button in the field offers them too. Matches are highlighted.
+- **Edit in place.** Title, description, next steps, Due and pin labels save as you type. The chips under the title add a missing field, and the same keys work: `⌘D`, `⇧⌘S`, `⇧⌘D`. `Return` edits the title. The Due chip's `×` clears the day.
+- **Pins.** Under the image, every pin is listed as "1 · label". Press `P` or click **Add pins** to place more, drag a pin to move it, and `⌫` removes the selected one. `⌘Z` undoes a pin edit (a whole drag at once) and `⇧⌘Z` redoes it. A pin stays selected only while the image has the focus.
+- **Search** with `⌘F` or `Ctrl+F`. It looks in titles, descriptions, steps and pin labels. `due:today`, `due:overdue`, `due:week` (overdue, today and the next six days), `due:any` and `due:none` filter by Due. Typing `due:` lists them; the filter button in the field offers them too. Matches are highlighted.
 - **Mark as done** (`Space`, or the check button) moves a capture to **Done**, at the foot of the sidebar; the notice offers Undo.
-- **Copy as Text** (`⌘C` when nothing is selected) copies the title, description, steps as `- [ ]` items, `Due: <date>` and the pin labels. **Copy Image** (`⇧⌘C`) copies the crop with every pin drawn on it. Dragging the image into another app drops the same picture as a file.
+- **Copy Text** (`⌘C` when nothing is selected) copies the title and description. **Copy with Details** (`⌥⌘C`) adds the steps as `- [ ]` items, `Due: <date>` and the pin labels. **Copy Image** (`⇧⌘C`) copies the crop with every pin drawn on it. Dragging the image into another app drops the same picture as a file. Every copy saves what you are typing first, so it matches the screen.
 - **Float on Top** (`⌥⌘F` or `Ctrl+Alt+F`, previously "Pin") keeps the capture in a small window above every other app.
 - **Delete…** (`⌫`) asks first.
 - The ⋯ button and a right-click on a row hold the same commands with their keys. **Settings** and **Keyboard shortcuts** sit at the foot of the sidebar.
 
-Captures saved by an older version open as before: the first line of the old thought becomes the title, the rest the description, and the old pin becomes pin 1. The file is rewritten in the new format only when you change the capture.
+Captures saved by an older version open with nothing lost. A one-line thought becomes the title. A longer one stays whole, exactly as typed, as the description, and its first line becomes the title. The old pin becomes pin 1. The file is rewritten in the new format only when you change the capture.
 
 ## Settings
 
@@ -114,7 +114,7 @@ To build installers on your machine, run `pnpm package:mac` on macOS or `pnpm pa
 
 ### Verify on the real macOS desktop
 
-`scripts/e2e/verify-macos.ts` drives the real app from outside. It presses the global shortcut over a marker window and checks the panel size and position. It also checks draft retention, focus return, the saved pin pixel, widening near a screen edge, the tray fallback, failed writes, restarts, the library, and the quit dialog. It reads the app's own event log and real window bounds.
+`scripts/e2e/verify-macos.ts` drives the real app from outside. It presses the global shortcut over a marker window and checks the panel size and position. A capture starts without a pin, so before each save the script clicks the preview where the pointer was, from the geometry the app logs with `panelShown`. It also checks draft retention, focus return, the saved pin pixel, widening near a screen edge, the tray fallback, failed writes, restarts, the library, and the quit dialog. It reads the app's own event log and real window bounds.
 
 ```sh
 node scripts/e2e/verify-macos.ts dev       # builds, then tests out/ with Electron

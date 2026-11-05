@@ -12,9 +12,10 @@ declare global {
   var __fitted: number | undefined;
 }
 
+/** A capture as the fake bridge keeps it; a read-only entry has no status. */
 interface FixtureCapture {
   readonly id: string;
-  status: { readonly kind: string; readonly at?: string };
+  status?: { readonly kind: string; readonly at?: string };
 }
 
 export interface BridgeInput {
@@ -80,9 +81,11 @@ export const installBridge = (input: BridgeInput): void => {
     },
     library: {
       captureSoon: nothing,
+      copyDetails: async () => await resolve(OK),
       copyImage: async () => await resolve(OK),
       copyText: async () => await resolve(OK),
       floatOnTop: nothing,
+      flushed: nothing,
       get: async (id: string) => await resolve(find(id) ?? null),
       list: async () => await resolve(captures),
       on,

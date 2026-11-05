@@ -403,7 +403,7 @@ const draftView = (
 
 interface SceneData {
   view?: object;
-  captures?: readonly object[];
+  captures?: BridgeInput["captures"];
   capture?: object;
   commands?: readonly string[];
 }
@@ -514,6 +514,22 @@ const makeScenes = (
       platforms: ["macos"],
     },
     {
+      // Type, click the detail, type on: the click places pin 1 and the title keeps the keyboard.
+      act: async (page) => {
+        const title = page.getByTestId("title-field");
+
+        await title.focus();
+        await page.keyboard.type("Chairs are");
+        await page.getByTestId("pin-preview").click();
+        await page.keyboard.type(" over the cap");
+        await page.getByLabel("Screenshot with 1 pin").waitFor();
+      },
+      data: { view: draftView(desktop) },
+      fit: true,
+      name: "capture-8-first-pin",
+      page: "capture",
+    },
+    {
       data: library(),
       hash: `/captures/${uuid(1)}`,
       name: "library-1-capture",
@@ -566,7 +582,9 @@ const makeScenes = (
     {
       act: async (page) => {
         await page.getByTestId("more").click();
-        await page.getByRole("menuitem", { name: /Copy as Text/u }).waitFor();
+        await page
+          .getByRole("menuitem", { name: /Copy with Details/u })
+          .waitFor();
       },
       data: library(),
       hash: `/captures/${uuid(1)}`,
@@ -636,6 +654,16 @@ const makeScenes = (
       name: "library-14-shortcuts-from-tray",
       page: "library",
       platforms: ["windows"],
+    },
+    {
+      act: async (page) => {
+        await page.getByTestId("search").fill("due:");
+        await page.getByTestId("due-suggestions").waitFor();
+      },
+      data: library(),
+      hash: `/captures/${uuid(1)}`,
+      name: "library-15-due-suggestions",
+      page: "library",
     },
     {
       data: { view: SETTINGS_VIEW },

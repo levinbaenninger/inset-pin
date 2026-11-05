@@ -43,6 +43,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { isTextField } from "@/shared/key-targets";
 import { PinMarker, pinHeadOffset } from "@/shared/pin-marker";
 
 const HELP_ID = "pin-preview-help";
@@ -62,6 +63,22 @@ const CLICK_SLOP = 3;
 /** How close to a corner, an edge or a pin's head a press must be to take it (preview pixels). */
 const HANDLE_REACH = 10;
 const PIN_REACH = 11;
+
+/** The hint chip's height; it sits in the dimmed margin around the crop, off the frame and its handles. */
+const HINT_HEIGHT = 20;
+
+/** Where the hint goes: centred in the margin below the crop, else above it, else just inside the crop's bottom. */
+const hintTop = (crop: Rect<"preview">, boxHeight: number): number => {
+  const below = boxHeight - (crop.y + crop.height);
+
+  if (below >= HINT_HEIGHT + 2) {
+    return crop.y + crop.height + (below - HINT_HEIGHT) / 2;
+  }
+
+  return crop.y >= HINT_HEIGHT + 2
+    ? (crop.y - HINT_HEIGHT) / 2
+    : crop.y + crop.height - HINT_HEIGHT - HANDLE_REACH;
+};
 
 const CURSORS: Readonly<Record<CropHandle, string>> = {
   e: "cursor-ew-resize",
@@ -308,6 +325,8 @@ export interface PinPreviewProps {
   readonly onPinMode: (on: boolean) => void;
   /** Where the pointer is over the image, for ⇧P; null when it is elsewhere. */
   readonly pointerRef: RefObject<Point<"image"> | null>;
+  /** The preview, which takes the focus while a pin is selected. */
+  readonly previewRef: RefObject<HTMLDivElement | null>;
   readonly keys: { readonly tighten: string; readonly widen: string };
   /** Shown left of the tools, above the preview. */
   readonly caption: ReactNode;
@@ -346,12 +365,14 @@ export const PinPreview = ({
   onSelect,
   pinMode,
   pointerRef,
+  previewRef,
   selected,
 }: PinPreviewProps) => {
   const { crop, pins } = geometry;
   const [boxRef, boxWidth] = useBoxWidth();
-  const previewRef = useRef<HTMLDivElement>(null);
   const [gesture, setGesture] = useState<Gesture | null>(null);
+  /** A click in the frame while the title has the focus leaves it there, so typing goes on. */
+  const keepTyping = useRef(false);
   const [hover, setHover] = useState<Target>(OUTSIDE);
   const box = size<"preview">(boxWidth, Math.round(boxWidth * BOX_ASPECT));
   const view = gesture?.view ?? fitView(crop, frame.size, box);
@@ -386,7 +407,13 @@ export const PinPreview = ({
     const target = targetAt(point, cropBox, heads);
 
     event.currentTarget.setPointerCapture(event.pointerId);
-    event.currentTarget.focus({ preventScroll: true });
+    keepTyping.current =
+      target.kind !== "pin" && isTextField(document.activeElement);
+
+    if (!keepTyping.current) {
+      event.currentTarget.focus({ preventScroll: true });
+    }
+
     const tip = target.kind === "pin" ? markers[target.index] : undefined;
 
     setGesture({
@@ -491,7 +518,8 @@ export const PinPreview = ({
 
         if (next !== null) {
           onChange({ crop, pins: [...next] });
-          onSelect(null);
+          // Selected only where its keys work: with the focus kept in the title, typing goes on instead.
+          onSelect(keepTyping.current ? null : next.length - 1);
         }
       } else if (target.kind !== "pin") {
         onSelect(null);
@@ -560,6 +588,8 @@ export const PinPreview = ({
         Backspace removes it.
       </p>
       <div className="flex justify-center" ref={boxRef}>
+        {/* The preview is a canvas for the crop and its pins: it takes the pointer and, through usePinKeys, the keys. */}
+        {/* oxlint-disable-next-line jsx-a11y/no-noninteractive-element-interactions */}
         <div
           aria-describedby={HELP_ID}
           aria-disabled={disabled}
@@ -571,6 +601,17 @@ export const PinPreview = ({
               : cursorFor(gesture?.target ?? hover, gesture !== null, pinMode)
           )}
           data-testid="pin-preview"
+          // The selection lives here: once the focus leaves the preview, digits and ⌫ elsewhere leave pins alone.
+          onBlur={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget)) {
+              onSelect(null);
+            }
+          }}
+          onMouseDown={(event) => {
+            if (keepTyping.current) {
+              event.preventDefault();
+            }
+          }}
           onPointerCancel={() => {
             setGesture(null);
           }}
@@ -639,11 +680,12 @@ export const PinPreview = ({
           {hint === null || disabled ? null : (
             <p
               aria-live="polite"
-              className="pointer-events-none absolute inset-x-0 bottom-2.5 z-20 flex justify-center"
+              className="pointer-events-none absolute inset-x-0 top-(--hint-y) z-20 flex justify-center"
               data-testid="pin-hint"
+              style={{ "--hint-y": `${hintTop(cropBox, box.height)}px` }}
             >
-              <span className="flex items-center gap-1.5 rounded-full bg-black/75 px-2.5 py-1 text-xs font-medium text-white shadow-sm backdrop-blur-sm">
-                <HugeiconsIcon icon={Location01Icon} size={12} />
+              <span className="flex h-5 items-center gap-1 rounded-full bg-black/75 px-2 text-xs leading-none font-medium text-white shadow-sm backdrop-blur-sm">
+                <HugeiconsIcon icon={Location01Icon} size={11} />
                 {hint}
               </span>
             </p>

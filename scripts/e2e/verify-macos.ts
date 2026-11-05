@@ -17,6 +17,7 @@ import { z } from "zod";
 
 import { CaptureRecordSchema } from "../../src/shared/capture-record.ts";
 import { DEFAULT_CROP_DIP } from "../../src/shared/geometry.ts";
+import { pinClickPoint } from "./pin-click.ts";
 
 const root = path.resolve(import.meta.dirname, "../..");
 const mode = process.argv[2] === "packaged" ? "packaged" : "dev";
@@ -51,6 +52,19 @@ const EventSchema = z.object({
   draftId: z.string().optional(),
   event: z.string(),
   pid: z.number().optional(),
+  /** Logged with panelShown: where the pointer was in the captured frame, and the crop. */
+  preview: z
+    .object({
+      crop: z.object({
+        height: z.number(),
+        width: z.number(),
+        x: z.number(),
+        y: z.number(),
+      }),
+      frame: z.object({ height: z.number(), width: z.number() }),
+      pointer: z.object({ x: z.number(), y: z.number() }),
+    })
+    .optional(),
   t: z.number(),
   windows: z.number(),
 });
@@ -177,6 +191,71 @@ const clickButton = async (title: string, attempts = 10): Promise<void> => {
 
   await delay(500);
   await clickButton(title, attempts - 1);
+};
+
+/** An element's frame on screen, found by the start of its accessible name: the preview is "Screenshot with 0 pins". */
+const elementFrame = (prefix: string) => {
+  const found = jxa(`const hit = ${processElements()}.find((e) => {
+      try {
+        const names = [e.name(), e.description()].map((text) => String(text ?? ""));
+        return names.some((text) => text.startsWith(${JSON.stringify(prefix)}));
+      } catch { return false; }
+    });
+    hit ? (() => { const [x, y] = hit.position(); const [w, h] = hit.size(); return [x, y, w, h].join(" "); })() : "";`);
+
+  if (found === "") {
+    return null;
+  }
+
+  const [x = 0, y = 0, width = 0, height = 0] = found.split(" ").map(Number);
+
+  return { height, width, x, y };
+};
+
+const elementShows = async (
+  prefix: string,
+  attempts = 10
+): Promise<boolean> => {
+  if (elementFrame(prefix) !== null) {
+    return true;
+  }
+
+  if (attempts <= 1) {
+    return false;
+  }
+
+  await delay(400);
+
+  return await elementShows(prefix, attempts - 1);
+};
+
+/**
+ * A capture starts with no pin, so the flow clicks the preview where the
+ * pointer was, as a person clicks the detail they pointed at. Type the title
+ * first: the click keeps the keyboard in the title, but a click on the
+ * preview's background would take it if nothing had it.
+ */
+const placePin = async (shown: AppEvent | undefined, label: string) => {
+  const box = elementFrame("Screenshot with");
+
+  if (shown?.preview === undefined || box === null) {
+    record(
+      `${label}: click places pin 1`,
+      false,
+      shown?.preview === undefined ? "no preview logged" : "preview not found"
+    );
+
+    return;
+  }
+
+  const at = pinClickPoint(shown.preview, box);
+
+  pointer("click", at.x, at.y);
+  record(
+    `${label}: click places pin 1`,
+    await elementShows("Screenshot with 1 pin"),
+    `${at.x},${at.y}`
+  );
 };
 
 const windowText = () =>
@@ -436,7 +515,10 @@ const checkSave = async () => {
   let mark = events().length;
 
   shortcut();
-  await waitFor("panelShown", mark);
+
+  const shown = await waitFor("panelShown", mark);
+
+  await placePin(shown, "first capture");
   mark = events().length;
   commandEnter();
   record("Cmd+Enter saves", (await waitFor("saved", mark)) !== undefined);
@@ -458,19 +540,7 @@ const checkSave = async () => {
   );
 };
 
-/**
- * Where the capture points: its first pin, else the crop's middle, since a new
- * capture has no pin and centres its crop on the pointer.
- */
-const pointOf = (stored: {
-  readonly pins: readonly { readonly x: number; readonly y: number }[];
-  readonly image: { readonly widthPx: number; readonly heightPx: number };
-}): { readonly x: number; readonly y: number } =>
-  stored.pins[0] ?? {
-    x: Math.floor(stored.image.widthPx / 2),
-    y: Math.floor(stored.image.heightPx / 2),
-  };
-
+/** The pixel under pin 1, read from the saved crop; with no pin saved, the check fails and says so. */
 const inspectRecord = (captureId: string) => {
   const dir = path.join(userData, "captures", captureId);
 
@@ -478,13 +548,11 @@ const inspectRecord = (captureId: string) => {
     JSON.parse(readFileSync(path.join(dir, "capture.json"), "utf-8"))
   );
 
+  const [pin] = stored.pins;
+
   const [width = 0, height = 0, red = 0, green = 255, blue = 0] = execFileSync(
     path.join(bin, "pixel"),
-    [
-      path.join(dir, "crop.png"),
-      String(pointOf(stored).x),
-      String(pointOf(stored).y),
-    ],
+    [path.join(dir, "crop.png"), String(pin?.x ?? 0), String(pin?.y ?? 0)],
     { encoding: "utf-8" }
   )
     .trim()
@@ -493,8 +561,8 @@ const inspectRecord = (captureId: string) => {
 
   return {
     height,
-    onMarker: red > 200 && green < 90 && blue > 200,
-    rgb: `rgb(${red},${green},${blue})`,
+    onMarker: pin !== undefined && red > 200 && green < 90 && blue > 200,
+    rgb: pin === undefined ? "no pin saved" : `rgb(${red},${green},${blue})`,
     stored,
     width,
   };
@@ -526,8 +594,11 @@ const checkSavedRecord = (captureId: string | undefined) => {
 const checkEdgeWiden = async () => {
   await startMarker(edgeMarker);
   await focusMarker();
-  await openPanel("point near the screen edge");
+
+  const { shown } = await openPanel("point near the screen edge");
+
   await typeText("Edge detail");
+  await placePin(shown, "edge capture");
   await clickButton("Widen");
   await delay(300);
   await clickButton("Widen");
@@ -568,6 +639,7 @@ const checkTrayFallback = async () => {
 
   record("tray fallback opens the panel after the delay", shown !== undefined);
   await typeText("Via tray");
+  await placePin(shown, "tray capture");
   commandEnter();
 
   const saved = await waitFor("saved", mark);
@@ -609,8 +681,10 @@ const checkDiscard = async () => {
 };
 
 const checkFailedWrite = async () => {
-  await openPanel("failed write");
+  const { shown } = await openPanel("failed write");
+
   await typeText("Retry me");
+  await placePin(shown, "failed write");
 
   let mark = events().length;
 

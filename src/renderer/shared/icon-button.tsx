@@ -1,4 +1,4 @@
-import { CommandIcon, KeyboardIcon } from "@hugeicons/core-free-icons";
+import { CommandIcon } from "@hugeicons/core-free-icons";
 import type { Add01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { ComponentProps } from "react";
@@ -11,12 +11,13 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 
-import { isMac } from "./platform";
-
 export type Icon = typeof Add01Icon;
 
-/** The shortcut sheet's icon: ⌘ on macOS, where every shortcut names it; a keyboard elsewhere. */
-export const SHORTCUTS_ICON: Icon = isMac ? CommandIcon : KeyboardIcon;
+/**
+ * The shortcut sheet's icon: ⌘ on every platform, as in Window Links and the
+ * Shelf. Hugeicons' keyboard reads as a face at this size.
+ */
+export const SHORTCUTS_ICON: Icon = CommandIcon;
 
 /**
  * The one icon-only button, as in Window Links: ghost, small, named by its

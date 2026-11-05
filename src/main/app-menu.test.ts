@@ -64,12 +64,13 @@ describe(appMenuTemplate, () => {
     const keyed = capture.filter((entry) => entry.accelerator !== undefined);
 
     expect(keyed.map((entry) => entry.label)).toStrictEqual([
-      "Copy as Text",
+      "Copy Text",
+      "Copy with Details",
       "Copy Image",
       "Edit Title",
       "Add Description",
       "Add Next Steps",
-      "Set Due Date…",
+      "Due…",
       "Pin Tool",
       "Float on Top",
       "Mark as Done",

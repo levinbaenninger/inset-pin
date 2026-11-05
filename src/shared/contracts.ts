@@ -5,6 +5,7 @@ import {
   DescriptionSchema,
   EditableFieldsSchema,
   PINS_MAX,
+  SavedPinsSchema,
   StepsSchema,
   TitleSchema,
 } from "./capture-record";
@@ -149,6 +150,7 @@ export interface AppStatus {
 /** Commands for the library and the shown capture, sent from the app menu and the tray. */
 export type LibraryCommand =
   | "copyText"
+  | "copyDetails"
   | "copyImage"
   | "edit"
   | "delete"
@@ -193,6 +195,8 @@ export const libraryContract = defineContract({
   events: {
     changed: event<null>(),
     command: event<LibraryCommand>(),
+    /** Asked before the window closes or the app quits: save what is typed, then answer `flushed` with the same token. */
+    flush: event<string>(),
     /** Asked from the tray or the Dock menu to show one capture. */
     show: event<CaptureId>(),
   },
@@ -200,8 +204,11 @@ export const libraryContract = defineContract({
   methods: {
     /** New capture in 3 seconds, as from the tray, so the pointer can go back to the work. */
     captureSoon: send(z.void()),
+    copyDetails: invoke(CaptureIdSchema, out<ActionResult>()),
     copyImage: invoke(CaptureIdSchema, out<ActionResult>()),
     copyText: invoke(CaptureIdSchema, out<ActionResult>()),
+    /** The answer to a `flush` event: every edit is saved, or failed and was reported on the page. */
+    flushed: send(z.string().max(100)),
     /** Keeps the capture in a small window above every other app. */
     floatOnTop: send(CaptureIdSchema),
     get: invoke(CaptureIdSchema, out<CaptureDetail | null>()),
@@ -215,7 +222,17 @@ export const libraryContract = defineContract({
       z.object({ done: z.boolean(), id: CaptureIdSchema }),
       out<ActionResult>()
     ),
-    startImageDrag: send(CaptureIdSchema),
+    /**
+     * The drag starts at once, so it carries the pins and title on screen
+     * rather than waiting for them to be saved.
+     */
+    startImageDrag: send(
+      z.object({
+        id: CaptureIdSchema,
+        pins: SavedPinsSchema,
+        title: TitleSchema,
+      })
+    ),
     status: invoke(z.void(), out<AppStatus>()),
     update: invoke(
       z.object({ fields: EditableFieldsSchema, id: CaptureIdSchema }),

@@ -36,6 +36,9 @@ export interface FieldsValue {
 
 type Field = "description" | "steps" | "due";
 
+/** `now` is true for a change that is no typing, such as a ticked step or a due day, which saves at once. */
+export type FieldsChange = (value: FieldsValue, now?: boolean) => void;
+
 /** Which optional fields take space: those with something in them, or just added. */
 const shownFields = (
   value: FieldsValue,
@@ -58,7 +61,7 @@ export interface FieldsUi {
   readonly run: (
     action: Field,
     value: FieldsValue,
-    onChange: (value: FieldsValue) => void
+    onChange: FieldsChange
   ) => void;
   /** Hides an emptied description once the focus leaves it. */
   readonly settle: (value: FieldsValue) => void;
@@ -83,11 +86,7 @@ export const useFieldsUi = (): FieldsUi => {
   }, [focusDescription]);
 
   const run = useCallback(
-    (
-      action: Field,
-      value: FieldsValue,
-      onChange: (value: FieldsValue) => void
-    ): void => {
+    (action: Field, value: FieldsValue, onChange: FieldsChange): void => {
       if (action === "description") {
         setRevealed((current) => new Set([...current, "description"]));
         setFocusDescription((count) => count + 1);
@@ -163,7 +162,7 @@ const ADD_ITEMS: readonly {
     icon: CheckListIcon,
     label: "Next steps",
   },
-  { chip: "Due", field: "due", icon: Calendar03Icon, label: "Due date…" },
+  { chip: "Due", field: "due", icon: Calendar03Icon, label: "Due…" },
 ];
 
 const keyOf = (field: Field): string => keyLabels(isMac)[field];
@@ -249,10 +248,14 @@ const AddChips = ({
     );
   });
 
+/** The library's fields read as text; a quiet tint on hover and focus shows they can be edited. */
+const PAGE_FIELD =
+  "-mx-1.5 rounded-md px-1.5 hover:bg-foreground/[0.03] focus-visible:bg-foreground/[0.05] transition-colors";
+
 const VARIANT = {
   page: {
-    description: "text-sm leading-relaxed min-h-[1lh] text-foreground/90",
-    title: "text-xl leading-snug font-semibold text-pretty",
+    description: `text-sm leading-relaxed min-h-[1lh] text-foreground/90 ${PAGE_FIELD}`,
+    title: `text-xl leading-snug font-semibold text-pretty ${PAGE_FIELD}`,
   },
   panel: {
     description: "text-sm leading-snug max-h-[calc(6lh)]",
@@ -271,7 +274,9 @@ const leaveOnEscape = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
 
 export interface EntryFieldsProps {
   readonly value: FieldsValue;
-  readonly onChange: (value: FieldsValue) => void;
+  readonly onChange: FieldsChange;
+  /** False on a done capture: its empty fields offer no add chips. */
+  readonly addable?: boolean;
   readonly ui: FieldsUi;
   readonly variant: "panel" | "page";
   readonly now: Date;
@@ -290,6 +295,7 @@ export interface EntryFieldsProps {
  * from a row of chips; both answer the same keys.
  */
 export const EntryFields = ({
+  addable = true,
   autoFocusTitle = false,
   disabled = false,
   now,
@@ -320,7 +326,7 @@ export const EntryFields = ({
         due={value.due}
         now={now}
         onChange={(due) => {
-          onChange({ ...value, due });
+          onChange({ ...value, due }, true);
         }}
         onOpenChange={(open) => {
           ui.setDueOpen(open);
@@ -338,15 +344,31 @@ export const EntryFields = ({
         due={null}
         now={now}
         onChange={(due) => {
-          onChange({ ...value, due });
+          onChange({ ...value, due }, true);
         }}
         onOpenChange={(open) => {
           ui.setDueOpen(open);
         }}
         open={ui.dueOpen}
+        shortcut={keyOf("due")}
       />
     ) : (
       child
+    );
+
+  // The library's row of Due and add chips; a done capture with nothing to show leaves no gap until ⇧⌘D opens the picker there.
+  const pageRow =
+    dueRow === null &&
+    !ui.dueOpen &&
+    (!addable || missing.length === 0) ? null : (
+      <div className="-mx-1.5 mt-1.5 flex min-h-6 flex-wrap items-center gap-1.5">
+        {dueRow}
+        {pickerAnchor(
+          <span className="inline-flex flex-wrap items-center gap-0.5">
+            <AddChips fields={addable ? missing : []} onAdd={add} />
+          </span>
+        )}
+      </div>
     );
 
   return (
@@ -430,8 +452,8 @@ export const EntryFields = ({
         <div className={page ? "-mx-1.5 mt-1" : "px-1.5 pb-1"}>
           <StepsEditor
             focusId={ui.focusStep}
-            onChange={(steps) => {
-              onChange({ ...value, steps });
+            onChange={(steps, immediately) => {
+              onChange({ ...value, steps }, immediately);
             }}
             onFocused={() => {
               ui.clearFocusStep();
@@ -442,14 +464,7 @@ export const EntryFields = ({
         </div>
       ) : null}
       {page ? (
-        <div className="-mx-1.5 mt-1.5 flex min-h-6 flex-wrap items-center gap-1.5">
-          {dueRow}
-          {pickerAnchor(
-            <span className="inline-flex flex-wrap items-center gap-0.5">
-              <AddChips fields={missing} onAdd={add} />
-            </span>
-          )}
-        </div>
+        pageRow
       ) : (
         <div className="flex items-center gap-1.5 px-1.5 pb-1.5">
           {pickerAnchor(<AddMenu disabled={disabled} onAdd={add} />)}

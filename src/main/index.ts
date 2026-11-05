@@ -406,6 +406,7 @@ const start = async (): Promise<void> => {
     releaseWindows: () => {
       surface.allowClose();
       settingsWindow.allowClose();
+      library.allowClose();
     },
     restartToUpdate: () => {
       updater?.install();
@@ -414,9 +415,23 @@ const start = async (): Promise<void> => {
 
   resumeQuit = quitGate.resume;
 
+  /** Set once the library's typing is saved for this quit; a quit the draft holds clears it. */
+  let editsSaved = false;
+
+  const saveEdits = async (): Promise<void> => {
+    await library.flushEdits();
+    await store.settled();
+    editsSaved = true;
+  };
+
+  const restartAfterSaving = async (): Promise<void> => {
+    await saveEdits();
+    quitGate.restartToUpdate();
+  };
+
   const installUpdate = (): void => {
     if (updater?.state().kind === "ready") {
-      quitGate.restartToUpdate();
+      void restartAfterSaving();
     }
   };
 
@@ -601,7 +616,15 @@ const start = async (): Promise<void> => {
     draft.dismiss();
   });
   surface.onShown((bounds) => {
-    e2eLog("panelShown", { bounds, draftId: currentDraftId() });
+    const view = draft.view();
+    const pointer = view.kind === "draft" ? draft.pointer(view.draftId) : null;
+
+    const preview =
+      view.kind === "draft" && pointer !== null
+        ? { crop: view.seed.crop, frame: view.frame.size, pointer }
+        : undefined;
+
+    e2eLog("panelShown", { bounds, draftId: currentDraftId(), preview });
   });
   surface.onHidden(() => {
     e2eLog("panelHidden");
@@ -636,9 +659,23 @@ const start = async (): Promise<void> => {
   app.on("second-instance", () => {
     library.open();
   });
+
+  const quitAfterSaving = async (): Promise<void> => {
+    await saveEdits();
+    app.quit();
+  };
+
   app.on("before-quit", (event) => {
+    if (!editsSaved) {
+      event.preventDefault();
+      void quitAfterSaving();
+
+      return;
+    }
+
     if (!quitGate.allowQuit()) {
       event.preventDefault();
+      editsSaved = false;
     }
   });
   app.on("will-quit", () => {

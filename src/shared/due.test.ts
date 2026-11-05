@@ -2,14 +2,18 @@ import { describe, expect, it } from "vitest";
 
 import {
   daysUntil,
+  DUE_FILTERS,
+  dueChipText,
   DueDateSchema,
   dueLabel,
   duePresets,
+  dueSentence,
   dueState,
   fromDueDate,
   matchesDueFilter,
   toDueDate,
 } from "./due";
+import type { DueFilter } from "./due";
 
 const day = (text: string) => DueDateSchema.parse(text);
 
@@ -88,36 +92,93 @@ describe(dueState, () => {
 describe(dueLabel, () => {
   const now = at(2026, 11, 5);
 
-  it("names near days and dates further away", () => {
-    expect(dueLabel(day("2026-11-05"), now)).toBe("Today");
-    expect(dueLabel(day("2026-11-06"), now)).toBe("Tomorrow");
-    expect(dueLabel(day("2026-11-04"), now)).toBe("Yesterday");
-    expect(dueLabel(day("2026-11-13"), now)).toBe("Fri 13 Nov");
-    expect(dueLabel(day("2027-01-08"), now)).toBe("8 Jan 2027");
+  const labels = (days: readonly string[]) =>
+    days.map((due) => dueLabel(day(due), now, "en-US"));
+
+  it("names near days, the weekday within six days, and dates further away", () => {
+    expect(
+      labels([
+        "2026-11-05",
+        "2026-11-06",
+        "2026-11-04",
+        "2026-11-11",
+        "2026-11-12",
+        "2026-11-02",
+        "2027-01-08",
+      ])
+    ).toStrictEqual([
+      "Today",
+      "Tomorrow",
+      "Yesterday",
+      "Wednesday",
+      "Nov 12",
+      "Nov 2",
+      "Jan 8, 2027",
+    ]);
+  });
+
+  it("follows the locale it is given", () => {
+    expect(dueLabel(day("2026-11-12"), now, "en-GB")).toBe("12 Nov");
+    expect(dueLabel(day("2026-11-11"), now, "de-CH")).toBe("Mittwoch");
+  });
+});
+
+describe(dueChipText, () => {
+  const now = at(2026, 11, 5);
+
+  it("says Overdue in words, not by colour alone", () => {
+    expect(dueChipText(day("2026-11-03"), now, "en-US")).toBe(
+      "Overdue · Nov 3"
+    );
+    expect(dueChipText(day("2026-11-04"), now, "en-US")).toBe(
+      "Overdue · Yesterday"
+    );
+    expect(dueChipText(day("2026-11-05"), now, "en-US")).toBe("Today");
+  });
+
+  it("reads aloud with the state", () => {
+    expect(dueSentence(day("2026-11-04"), now, "en-US")).toBe(
+      "Overdue, was due yesterday"
+    );
+    expect(dueSentence(day("2026-11-05"), now, "en-US")).toBe("Due today");
+    expect(dueSentence(day("2026-11-12"), now, "en-US")).toBe("Due Nov 12");
   });
 });
 
 describe(matchesDueFilter, () => {
   const now = at(2026, 11, 5);
+  const past = day("2026-11-01");
+  const today = day("2026-11-05");
+  const sixDays = day("2026-11-11");
+  const sevenDays = day("2026-11-12");
+  const all = [past, today, sixDays, sevenDays, null] as const;
 
-  it("filters by due day", () => {
-    expect(matchesDueFilter(day("2026-11-05"), "today", now)).toBeTruthy();
-    expect(matchesDueFilter(day("2026-11-06"), "today", now)).toBeFalsy();
-    expect(matchesDueFilter(day("2026-11-06"), "tomorrow", now)).toBeTruthy();
-    expect(matchesDueFilter(day("2026-11-01"), "overdue", now)).toBeTruthy();
-    expect(matchesDueFilter(day("2026-11-05"), "overdue", now)).toBeFalsy();
+  const kept = (filter: DueFilter) =>
+    all.map((due) => matchesDueFilter(due, filter, now));
+
+  it("keeps the past, today, +6 and +7 days as each filter says", () => {
+    expect({
+      any: kept("any"),
+      none: kept("none"),
+      overdue: kept("overdue"),
+      today: kept("today"),
+      week: kept("week"),
+    }).toStrictEqual({
+      any: [true, true, true, true, false],
+      none: [false, false, false, false, true],
+      overdue: [true, false, false, false, false],
+      today: [false, true, false, false, false],
+      week: [true, true, true, false, false],
+    });
   });
 
-  it("counts overdue and the next seven days as this week", () => {
-    expect(matchesDueFilter(day("2026-11-01"), "week", now)).toBeTruthy();
-    expect(matchesDueFilter(day("2026-11-11"), "week", now)).toBeTruthy();
-    expect(matchesDueFilter(day("2026-11-12"), "week", now)).toBeFalsy();
-  });
-
-  it("keeps entries without a due date only for due:none", () => {
-    expect(matchesDueFilter(null, "week", now)).toBeFalsy();
-    expect(matchesDueFilter(null, "any", now)).toBeFalsy();
-    expect(matchesDueFilter(null, "none", now)).toBeTruthy();
-    expect(matchesDueFilter(day("2026-11-05"), "none", now)).toBeFalsy();
+  it("offers the same five filters as the other Inset apps", () => {
+    expect(DUE_FILTERS).toStrictEqual([
+      "today",
+      "overdue",
+      "week",
+      "any",
+      "none",
+    ]);
   });
 });

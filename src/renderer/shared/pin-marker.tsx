@@ -3,8 +3,8 @@ import { useEffect, useRef, useState } from "react";
 
 import { cn } from "@/lib/utils";
 
-/** Thumbnails show a smaller pin; the panel, library and floating window the full one. */
-const SIZE_FACTOR = { md: 1, sm: 0.6 } as const;
+/** Thumbnails show a smaller pin, pin lists an 18 px one as the Shelf's do; the panel, library and floating window the full one. */
+const SIZE_FACTOR = { legend: 0.82, md: 1, sm: 0.6 } as const;
 
 export type PinSize = keyof typeof SIZE_FACTOR;
 
@@ -46,17 +46,10 @@ export interface PinMarkerProps {
  * sprite as copied and dragged images (src/shared/pin-sprite.ts), so the
  * screen and every export show one mark.
  */
-export const PinMarker = ({
-  left,
-  lifted = false,
-  number,
-  selected = false,
-  size = "md",
-  top,
-}: PinMarkerProps) => {
+/** The numbered sprite on a canvas at the display's density. */
+const useSprite = (number: number, factor: number) => {
   const canvas = useRef<HTMLCanvasElement>(null);
   const ratio = useDevicePixelRatio();
-  const factor = SIZE_FACTOR[size];
   const sprite = pinSprite(number, ratio * factor);
 
   useEffect(() => {
@@ -68,6 +61,39 @@ export const PinMarker = ({
       0
     );
   }, [sprite]);
+
+  return { canvas, ratio, sprite };
+};
+
+/** A pin on its own, in a list of pins: the same teardrop and number as on the image. */
+export const PinBadge = ({ number }: { readonly number: number }) => {
+  const { canvas, ratio, sprite } = useSprite(number, SIZE_FACTOR.legend);
+
+  return (
+    <canvas
+      aria-hidden="true"
+      className="block h-(--sprite-h) w-(--sprite-w) max-w-none shrink-0"
+      height={sprite.height}
+      ref={canvas}
+      style={{
+        "--sprite-h": `${sprite.height / ratio}px`,
+        "--sprite-w": `${sprite.width / ratio}px`,
+      }}
+      width={sprite.width}
+    />
+  );
+};
+
+export const PinMarker = ({
+  left,
+  lifted = false,
+  number,
+  selected = false,
+  size = "md",
+  top,
+}: PinMarkerProps) => {
+  const factor = SIZE_FACTOR[size];
+  const { canvas, ratio, sprite } = useSprite(number, factor);
 
   return (
     <span

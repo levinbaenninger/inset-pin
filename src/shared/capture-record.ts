@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { DueDateSchema } from "./due";
+import { DueDateSchema } from "./due.ts";
 
 const LOWER_UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
@@ -163,48 +163,45 @@ export const EditableFieldsSchema = z.object({
 
 export type EditableFields = z.output<typeof EditableFieldsSchema>;
 
-const BLANK_LINES_AT_ENDS = /^(?:[ \t]*\r?\n)+|(?:\r?\n[ \t]*)+$/gu;
+/** A title in one short line, for menus and file names. Never stored. */
+export const shortTitle = (title: string, max = SHORT_TITLE_MAX): string => {
+  const line = title
+    .split(LINE_BREAK)
+    .map((text) => text.replaceAll(WHITESPACE_RUN, " ").trim())
+    .find((text) => text.length > 0);
 
-/**
- * A v1 thought as a title and a description: the first non-blank line, and
- * every line after it. Joining them gives the thought back, without blank
- * lines around it, so nothing the user wrote is lost. A first line longer than
- * a title can hold stays whole in the description.
- */
+  if (line === undefined) {
+    return UNTITLED;
+  }
+
+  return line.length > max ? `${line.slice(0, max - 1).trimEnd()}…` : line;
+};
+
+const ANY_LINE_BREAK = /[\r\n]/u;
+
 /** A v1 thought split for v2. */
 export interface SplitThought {
   readonly title: string;
   readonly description: string;
 }
 
+/**
+ * A v1 thought as a title and a description, losing nothing. A clean one-line
+ * thought becomes the title. Any other thought stays whole, byte for byte, as
+ * the description, under a title taken from its first line. So the thought is
+ * always the title when the description is empty, and the description
+ * otherwise; nothing is trimmed, joined or normalised.
+ */
 export const splitThought = (thought: string): SplitThought => {
-  const lines = thought.split(LINE_BREAK);
-  const first = lines.findIndex((line) => line.trim().length > 0);
+  const oneLine =
+    !ANY_LINE_BREAK.test(thought) &&
+    thought === thought.trim() &&
+    thought.length <= TITLE_MAX;
 
-  if (first === -1) {
-    return { description: "", title: UNTITLED };
-  }
-
-  const title = (lines[first] ?? "").trim();
-
-  const rest = lines
-    .slice(first + 1)
-    .join("\n")
-    .replaceAll(BLANK_LINES_AT_ENDS, "");
-
-  if (title.length > TITLE_MAX) {
-    return {
-      description: thought.replaceAll(BLANK_LINES_AT_ENDS, ""),
-      title: `${title.slice(0, TITLE_MAX - 1).trimEnd()}…`,
-    };
-  }
-
-  return { description: rest, title };
+  return oneLine
+    ? { description: "", title: thought }
+    : { description: thought, title: shortTitle(thought, TITLE_MAX) };
 };
-
-/** The title and description as one text, as a v1 thought held them. */
-export const joinThought = (title: string, description: string): string =>
-  description.trim() === "" ? title : `${title}\n${description}`;
 
 /** v1 → v2 in memory. The file on disk is rewritten only when the capture is edited. */
 export const migrateV1 = (record: CaptureRecordV1): CaptureRecord => {
@@ -327,18 +324,4 @@ export const parseStoredEntry = (
     migratedFrom: version === 1 ? 1 : null,
     record: known.record,
   };
-};
-
-/** A title in one short line, for menus and file names. Never stored. */
-export const shortTitle = (title: string, max = SHORT_TITLE_MAX): string => {
-  const line = title
-    .split(LINE_BREAK)
-    .map((text) => text.replaceAll(WHITESPACE_RUN, " ").trim())
-    .find((text) => text.length > 0);
-
-  if (line === undefined) {
-    return UNTITLED;
-  }
-
-  return line.length > max ? `${line.slice(0, max - 1).trimEnd()}…` : line;
 };

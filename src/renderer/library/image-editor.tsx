@@ -17,7 +17,7 @@ import {
 } from "@shared/pins";
 import { keyLabels } from "@shared/shortcuts";
 import { useRef, useState } from "react";
-import type { PointerEvent } from "react";
+import type { PointerEvent, RefObject } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
@@ -27,7 +27,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { PinMarker, pinHeadOffset } from "@/shared/pin-marker";
+import { PinBadge, PinMarker, pinHeadOffset } from "@/shared/pin-marker";
 import { isMac } from "@/shared/platform";
 
 import { percent } from "./saved-image";
@@ -39,7 +39,16 @@ const KEYS = keyLabels(isMac);
 /** The tallest the image gets, so the fields above it stay in view. */
 const MAX_HEIGHT = "60vh";
 
+/** What changed the pins, so the page can undo a gesture at a time and save typing later. */
+export type PinChange =
+  | { readonly kind: "add" }
+  | { readonly kind: "remove" }
+  | { readonly kind: "drag"; readonly id: number; readonly done: boolean }
+  | { readonly kind: "nudge"; readonly index: number }
+  | { readonly kind: "label"; readonly index: number };
+
 interface PinGesture {
+  readonly id: number;
   readonly index: number;
   /** From the press to the pin's tip, in image pixels, so the tip keeps its distance. */
   readonly grip: { readonly x: number; readonly y: number };
@@ -50,8 +59,7 @@ interface PinGesture {
 export interface ImageEditorProps {
   readonly image: SavedImage;
   readonly pins: readonly SavedPin[];
-  /** `now` saves at once, as a moved or removed pin does; a typed label waits. */
-  readonly onChange: (pins: readonly SavedPin[], now: boolean) => void;
+  readonly onChange: (pins: readonly SavedPin[], change: PinChange) => void;
   readonly selected: number | null;
   readonly onSelect: (index: number | null) => void;
   readonly pinMode: boolean;
@@ -59,10 +67,12 @@ export interface ImageEditorProps {
   readonly onDragOut: () => void;
   readonly onCopy: () => void;
   readonly onLeaveLabel: () => void;
-  readonly pointerRef: React.RefObject<{
+  readonly pointerRef: RefObject<{
     readonly x: number;
     readonly y: number;
   } | null>;
+  /** The image, which takes the focus while a pin is selected. */
+  readonly imageRef: RefObject<HTMLDivElement | null>;
 }
 
 /** The pins as a numbered list under the image, each with an optional label: "1 · label". */
@@ -89,11 +99,8 @@ const PinList = ({
         // oxlint-disable-next-line react/no-array-index-key
         key={index}
       >
-        <span
-          aria-hidden="true"
-          className="bg-pin grid size-5 shrink-0 place-items-center rounded-full text-xs font-semibold text-white tabular-nums ring-2 ring-white/80 dark:ring-white/20"
-        >
-          {index + 1}
+        <span className="grid w-5 shrink-0 place-items-center">
+          <PinBadge number={index + 1} />
         </span>
         <input
           aria-label={`Label for pin ${index + 1}`}
@@ -101,7 +108,10 @@ const PinList = ({
           maxLength={PIN_LABEL_MAX}
           onBlur={onLeaveLabel}
           onChange={(event) => {
-            onChange(labelPin(pins, index, event.target.value), false);
+            onChange(labelPin(pins, index, event.target.value), {
+              index,
+              kind: "label",
+            });
           }}
           onFocus={() => {
             onSelect(index);
@@ -120,7 +130,7 @@ const PinList = ({
           aria-label={`Remove pin ${index + 1}`}
           className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 grid size-6 shrink-0 place-items-center rounded-md opacity-0 outline-none group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
           onClick={() => {
-            onChange(removePin(pins, index), true);
+            onChange(removePin(pins, index), { kind: "remove" });
             onSelect(selectionAfterRemove(pins.length, index));
           }}
           title={`Remove pin ${index + 1} (${KEYS.delete})`}
@@ -140,6 +150,7 @@ const PinList = ({
  */
 export const ImageEditor = ({
   image,
+  imageRef,
   onChange,
   onCopy,
   onDragOut,
@@ -151,8 +162,8 @@ export const ImageEditor = ({
   pointerRef,
   selected,
 }: ImageEditorProps) => {
-  const box = useRef<HTMLDivElement>(null);
   const [gesture, setGesture] = useState<PinGesture | null>(null);
+  const drags = useRef(0);
   const [pressed, setPressed] = useState<{ x: number; y: number } | null>(null);
   const area = { height: image.heightPx, width: image.widthPx, x: 0, y: 0 };
 
@@ -197,9 +208,11 @@ export const ImageEditor = ({
       event.preventDefault();
       event.currentTarget.setPointerCapture(event.pointerId);
       onSelect(index);
+      drags.current += 1;
       setGesture({
         from: point,
         grip: { x: (pin?.x ?? 0) - point.x, y: (pin?.y ?? 0) - point.y },
+        id: drags.current,
         index,
         moved: false,
       });
@@ -239,14 +252,14 @@ export const ImageEditor = ({
         { x: point.x + gesture.grip.x, y: point.y + gesture.grip.y },
         area
       ),
-      false
+      { done: false, id: gesture.id, kind: "drag" }
     );
   };
 
   const onPointerUp = (event: PointerEvent<HTMLDivElement>): void => {
     if (gesture !== null) {
       if (gesture.moved) {
-        onChange(pins, true);
+        onChange(pins, { done: true, id: gesture.id, kind: "drag" });
       }
 
       setGesture(null);
@@ -265,8 +278,8 @@ export const ImageEditor = ({
         const next = addPin(pins, point, area);
 
         if (next !== null) {
-          onChange(next, true);
-          onSelect(null);
+          onChange(next, { kind: "add" });
+          onSelect(next.length - 1);
         }
       } else if (click) {
         onSelect(null);
@@ -280,10 +293,18 @@ export const ImageEditor = ({
   const naturalWidth = image.widthPx / image.pixelsPerDip;
 
   return (
+    // Focus leaving the section only lets the pin go; the section takes no input itself.
+    // oxlint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
     <section
       aria-label="Image"
       className="flex flex-col gap-2"
       data-pin-area=""
+      // The selection lives here: once the focus leaves the image and its pin list, digits and ⌫ elsewhere leave pins alone.
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) {
+          onSelect(null);
+        }
+      }}
     >
       <div className="flex min-h-7 items-center gap-1">
         <h2 className="text-muted-foreground mr-auto text-xs font-medium">
@@ -361,7 +382,7 @@ export const ImageEditor = ({
         }}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
-        ref={box}
+        ref={imageRef}
         role="application"
         style={{
           "--image-w": `min(${naturalWidth}px, ${MAX_HEIGHT} * ${aspect})`,

@@ -12,12 +12,14 @@ export interface FieldStore {
 }
 
 /**
- * What main stores: trimmed text, no blank steps, no blank pin labels.
- * Comparing in this form keeps a trailing space being typed from reading as a
- * change that the reload after a save then undoes.
+ * What main stores: a trimmed title, steps and pin labels, no blank steps, no
+ * blank pin labels. The description is kept as typed, so a thought migrated
+ * from v1 keeps every space and line break when another field is edited; only
+ * a blank one is stored as empty. Comparing in this form keeps a trailing
+ * space being typed in the title from reading as a change.
  */
 export const storedFields = (fields: EditableFields): EditableFields => ({
-  description: fields.description.trim(),
+  description: fields.description.trim() === "" ? "" : fields.description,
   due: fields.due,
   pins: fields.pins.map(({ label, x, y }) =>
     label === undefined || label.trim() === ""
@@ -150,6 +152,19 @@ export class InlineSaver {
       this.#saved = sent;
       this.#enqueue(sent);
     }
+  }
+
+  /**
+   * Saves what is on screen and waits until main has it, so a copy, export or
+   * quit that follows sees the same. Fails when the save fails.
+   */
+  async settle(): Promise<ActionResult> {
+    this.flush();
+    await this.#chain;
+
+    const { failure } = this.#state;
+
+    return failure === null ? { ok: true } : { message: failure, ok: false };
   }
 
   /**

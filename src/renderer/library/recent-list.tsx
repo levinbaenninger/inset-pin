@@ -8,8 +8,10 @@ import {
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { CaptureSummary, SavedCapture } from "@shared/contracts";
+import { DUE_FILTERS } from "@shared/due";
 import {
   DUE_FILTER_LABELS,
+  dueSuggestions,
   highlightParts,
   withDueFilter,
 } from "@shared/search";
@@ -71,7 +73,7 @@ const Highlighted = ({
     )
   );
 
-/** Time, then at most three badges, as the shelf lists them: due, steps, pins. */
+/** The time and step progress, with the Due chip right-aligned, as every Inset list shows it. */
 const RowMeta = ({
   capture,
   now,
@@ -84,9 +86,6 @@ const RowMeta = ({
   return (
     <span className="text-muted-foreground flex min-w-0 items-center gap-2 text-xs tabular-nums">
       <span className="shrink-0">{timeOfDay(capture.capturedAt)}</span>
-      {capture.due === null ? null : (
-        <DueChip due={capture.due} now={now} size="sm" />
-      )}
       {progress === null ? null : (
         <span
           aria-label={`${progress.done} of ${progress.total} next steps done`}
@@ -94,6 +93,11 @@ const RowMeta = ({
         >
           <HugeiconsIcon icon={CheckmarkCircle02Icon} size={12} />
           {progress.done}/{progress.total}
+        </span>
+      )}
+      {capture.due === null ? null : (
+        <span className="ml-auto flex min-w-0 shrink justify-end">
+          <DueChip due={capture.due} now={now} />
         </span>
       )}
     </span>
@@ -108,7 +112,7 @@ const CaptureRow = ({
   readonly active: boolean;
 }) => {
   const { now, parsed } = useLibraryState();
-  const { dialog, entries } = useCaptureCommands(capture);
+  const { commands, dialog, entries } = useCaptureCommands(capture);
   const snippet = matchSnippet(capture, parsed.terms);
 
   return (
@@ -123,6 +127,19 @@ const CaptureRow = ({
             )}
             data-capture-id={capture.id}
             data-testid="capture-row"
+            // Space marks the focused row's capture done, which need not be the one shown.
+            onKeyDown={(event) => {
+              const plain =
+                !event.metaKey &&
+                !event.ctrlKey &&
+                !event.altKey &&
+                !event.shiftKey;
+
+              if (event.key === " " && plain) {
+                event.preventDefault();
+                commands.toggleDone();
+              }
+            }}
             params={{ captureId: capture.id }}
             to="/captures/$captureId"
           >
@@ -165,12 +182,12 @@ const ReadOnlyRow = ({
   </li>
 );
 
-const groupLabel = (group: CaptureGroup, list: ListKind): string => {
+const groupLabel = (group: CaptureGroup, list: ListKind, now: Date): string => {
   if (group.kind === "readOnly") {
     return "Read-only";
   }
 
-  const day = dayLabel(group.day, group.relative);
+  const day = dayLabel(group.day, now);
 
   return list === "done"
     ? `Done ${day === "Today" || day === "Yesterday" ? day.toLowerCase() : day}`
@@ -184,16 +201,16 @@ export const Groups = ({
   readonly groups: readonly CaptureGroup[];
   readonly activeId: string | undefined;
 }) => {
-  const { list } = useLibraryState();
+  const { list, now } = useLibraryState();
 
   return groups.map((group) => (
     <section
-      aria-label={groupLabel(group, list)}
+      aria-label={groupLabel(group, list, now)}
       className="flex flex-col gap-0.5"
       key={group.kind === "day" ? group.day.getTime() : "readOnly"}
     >
       <h2 className="text-muted-foreground px-2 pt-2 pb-1 text-xs font-medium">
-        {groupLabel(group, list)}
+        {groupLabel(group, list, now)}
       </h2>
       <ul className="flex flex-col gap-0.5">
         {group.kind === "day"
@@ -220,9 +237,9 @@ const FilterMenu = () => {
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
         <InputGroupButton
-          aria-label="Filter by due date"
+          aria-label="Due filters"
           size="icon-xs"
-          title="Filter by due date"
+          title="Due filters"
         >
           <HugeiconsIcon
             className={parsed.due === null ? undefined : "text-pin-ink"}
@@ -239,7 +256,7 @@ const FilterMenu = () => {
         }}
       >
         <DropdownMenuLabel>Show captures</DropdownMenuLabel>
-        {DUE_FILTER_LABELS.map(({ filter, label }) => (
+        {DUE_FILTERS.map((filter) => (
           <DropdownMenuItem
             key={filter}
             onSelect={() => {
@@ -250,7 +267,7 @@ const FilterMenu = () => {
               className={parsed.due === filter ? undefined : "invisible"}
               icon={Tick02Icon}
             />
-            {label}
+            {DUE_FILTER_LABELS[filter]}
             <span className="text-muted-foreground ml-auto font-mono text-xs">
               due:{filter}
             </span>
@@ -264,7 +281,7 @@ const FilterMenu = () => {
                 setQuery(withDueFilter(query, null));
               }}
             >
-              Any due date
+              Clear the filter
             </DropdownMenuItem>
           </>
         )}
@@ -273,48 +290,94 @@ const FilterMenu = () => {
   );
 };
 
-export const SearchField = () => {
-  const { query, searchRef, setQuery } = useLibraryState();
+/** While a `due:` word is typed, the filters it can become; a click or Return finishes it. */
+const DueSuggestions = () => {
+  const { parsed, query, searchRef, setQuery } = useLibraryState();
+  const suggestions = dueSuggestions(parsed);
+
+  if (suggestions.length === 0) {
+    return null;
+  }
 
   return (
-    <InputGroup className="app-no-drag">
-      <InputGroupAddon>
-        <HugeiconsIcon icon={Search01Icon} />
-      </InputGroupAddon>
-      <InputGroupInput
-        aria-label={`Search captures (${keyLabels(isMac).find})`}
-        className="[&::-webkit-search-cancel-button]:appearance-none"
-        data-testid="search"
-        onChange={(event) => {
-          setQuery(event.target.value);
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "Escape" && query !== "") {
-            event.preventDefault();
-            event.stopPropagation();
-            setQuery("");
-          }
-        }}
-        placeholder="Search or due:today"
-        ref={searchRef}
-        type="search"
-        value={query}
-      />
-      <InputGroupAddon align="inline-end">
-        {query === "" ? null : (
-          <InputGroupButton
-            aria-label="Clear search"
+    <ul
+      aria-label="Due filters"
+      className="bg-popover text-popover-foreground ring-foreground/10 mt-1.5 flex flex-col rounded-lg p-1 shadow-md ring-1"
+      data-testid="due-suggestions"
+    >
+      {suggestions.map((filter) => (
+        <li key={filter}>
+          <button
+            className="hover:bg-accent focus-visible:bg-accent flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-sm outline-none"
             onClick={() => {
-              setQuery("");
+              setQuery(withDueFilter(query, filter));
               searchRef.current?.focus();
             }}
-            size="icon-xs"
+            type="button"
           >
-            <HugeiconsIcon icon={Cancel01Icon} />
-          </InputGroupButton>
-        )}
-        <FilterMenu />
-      </InputGroupAddon>
-    </InputGroup>
+            <span className="font-mono text-xs">due:{filter}</span>
+            <span className="text-muted-foreground ml-auto truncate text-xs">
+              {DUE_FILTER_LABELS[filter]}
+            </span>
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+};
+
+export const SearchField = () => {
+  const { parsed, query, searchRef, setQuery } = useLibraryState();
+
+  return (
+    <div className="flex flex-col">
+      <InputGroup brand className="app-no-drag">
+        <InputGroupAddon>
+          <HugeiconsIcon icon={Search01Icon} />
+        </InputGroupAddon>
+        <InputGroupInput
+          aria-label={`Search captures (${keyLabels(isMac).find})`}
+          className="[&::-webkit-search-cancel-button]:appearance-none"
+          data-testid="search"
+          onChange={(event) => {
+            setQuery(event.target.value);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && query !== "") {
+              event.preventDefault();
+              event.stopPropagation();
+              setQuery("");
+            }
+
+            const [first] = dueSuggestions(parsed);
+
+            if (event.key === "Enter" && first !== undefined) {
+              event.preventDefault();
+              setQuery(withDueFilter(query, first));
+            }
+          }}
+          placeholder="Search or due:today"
+          ref={searchRef}
+          type="search"
+          value={query}
+        />
+        <InputGroupAddon align="inline-end">
+          {query === "" ? null : (
+            <InputGroupButton
+              aria-label="Clear search"
+              onClick={() => {
+                setQuery("");
+                searchRef.current?.focus();
+              }}
+              size="icon-xs"
+            >
+              <HugeiconsIcon icon={Cancel01Icon} />
+            </InputGroupButton>
+          )}
+          <FilterMenu />
+        </InputGroupAddon>
+      </InputGroup>
+      <DueSuggestions />
+    </div>
   );
 };

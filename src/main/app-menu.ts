@@ -82,13 +82,14 @@ const captureSubmenu = (
   });
 
   return [
-    entry("copyText", "Copy as Text", "CommandOrControl+C"),
+    entry("copyText", "Copy Text", "CommandOrControl+C"),
+    entry("copyDetails", "Copy with Details", "Alt+CommandOrControl+C"),
     entry("copyImage", "Copy Image", "Shift+CommandOrControl+C"),
     SEPARATOR,
     entry("edit", "Edit Title", "Enter"),
     entry("description", "Add Description", "CommandOrControl+D"),
     entry("steps", "Add Next Steps", "Shift+CommandOrControl+S"),
-    entry("due", "Set Due Date…", "Shift+CommandOrControl+D"),
+    entry("due", "Due…", "Shift+CommandOrControl+D"),
     entry("pinTool", "Pin Tool", "P"),
     SEPARATOR,
     entry("float", "Float on Top", "Alt+CommandOrControl+F"),

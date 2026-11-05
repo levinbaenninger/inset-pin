@@ -2,12 +2,16 @@ import {
   ArrowLeft01Icon,
   ArrowRight01Icon,
   Calendar03Icon,
+  CalendarRemove01Icon,
   Cancel01Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { longDate, monthTitle, shortDate, weekdayNames } from "@shared/dates";
 import {
-  dueLabel,
+  dueChipText,
+  dueLongLabel,
   duePresets,
+  dueSentence,
   dueState,
   fromDueDate,
   toDueDate,
@@ -16,6 +20,7 @@ import type { DueDate, DueState } from "@shared/due";
 import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 
+import { Kbd } from "@/components/ui/kbd";
 import {
   Popover,
   PopoverAnchor,
@@ -23,62 +28,43 @@ import {
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 
-/** The chip's colours: overdue in the destructive colour, today in the accent, else quiet. */
+/** The chip's colours: overdue in the destructive colour, today in the accent, else quiet. One design in all three Inset apps. */
 const STATE_CLASS: Record<DueState, string> = {
   later: "bg-foreground/5 text-muted-foreground",
-  overdue: "bg-destructive/10 text-destructive",
+  overdue: "bg-destructive/10 text-destructive dark:bg-destructive/20",
   soon: "bg-foreground/5 text-foreground/80",
-  today: "bg-pin/12 text-pin dark:bg-pin/20 dark:text-sky-300",
+  today: "bg-pin/12 text-pin-ink dark:bg-pin/20",
 };
 
-const STATE_WORD: Record<DueState, string> = {
-  later: "",
-  overdue: ", overdue",
-  soon: "",
-  today: "",
-};
-
-/** "Due Fri 13 Nov" for screen readers and tooltips. */
-export const dueDescription = (due: DueDate, now: Date): string =>
-  `Due ${dueLabel(due, now)}${STATE_WORD[dueState(due, now)]}`;
-
-/** The small due chip: a calendar icon and the day, coloured by how near it is. */
+/**
+ * The small due chip in a list row: a calendar icon and the day. Once the day
+ * has passed it says "Overdue", as Window Links' rows do; the date is in its
+ * tooltip and accessible name.
+ */
 export const DueChip = ({
   due,
   now,
-  size = "md",
 }: {
   readonly due: DueDate;
   readonly now: Date;
-  readonly size?: "sm" | "md";
 }) => (
   <span
-    aria-label={dueDescription(due, now)}
+    aria-label={dueSentence(due, now)}
     className={cn(
-      "inline-flex shrink-0 items-center gap-1 rounded-md font-medium whitespace-nowrap tabular-nums",
-      size === "sm" ? "h-4.5 px-1 text-xs" : "h-6 px-1.5 text-xs",
+      "inline-flex h-4.5 max-w-full min-w-0 items-center gap-1 rounded-md px-1 text-xs font-medium whitespace-nowrap tabular-nums",
       STATE_CLASS[dueState(due, now)]
     )}
-    title={dueDescription(due, now)}
+    data-due-state={dueState(due, now)}
+    title={dueSentence(due, now)}
   >
-    <HugeiconsIcon icon={Calendar03Icon} size={size === "sm" ? 11 : 12} />
-    {dueLabel(due, now)}
+    <HugeiconsIcon className="shrink-0" icon={Calendar03Icon} size={11} />
+    <span className="truncate">
+      {dueState(due, now) === "overdue" ? "Overdue" : dueChipText(due, now)}
+    </span>
   </span>
 );
 
-const WEEKDAYS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
-
-const monthTitle = new Intl.DateTimeFormat("en-GB", {
-  month: "long",
-  year: "numeric",
-});
-
-const fullDay = new Intl.DateTimeFormat("en-GB", {
-  day: "numeric",
-  month: "long",
-  weekday: "long",
-  year: "numeric",
-});
+const WEEKDAYS = weekdayNames();
 
 const addDays = (date: Date, days: number): Date =>
   new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
@@ -163,7 +149,7 @@ const Calendar = ({
           <HugeiconsIcon icon={ArrowLeft01Icon} size={14} />
         </button>
         <p aria-live="polite" className="text-sm font-medium">
-          {monthTitle.format(month)}
+          {monthTitle(month)}
         </p>
         <button
           aria-label="Next month"
@@ -200,7 +186,7 @@ const Calendar = ({
                 return (
                   <td className="p-0" key={key}>
                     <button
-                      aria-label={fullDay.format(day)}
+                      aria-label={longDate(day)}
                       aria-pressed={key === initial}
                       className={cn(
                         "focus-visible:ring-ring/50 grid h-7 w-full place-items-center rounded-md text-xs tabular-nums outline-none focus-visible:ring-3",
@@ -233,18 +219,14 @@ const Calendar = ({
   );
 };
 
-const presetHint = new Intl.DateTimeFormat("en-GB", {
-  day: "numeric",
-  month: "short",
-  weekday: "short",
-});
-
 const ITEM =
   "hover:bg-accent focus-visible:bg-accent flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-sm outline-none";
 
 /**
- * Due's quick picker: Today, Tomorrow, This weekend, Next week, Pick a date…
- * and Clear. The arrow keys move through it. It opens beside its anchor.
+ * Due's quick picker, laid out as in every Inset app: a "Due" header with its
+ * key, Today, Tomorrow, This weekend and Next week with their days, then Pick
+ * a date… and, once a day is set, Clear. The arrow keys move through it. It
+ * opens beside its anchor.
  */
 export const DuePicker = ({
   anchor,
@@ -253,6 +235,7 @@ export const DuePicker = ({
   onChange,
   onOpenChange,
   open,
+  shortcut,
 }: {
   readonly due: DueDate | null;
   readonly now: Date;
@@ -261,6 +244,8 @@ export const DuePicker = ({
   readonly onChange: (due: DueDate | null) => void;
   /** What the picker opens beside: the chip, or the Add… button. */
   readonly anchor: ReactNode;
+  /** The key that opens it, shown in its header. */
+  readonly shortcut: string;
 }) => {
   const [calendar, setCalendar] = useState(false);
   const list = useRef<HTMLDivElement>(null);
@@ -300,7 +285,7 @@ export const DuePicker = ({
     >
       <PopoverAnchor asChild>{anchor}</PopoverAnchor>
       <PopoverContent
-        aria-label="Due date"
+        aria-label="Due"
         className={calendar ? undefined : "w-52"}
         collisionPadding={8}
         onOpenAutoFocus={(event) => {
@@ -316,8 +301,9 @@ export const DuePicker = ({
           <Calendar initial={due} now={now} onPick={pick} />
         ) : (
           <div className="flex flex-col" data-testid="due-picker" ref={list}>
-            <p className="text-muted-foreground px-2 pt-1 pb-1.5 text-xs font-medium">
+            <p className="text-muted-foreground flex items-center justify-between px-2 pt-1 pb-1.5 text-xs font-medium">
               Due
+              <Kbd>{shortcut}</Kbd>
             </p>
             {duePresets(now).map((preset) => (
               <button
@@ -330,8 +316,8 @@ export const DuePicker = ({
                 type="button"
               >
                 <span className="flex-1">{preset.label}</span>
-                <span className="text-muted-foreground text-xs">
-                  {presetHint.format(fromDueDate(preset.date))}
+                <span className="text-muted-foreground text-xs tabular-nums">
+                  {shortDate(fromDueDate(preset.date), now, { weekday: true })}
                 </span>
               </button>
             ))}
@@ -353,14 +339,18 @@ export const DuePicker = ({
             </button>
             {due === null ? null : (
               <button
-                className={cn(ITEM, "text-destructive")}
+                className={ITEM}
                 onClick={() => {
                   pick(null);
                 }}
                 onKeyDown={onKeyDown}
                 type="button"
               >
-                <HugeiconsIcon icon={Cancel01Icon} size={14} />
+                <HugeiconsIcon
+                  className="text-muted-foreground"
+                  icon={CalendarRemove01Icon}
+                  size={14}
+                />
                 Clear
               </button>
             )}
@@ -371,7 +361,7 @@ export const DuePicker = ({
   );
 };
 
-/** The chip as a button that opens the picker; the picker's Clear, or Backspace on the chip, removes the date. */
+/** The chip in an editor: it opens the picker, and its × clears the day, as in Window Links. */
 export const DueField = ({
   due,
   now,
@@ -389,30 +379,51 @@ export const DueField = ({
 }) => (
   <DuePicker
     anchor={
-      <button
-        aria-label={`${dueDescription(due, now)}. Change it (${shortcut}), or press Backspace to clear it`}
-        className="focus-visible:ring-ring/50 rounded-md outline-none focus-visible:ring-3"
+      <span
+        className={cn(
+          "inline-flex h-6 shrink-0 items-center rounded-md text-xs font-medium whitespace-nowrap tabular-nums",
+          STATE_CLASS[dueState(due, now)]
+        )}
+        data-due-state={dueState(due, now)}
         data-testid="due-chip"
-        onClick={() => {
-          onOpenChange(!open);
-        }}
-        // Backspace on the chip clears the date, rather than asking to delete the capture.
-        onKeyDown={(event) => {
-          if (event.key === "Backspace" || event.key === "Delete") {
-            event.preventDefault();
-            onChange(null);
-          }
-        }}
-        title={`Change the due date (${shortcut})`}
-        type="button"
       >
-        <DueChip due={due} now={now} />
-      </button>
+        <button
+          aria-label={`${dueSentence(due, now)}. Change it (${shortcut})`}
+          className="focus-visible:ring-ring/50 flex h-full items-center gap-1 rounded-md pr-0.5 pl-1.5 outline-none hover:brightness-95 focus-visible:ring-3 dark:hover:brightness-125"
+          onClick={() => {
+            onOpenChange(!open);
+          }}
+          // Backspace on the chip clears the day, rather than asking to delete the capture.
+          onKeyDown={(event) => {
+            if (event.key === "Backspace" || event.key === "Delete") {
+              event.preventDefault();
+              onChange(null);
+            }
+          }}
+          title={`Due ${dueLongLabel(due)} (${shortcut})`}
+          type="button"
+        >
+          <HugeiconsIcon icon={Calendar03Icon} size={12} />
+          {dueChipText(due, now)}
+        </button>
+        <button
+          aria-label="Clear Due"
+          className="focus-visible:ring-ring/50 grid h-full w-6 place-items-center rounded-md opacity-70 outline-none hover:opacity-100 focus-visible:ring-3"
+          onClick={() => {
+            onChange(null);
+          }}
+          title="Clear Due"
+          type="button"
+        >
+          <HugeiconsIcon icon={Cancel01Icon} size={11} />
+        </button>
+      </span>
     }
     due={due}
     now={now}
     onChange={onChange}
     onOpenChange={onOpenChange}
     open={open}
+    shortcut={shortcut}
   />
 );

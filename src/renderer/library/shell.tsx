@@ -109,9 +109,7 @@ const EmptyList = ({
   }
 
   const activeText =
-    total > 0
-      ? "All done. Every capture is in Done."
-      : `No captures yet. Point at something and press ${KEYS.capture}.`;
+    total > 0 ? "All done. Every capture is in Done." : "No captures yet.";
 
   const text =
     list === "done"

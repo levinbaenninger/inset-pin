@@ -27,7 +27,8 @@ export const StepsEditor = ({
   steps,
 }: {
   readonly steps: readonly Step[];
-  readonly onChange: (steps: readonly Step[]) => void;
+  /** `now` for a tick or a removal, which saves at once; typing waits. */
+  readonly onChange: (steps: readonly Step[], now: boolean) => void;
   /** A step to focus once its field mounts, such as one just added. */
   readonly focusId: string | null;
   readonly onFocused: () => void;
@@ -51,13 +52,19 @@ export const StepsEditor = ({
     const step = newStep();
 
     pending.current = step.id;
-    onChange([...steps.slice(0, index + 1), step, ...steps.slice(index + 1)]);
+    onChange(
+      [...steps.slice(0, index + 1), step, ...steps.slice(index + 1)],
+      false
+    );
   };
 
   const remove = (index: number): void => {
     const neighbour = steps[index - 1] ?? steps[index + 1];
 
-    onChange(steps.filter((_, position) => position !== index));
+    onChange(
+      steps.filter((_, position) => position !== index),
+      true
+    );
     focus(neighbour?.id);
   };
 
@@ -139,7 +146,8 @@ export const StepsEditor = ({
                   onChange(
                     steps.map((item) =>
                       item.id === step.id ? { ...item, done: !step.done } : item
-                    )
+                    ),
+                    true
                   );
                 }}
               />
@@ -157,7 +165,8 @@ export const StepsEditor = ({
                       item.id === step.id
                         ? { ...item, text: event.target.value }
                         : item
-                    )
+                    ),
+                    false
                   );
                 }}
                 onKeyDown={(event) => {

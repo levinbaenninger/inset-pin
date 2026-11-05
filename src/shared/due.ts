@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { dayLabel, longDate } from "./dates.ts";
+
 const ISO_DATE = /^(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})$/u;
 const DAY_MS = 86_400_000;
 const SATURDAY = 6;
@@ -120,58 +122,41 @@ export const dueState = (due: DueDate, now: Date): DueState => {
   return days < WEEK_DAYS ? "soon" : "later";
 };
 
-const weekdayShort = new Intl.DateTimeFormat("en", { weekday: "short" });
+/** "Today", "Tomorrow", "Yesterday", the weekday within six days, else a short date. */
+export const dueLabel = (due: DueDate, now: Date, locale?: string): string =>
+  dayLabel(fromDueDate(due), now, locale);
 
-const dayMonth = new Intl.DateTimeFormat("en-GB", {
-  day: "numeric",
-  month: "short",
-});
+/** What the chip reads: an overdue day says so in words, not by colour alone. */
+export const dueChipText = (due: DueDate, now: Date, locale?: string): string =>
+  dueState(due, now) === "overdue"
+    ? `Overdue · ${dueLabel(due, now, locale)}`
+    : dueLabel(due, now, locale);
 
-const dayMonthYear = new Intl.DateTimeFormat("en-GB", {
-  day: "numeric",
-  month: "short",
-  year: "numeric",
-});
-
-/** "Today", "Tomorrow", "Yesterday", "Fri 7 Nov", or with the year when it is another year. */
-export const dueLabel = (due: DueDate, now: Date): string => {
+/** What the chip says aloud: "Due today", "Overdue, was due yesterday", "Due Friday". */
+export const dueSentence = (
+  due: DueDate,
+  now: Date,
+  locale?: string
+): string => {
+  const label = dueLabel(due, now, locale);
   const days = daysUntil(due, now);
+  const spoken = Math.abs(days) <= 1 ? label.toLocaleLowerCase() : label;
 
-  if (days === 0) {
-    return "Today";
-  }
-
-  if (days === 1) {
-    return "Tomorrow";
-  }
-
-  if (days === -1) {
-    return "Yesterday";
-  }
-
-  const date = fromDueDate(due);
-
-  if (date.getFullYear() !== now.getFullYear()) {
-    return dayMonthYear.format(date);
-  }
-
-  return `${weekdayShort.format(date)} ${dayMonth.format(date)}`;
+  return days < 0 ? `Overdue, was due ${spoken}` : `Due ${spoken}`;
 };
 
-/** What a due filter in the search keeps. */
-export type DueFilter =
-  | "today"
-  | "overdue"
-  | "week"
-  | "tomorrow"
-  | "any"
-  | "none";
+/** The whole day, for a tooltip: "Friday, November 13, 2026". */
+export const dueLongLabel = (due: DueDate, locale?: string): string =>
+  longDate(fromDueDate(due), locale);
 
+/** What a due filter in the search keeps. */
+export type DueFilter = "today" | "overdue" | "week" | "any" | "none";
+
+/** The same five filters, in the same order, as the Shelf and Window Links. */
 export const DUE_FILTERS: readonly DueFilter[] = [
   "today",
-  "tomorrow",
-  "week",
   "overdue",
+  "week",
   "any",
   "none",
 ];
@@ -179,7 +164,7 @@ export const DUE_FILTERS: readonly DueFilter[] = [
 export const isDueFilter = (value: string): value is DueFilter =>
   DUE_FILTERS.some((filter) => filter === value);
 
-/** `due:week` keeps what is due in the next seven days, and what is overdue, since that is due too. */
+/** `due:week` keeps what is overdue, due today or in the next six days, since what is overdue is due this week too. */
 export const matchesDueFilter = (
   due: DueDate | null,
   filter: DueFilter,
@@ -198,10 +183,6 @@ export const matchesDueFilter = (
   switch (filter) {
     case "today": {
       return days === 0;
-    }
-
-    case "tomorrow": {
-      return days === 1;
     }
 
     case "overdue": {

@@ -141,11 +141,36 @@ describe(InlineSaver, () => {
   });
 });
 
+describe("settling before a copy", () => {
+  it("resolves once main has the typed text, and reports a failed save", async () => {
+    const { saver, update } = setup();
+
+    saver.edit({ ...stored, description: "New words" });
+
+    await expect(saver.settle()).resolves.toStrictEqual({ ok: true });
+    expect(update).toHaveBeenLastCalledWith({
+      fields: { ...stored, description: "New words" },
+      id: ID,
+    });
+
+    const failing = setup(
+      async () => await Promise.resolve({ message: "Disk full", ok: false })
+    );
+
+    failing.saver.edit({ ...stored, title: "Other" });
+
+    await expect(failing.saver.settle()).resolves.toStrictEqual({
+      message: "Disk full",
+      ok: false,
+    });
+  });
+});
+
 describe(storedFields, () => {
-  it("trims text, drops blank steps and blank pin labels", () => {
+  it("trims the title, steps and labels, drops blank ones, and keeps the description as typed", () => {
     expect(
       storedFields({
-        description: " a ",
+        description: " a\n ",
         due: null,
         pins: [
           { label: "  ", x: 1, y: 2 },
@@ -158,7 +183,7 @@ describe(storedFields, () => {
         title: " T ",
       })
     ).toStrictEqual({
-      description: "a",
+      description: " a\n ",
       due: null,
       pins: [
         { x: 1, y: 2 },

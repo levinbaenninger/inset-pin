@@ -565,6 +565,8 @@ export interface DraftController {
   readonly view: () => CaptureView;
   readonly tray: () => TrayState;
   readonly frame: (id: CaptureId) => CapturedFrame | null;
+  /** Where the pointer was when the draft was captured, in the frame's pixels. */
+  readonly pointer: (id: CaptureId) => Point<"image"> | null;
   readonly subscribe: (listener: () => void) => () => void;
 }
 
@@ -740,6 +742,15 @@ export const createDraftController = (deps: DraftDeps): DraftController => {
       state.phase === "draft" && state.draft.id === id
         ? state.draft.frame
         : null,
+    pointer: (id) => {
+      if (state.phase !== "draft" || state.draft.id !== id) {
+        return null;
+      }
+
+      const { anchor, frame } = state.draft;
+
+      return screenToImage(anchor.point, anchor.display.bounds, frame.size);
+    },
     holdQuitIfNeeded: () => {
       if (mayQuit(state)) {
         return "allow";

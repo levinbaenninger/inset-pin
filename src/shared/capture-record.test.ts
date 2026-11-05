@@ -4,14 +4,15 @@ import {
   canSaveTitle,
   CaptureRecordSchema,
   CaptureRecordV1Schema,
-  joinThought,
   migrateV1,
   parseStoredEntry,
+  SavedTitleSchema,
   SCHEMA_VERSION,
   shortTitle,
   splitThought,
   TITLE_MAX,
 } from "./capture-record";
+import type { SplitThought } from "./capture-record";
 
 const ID = "3f1c2b9e-4a7d-4e21-9b0c-5d8e6f7a1b2c";
 const OTHER_ID = "11111111-2222-4333-8444-555555555555";
@@ -74,61 +75,75 @@ describe(canSaveTitle, () => {
   });
 });
 
+/** Every thought made of these parts, two to four of them long, so edges and mixtures all come up. */
+const PARTS = ["A", " ", "\n", "\r\n", "\t", "y".repeat(TITLE_MAX + 1)];
+
+const thoughts = (length: number): readonly string[] =>
+  length === 0
+    ? [""]
+    : thoughts(length - 1).flatMap((head) => PARTS.map((part) => head + part));
+
+const nonBlank = [2, 3, 4]
+  .flatMap(thoughts)
+  .filter((thought) => thought.trim() !== "");
+
+/** What a reader of the migrated capture has: the title alone, or the description. */
+const thoughtShown = ({ description, title }: SplitThought): string =>
+  description === "" ? title : description;
+
 describe(splitThought, () => {
-  it("takes the first line as the title and the rest as the description", () => {
-    expect(
-      splitThought("Total is off\nCheck the discount\n\nAnd tax")
-    ).toStrictEqual({
-      description: "Check the discount\n\nAnd tax",
-      title: "Total is off",
-    });
-  });
-
-  it("skips leading blank lines and trims the title", () => {
-    expect(splitThought("\n\n   Total is off  \n\nCheck\n\n")).toStrictEqual({
-      description: "Check",
-      title: "Total is off",
-    });
-  });
-
-  it("gives a one-line thought an empty description", () => {
+  it("makes a clean one-line thought the title", () => {
     expect(splitThought("Just this")).toStrictEqual({
       description: "",
       title: "Just this",
     });
   });
 
-  it("keeps a first line too long for a title whole in the description", () => {
+  it("keeps any other thought whole as the description, under its first line", () => {
+    expect(splitThought("Title\n\nParagraph")).toStrictEqual({
+      description: "Title\n\nParagraph",
+      title: "Title",
+    });
+    expect(splitThought("  indented\r\n\tdetail \n")).toStrictEqual({
+      description: "  indented\r\n\tdetail \n",
+      title: "indented",
+    });
+  });
+
+  it("shortens a first line too long for a title, and keeps it in the description", () => {
     const long = "y".repeat(TITLE_MAX + 20);
-    const split = splitThought(`${long}\nmore`);
+    const split = splitThought(long);
 
-    expect(split.title).toHaveLength(TITLE_MAX);
-    expect(split.title.endsWith("…")).toBeTruthy();
-    expect(split.description).toBe(`${long}\nmore`);
+    expect(split.title).toBe(`${"y".repeat(TITLE_MAX - 1)}…`);
+    expect(split.description).toBe(long);
   });
 
-  it("joins back to the thought it came from, without surrounding blank lines", () => {
-    const thought = "Total is off\n  indented detail\n\n- a list";
-    const { description, title } = splitThought(thought);
+  it("loses nothing for any mix of words, spaces, tabs, line breaks and long lines", () => {
+    const lost = nonBlank.filter(
+      (thought) => thoughtShown(splitThought(thought)) !== thought
+    );
 
-    expect(joinThought(title, description)).toBe(thought);
+    expect(nonBlank.length).toBeGreaterThan(1000);
+    expect(lost).toStrictEqual([]);
   });
 
-  it("is stable: splitting a joined split changes nothing", () => {
-    const once = splitThought("\nA\n\nB\nC\n");
-    const twice = splitThought(joinThought(once.title, once.description));
+  it("always gives a title that can be saved", () => {
+    const unsavable = nonBlank.filter(
+      (thought) =>
+        !SavedTitleSchema.safeParse(splitThought(thought).title).success
+    );
 
-    expect(twice).toStrictEqual(once);
+    expect(unsavable).toStrictEqual([]);
   });
 });
 
 describe(migrateV1, () => {
-  it("moves the pin into pins and the thought into title and description", () => {
+  it("moves the pin into pins and keeps the whole thought", () => {
     const migrated = migrateV1(CaptureRecordV1Schema.parse(v1));
 
     expect(migrated).toStrictEqual({
       capturedAt: v1.capturedAt,
-      description: "Check with finance",
+      description: "This total ignores the discount row\nCheck with finance",
       due: null,
       id: ID,
       image: v1.image,
@@ -196,7 +211,7 @@ describe(parseStoredEntry, () => {
       kind: "ok",
       migratedFrom: 1,
       record: {
-        description: "Check with finance",
+        description: v1.thought,
         future: 1,
         pins: [{ x: 240, y: 100 }],
         schemaVersion: 2,
@@ -222,6 +237,19 @@ describe(parseStoredEntry, () => {
     const record = entry?.kind === "ok" ? entry.record : null;
 
     expect(parseStoredEntry(ID, JSON.stringify(record))).toStrictEqual(entry);
+  });
+
+  it("reads a migrated v1 record back unchanged after it is written as v2", () => {
+    const thought = "  Total ignores the discount\r\n\n\tsee row 12\n";
+    const first = parseStoredEntry(ID, JSON.stringify({ ...v1, thought }));
+    const record = first?.kind === "ok" ? first.record : null;
+    const again = parseStoredEntry(ID, JSON.stringify(record));
+
+    expect(again).toMatchObject({
+      kind: "ok",
+      migratedFrom: null,
+      record: { description: thought, title: "Total ignores the discount" },
+    });
   });
 
   it("rejects a due date that is no calendar day", () => {

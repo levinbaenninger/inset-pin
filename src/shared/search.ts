@@ -1,4 +1,4 @@
-import { isDueFilter, matchesDueFilter } from "./due";
+import { DUE_FILTERS, isDueFilter, matchesDueFilter } from "./due";
 import type { DueDate, DueFilter } from "./due";
 
 const TERM_SEPARATOR = /\s+/u;
@@ -8,14 +8,17 @@ export interface ParsedQuery {
   /** Lowercase words; each must appear somewhere in the capture. */
   readonly terms: readonly string[];
   readonly due: DueFilter | null;
-  /** A `due:` token that names no filter, so the search can say which ones exist. */
-  readonly unknownDue: string | null;
+  /**
+   * A `due:` word that names no filter yet, such as `due:` or `due:to` while
+   * it is typed. It filters nothing; the search offers the filters instead.
+   */
+  readonly pendingDue: string | null;
 }
 
 export const parseQuery = (query: string): ParsedQuery => {
   const terms: string[] = [];
   let due: DueFilter | null = null;
-  let unknownDue: string | null = null;
+  let pendingDue: string | null = null;
 
   for (const word of query.split(TERM_SEPARATOR)) {
     const token = DUE_TOKEN.exec(word);
@@ -30,16 +33,28 @@ export const parseQuery = (query: string): ParsedQuery => {
       if (isDueFilter(value)) {
         due = value;
       } else {
-        unknownDue = value;
+        pendingDue = value;
       }
     }
   }
 
-  return { due, terms, unknownDue };
+  return { due, pendingDue, terms };
 };
 
 export const isEmptyQuery = (query: ParsedQuery): boolean =>
-  query.terms.length === 0 && query.due === null && query.unknownDue === null;
+  query.terms.length === 0 && query.due === null;
+
+/** The filters a `due:` being typed can still become; every filter when none starts with it. */
+export const dueSuggestions = (query: ParsedQuery): readonly DueFilter[] => {
+  if (query.pendingDue === null) {
+    return [];
+  }
+
+  const typed = query.pendingDue;
+  const started = DUE_FILTERS.filter((filter) => filter.startsWith(typed));
+
+  return started.length === 0 ? DUE_FILTERS : started;
+};
 
 /** What a capture offers the search. */
 export interface Searchable {
@@ -68,10 +83,6 @@ export const matchesSearch = (
   query: ParsedQuery,
   now: Date
 ): boolean => {
-  if (query.unknownDue !== null) {
-    return false;
-  }
-
   if (query.due !== null && !matchesDueFilter(entry.due, query.due, now)) {
     return false;
   }
@@ -137,17 +148,14 @@ export const highlightParts = (
   return parts;
 };
 
-/** The search's due filters, for the placeholder and the filter menu. */
-export const DUE_FILTER_LABELS: readonly {
-  readonly filter: DueFilter;
-  readonly label: string;
-}[] = [
-  { filter: "overdue", label: "Overdue" },
-  { filter: "today", label: "Due today" },
-  { filter: "tomorrow", label: "Due tomorrow" },
-  { filter: "week", label: "Due this week" },
-  { filter: "any", label: "Has a due date" },
-];
+/** What each due filter is called in the filter menu and the suggestions, as the Shelf names them. */
+export const DUE_FILTER_LABELS: Readonly<Record<DueFilter, string>> = {
+  any: "Has a Due",
+  none: "No Due",
+  overdue: "Overdue",
+  today: "Due today",
+  week: "Due this week (incl. overdue)",
+};
 
 /** The query with its `due:` token replaced, or removed for null. */
 export const withDueFilter = (

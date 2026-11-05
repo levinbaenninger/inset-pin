@@ -1,4 +1,5 @@
 import { PINS_MAX } from "./capture-record";
+import type { PinKeyAction } from "./shortcuts";
 
 /** A pin anywhere: the panel keeps pins in screen-image pixels, a saved capture in crop pixels. */
 export interface PinPoint {
@@ -14,9 +15,9 @@ export interface PinArea {
   readonly height: number;
 }
 
-/** One arrow press moves a pin this far, in display points; Shift moves it ten. */
-export const NUDGE_DIP = 1;
-export const NUDGE_FAR_DIP = 10;
+/** One arrow press moves a pin this many image pixels, whatever the display's density; Shift moves it ten. */
+export const NUDGE_PX = 1;
+export const NUDGE_FAR_PX = 10;
 
 const clamp = (value: number, low: number, high: number): number =>
   Math.min(Math.max(value, low), high);
@@ -142,3 +143,71 @@ export const pinLabelLines = (pins: readonly PinPoint[]): readonly string[] =>
       ? []
       : [`${index + 1} · ${pin.label.trim()}`]
   );
+
+/** An image's pins and which one is selected. */
+export interface PinEdit<P extends PinPoint> {
+  readonly pins: readonly P[];
+  readonly selected: number | null;
+}
+
+/**
+ * What a pin key does to the pins, the same in the capture panel and the
+ * library: ⇧P drops a pin at `dropAt` and selects it, 1–9 select, ⌫ removes
+ * the selected pin and the later ones renumber, the arrows nudge it by image
+ * pixels, and Escape lets it go. P (pin mode) is the editor's own.
+ */
+export const applyPinKey = <P extends PinPoint>(
+  edit: PinEdit<P>,
+  action: Exclude<PinKeyAction, { readonly kind: "toggleTool" }>,
+  area: PinArea,
+  dropAt: P
+): PinEdit<P> => {
+  const { pins, selected } = edit;
+
+  switch (action.kind) {
+    case "drop": {
+      const next = addPin(pins, dropAt, area);
+
+      return next === null ? edit : { pins: next, selected: next.length - 1 };
+    }
+
+    case "select": {
+      return action.index < pins.length
+        ? { pins, selected: action.index }
+        : edit;
+    }
+
+    case "remove": {
+      return selected === null
+        ? edit
+        : {
+            pins: removePin(pins, selected),
+            selected: selectionAfterRemove(pins.length, selected),
+          };
+    }
+
+    case "nudge": {
+      const step = action.far ? NUDGE_FAR_PX : NUDGE_PX;
+
+      return selected === null
+        ? edit
+        : {
+            pins: nudgePin(
+              pins,
+              selected,
+              { x: action.dx * step, y: action.dy * step },
+              area
+            ),
+            selected,
+          };
+    }
+
+    case "deselect": {
+      return { pins, selected: null };
+    }
+
+    default: {
+      return edit;
+    }
+  }
+};

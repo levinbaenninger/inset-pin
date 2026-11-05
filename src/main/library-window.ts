@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
@@ -48,6 +49,9 @@ const titleBarOverlay = (): Electron.TitleBarOverlayOptions => {
   };
 };
 
+/** How long a close or a quit waits for the page to save what is typed. */
+const FLUSH_TIMEOUT_MS = 1000;
+
 export interface LibraryWindow {
   /** Opens the library, on one capture when an id is given. */
   readonly open: (id?: CaptureId) => void;
@@ -62,6 +66,10 @@ export interface LibraryWindow {
   readonly shownDone: () => boolean | null;
   /** Runs once the page has loaded; the page keeps a command that arrives before it listens. */
   readonly whenLoaded: (run: () => void) => void;
+  /** Asks the page to save what is typed, and waits for it, at most a second. */
+  readonly flushEdits: () => Promise<void>;
+  /** For a quit that already saved the edits: the window closes without asking again. */
+  readonly allowClose: () => void;
 }
 
 export interface LibraryOptions {
@@ -92,6 +100,10 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
   let window: BrowserWindow | null = null;
   let floatOnTop = false;
   let shownDone: boolean | null = null;
+  let quitting = false;
+  /** The page's answers to `flush`, by token. */
+  const flushed = new EventTarget();
+  let flushCount = 0;
 
   // Dragged copies wait here for the drop; a drop can finish after startDrag returns, so they are cleared on delete and at launch.
   const dragStaging = path.join(app.getPath("temp"), "Inset Context Pin");
@@ -109,9 +121,13 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
     libraryContract,
     {
       captureSoon: options.captureSoon,
+      copyDetails: exporter.copyDetails,
       copyImage: exporter.copyImage,
       copyText: exporter.copyText,
       floatOnTop: options.floatOnTop,
+      flushed: (token) => {
+        flushed.dispatchEvent(new Event(token));
+      },
       get: (id) => {
         const entry = store.get(id);
 
@@ -140,8 +156,8 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
         return result.ok ? OK : fail(result.message);
       },
       status: options.status,
-      startImageDrag: (id) => {
-        const pinned = exporter.pinnedImage(id);
+      startImageDrag: ({ id, pins, title }) => {
+        const pinned = exporter.pinnedImage(id, { pins, title });
 
         if (window === null || pinned === null) {
           return;
@@ -175,6 +191,28 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
   store.subscribe(() => {
     server.emit("changed", null);
   });
+
+  const flushEdits = async (): Promise<void> => {
+    if (window === null || window.webContents.isLoading()) {
+      return;
+    }
+
+    flushCount += 1;
+
+    const token = String(flushCount);
+
+    const answer = once(flushed, token, {
+      signal: AbortSignal.timeout(FLUSH_TIMEOUT_MS),
+    });
+
+    server.emit("flush", token);
+
+    try {
+      await answer;
+    } catch {
+      // A page that doesn't answer in time keeps what its pagehide save manages.
+    }
+  };
 
   const open = (id?: CaptureId): void => {
     if (window !== null) {
@@ -235,6 +273,26 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
 
       options.onOpened();
     });
+    // The page saves what is typed first; its own pagehide save can't reach main from a closed window.
+    let saved = false;
+
+    const closeAfterSaving = async (): Promise<void> => {
+      await flushEdits();
+      saved = true;
+
+      if (!created.isDestroyed()) {
+        created.close();
+      }
+    };
+
+    created.on("close", (event) => {
+      if (saved || quitting) {
+        return;
+      }
+
+      event.preventDefault();
+      void closeAfterSaving();
+    });
     created.on("focus", options.onFocusChange);
     created.on("blur", options.onFocusChange);
     created.on("closed", () => {
@@ -255,6 +313,9 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
   };
 
   return {
+    allowClose: () => {
+      quitting = true;
+    },
     command: (command) => {
       if (window !== null) {
         if (command === "find" || command === "shortcuts") {
@@ -266,6 +327,7 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
         server.emit("command", command);
       }
     },
+    flushEdits,
     isFloating: () => floatOnTop,
     shownDone: () => shownDone,
     whenLoaded: (run) => {

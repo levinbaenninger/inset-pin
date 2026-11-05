@@ -9,12 +9,7 @@ import type {
 } from "@shared/contracts";
 import { pt, WIDEN_STEP } from "@shared/geometry";
 import type { PinGeometry, Point } from "@shared/geometry";
-import {
-  addPin,
-  nudgePin,
-  removePin,
-  selectionAfterRemove,
-} from "@shared/pins";
+import { applyPinKey } from "@shared/pins";
 import {
   fieldKeyAction,
   keyLabels,
@@ -225,6 +220,7 @@ export const DraftEditor = ({ view }: DraftEditorProps) => {
   const [pinMode, setPinMode] = useState(true);
   const [sheetOpen, setSheetOpen] = useState(false);
   const pointerRef = useRef<Point<"image"> | null>(null);
+  const previewRef = useRef<HTMLDivElement>(null);
   const fieldsUi = useFieldsUi();
   const [now, setNow] = useState(() => new Date());
 
@@ -322,69 +318,30 @@ export const DraftEditor = ({ view }: DraftEditorProps) => {
       return;
     }
 
+    if (action.kind === "toggleTool") {
+      setPinMode(!pinMode);
+
+      return;
+    }
+
     const { crop, pins } = content;
 
-    switch (action.kind) {
-      case "toggleTool": {
-        setPinMode(!pinMode);
-        break;
-      }
+    const next = applyPinKey(
+      { pins, selected },
+      action,
+      crop,
+      pointerRef.current ?? cropCentre(content)
+    );
 
-      case "drop": {
-        const next = addPin(
-          pins,
-          pointerRef.current ?? cropCentre(content),
-          crop
-        );
+    if (next.pins !== pins) {
+      changeGeometry({ crop, pins: next.pins });
+    }
 
-        if (next !== null) {
-          changeGeometry({ crop, pins: next });
-          setSelected(next.length - 1);
-        }
+    setSelected(next.selected);
 
-        break;
-      }
-
-      case "select": {
-        setSelected(action.index);
-        break;
-      }
-
-      case "remove": {
-        if (selected !== null) {
-          changeGeometry({ crop, pins: removePin(pins, selected) });
-          setSelected(selectionAfterRemove(pins.length, selected));
-        }
-
-        break;
-      }
-
-      case "nudge": {
-        if (selected !== null) {
-          const step = frame.ppd * (action.far ? 10 : 1);
-
-          changeGeometry({
-            crop,
-            pins: nudgePin(
-              pins,
-              selected,
-              { x: action.dx * step, y: action.dy * step },
-              crop
-            ),
-          });
-        }
-
-        break;
-      }
-
-      case "deselect": {
-        setSelected(null);
-        break;
-      }
-
-      default: {
-        break;
-      }
+    // The selection lives in the preview: a pin chosen by key puts the focus there.
+    if (next.selected !== null) {
+      previewRef.current?.focus({ preventScroll: true });
     }
   };
 
@@ -475,6 +432,7 @@ export const DraftEditor = ({ view }: DraftEditorProps) => {
         onSelect={setSelected}
         pinMode={pinMode}
         pointerRef={pointerRef}
+        previewRef={previewRef}
         selected={selected}
       />
       <div className="bg-background border-foreground/10 rounded-lg border">

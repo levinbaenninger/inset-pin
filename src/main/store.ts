@@ -118,6 +118,8 @@ export interface CaptureStore {
   ) => Promise<StoreResult<CaptureRecord>>;
   readonly remove: (id: CaptureId) => Promise<StoreResult<null>>;
   readonly subscribe: (listener: () => void) => () => void;
+  /** Resolves once every queued write has finished, including writes queued meanwhile. */
+  readonly settled: () => Promise<void>;
 }
 
 export interface StoreOptions {
@@ -461,6 +463,15 @@ export const openCaptureStore = async (
       return () => {
         listeners.delete(listener);
       };
+    },
+    settled: async () => {
+      let current: Promise<void>;
+
+      do {
+        current = tail;
+        // oxlint-disable-next-line no-await-in-loop -- each wait may queue more writes behind it.
+        await current;
+      } while (current !== tail);
     },
     setDone: async (id, done) =>
       await enqueue(

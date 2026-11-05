@@ -4,6 +4,7 @@ import {
   captureKeyAction,
   fieldKeyAction,
   libraryShortcuts,
+  panelShortcuts,
   pinKeyAction,
   zoomKeyAction,
 } from "./shortcuts";
@@ -175,5 +176,67 @@ describe(libraryShortcuts, () => {
       .join(" ");
 
     expect(windows).not.toMatch(/[⌘⌥⇧⌃]/u);
+  });
+});
+
+describe("⌥ chords", () => {
+  it("match on macOS by the physical key, since ⌥ turns F into ƒ and C into ç", () => {
+    const held = { ...mac, altKey: true };
+
+    expect(fieldKeyAction(press("ƒ", { ...held, code: "KeyF" }), true)).toBe(
+      "float"
+    );
+    expect(fieldKeyAction(press("ç", { ...held, code: "KeyC" }), true)).toBe(
+      "copyDetails"
+    );
+  });
+
+  it("match on Windows by the letter only, so AltGr characters never fire", () => {
+    const held = { ...win, altKey: true };
+
+    expect(fieldKeyAction(press("c", { ...held, code: "KeyC" }), false)).toBe(
+      "copyDetails"
+    );
+    expect(
+      fieldKeyAction(press("©", { ...held, code: "KeyC" }), false)
+    ).toBeNull();
+  });
+});
+
+describe("undo keys", () => {
+  it("undo and redo with ⌘Z and ⇧⌘Z, or Ctrl+Z and Ctrl+Y", () => {
+    expect([
+      captureKeyAction(press("z", mac), true),
+      captureKeyAction(press("Z", { ...mac, shiftKey: true }), true),
+      captureKeyAction(press("z", win), false),
+      captureKeyAction(press("y", win), false),
+      captureKeyAction(press("Z", { ...win, shiftKey: true }), false),
+      captureKeyAction(press("y", mac), true),
+    ]).toStrictEqual(["undo", "redo", "undo", "redo", "redo", null]);
+  });
+});
+
+describe("shortcut sheets", () => {
+  it("list their sections in the order every Inset app uses", () => {
+    expect(libraryShortcuts(true).map((group) => group.title)).toStrictEqual([
+      "Capture",
+      "Navigate",
+      "Edit",
+      "Fields",
+      "Pins",
+      "Window",
+    ]);
+    expect(panelShortcuts(false).map((group) => group.title)).toStrictEqual([
+      "Capture",
+      "Navigate",
+      "Fields",
+      "Pins",
+    ]);
+  });
+
+  it("call the field Due, never Due date", () => {
+    const text = JSON.stringify([libraryShortcuts(true), panelShortcuts(true)]);
+
+    expect(text).not.toMatch(/due date/iu);
   });
 });

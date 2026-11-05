@@ -1,6 +1,6 @@
-import type { CaptureId } from "@shared/capture-record";
+import type { CaptureId, SavedPin } from "@shared/capture-record";
 import type { ActionResult } from "@shared/contracts";
-import { entryText } from "@shared/entry-text";
+import { entryPlainText, entryText } from "@shared/entry-text";
 import { drawPins } from "@shared/pin-sprite";
 import { clipboard, ClipboardItem, nativeImage } from "electron";
 
@@ -13,12 +13,23 @@ export interface PinnedImage {
   readonly fileName: string;
 }
 
+/** The pins and title the page shows, when they may be newer than the saved ones. */
+export interface ShownPins {
+  readonly pins: readonly SavedPin[];
+  readonly title: string;
+}
+
 export interface CaptureExport {
   /** The saved crop with every pin drawn on it, so the receiving app sees what mattered. */
-  readonly pinnedImage: (id: CaptureId) => PinnedImage | null;
+  readonly pinnedImage: (
+    id: CaptureId,
+    shown?: ShownPins
+  ) => PinnedImage | null;
   readonly copyImage: (id: CaptureId) => Promise<ActionResult>;
-  /** The title, description, steps, due date and pin labels as plain text. */
+  /** The title and the description as plain text. */
   readonly copyText: (id: CaptureId) => Promise<ActionResult>;
+  /** The title, description, steps, due day and pin labels as plain text. */
+  readonly copyDetails: (id: CaptureId) => Promise<ActionResult>;
   /** The image and the text in one clipboard item; an app takes whichever it can paste. */
   readonly copyBoth: (id: CaptureId) => Promise<ActionResult>;
 }
@@ -27,8 +38,21 @@ const OK: ActionResult = { ok: true };
 
 const fail = (message: string): ActionResult => ({ message, ok: false });
 
+const copyString = async (text: string | null): Promise<ActionResult> => {
+  if (text === null) {
+    return fail("This capture can't be copied.");
+  }
+
+  await clipboard.writeText(text);
+
+  return OK;
+};
+
 export const createCaptureExport = (store: CaptureStore): CaptureExport => {
-  const pinnedImage = (id: CaptureId): PinnedImage | null => {
+  const pinnedImage = (
+    id: CaptureId,
+    shown?: ShownPins
+  ): PinnedImage | null => {
     const entry = store.get(id);
     const file = store.imageFile(id);
 
@@ -43,7 +67,11 @@ export const createCaptureExport = (store: CaptureStore): CaptureExport => {
     }
 
     const { height, width } = saved.getSize();
-    const { image, pins, title } = entry.record;
+    const { image } = entry.record;
+    const inside = shown?.pins.every((pin) => pin.x < width && pin.y < height);
+
+    const { pins, title } =
+      shown !== undefined && inside === true ? shown : entry.record;
 
     // The same sprite the screen shows (src/shared/pin-sprite.ts), in the bitmap's BGRA order.
     const marked = nativeImage.createFromBitmap(
@@ -105,16 +133,13 @@ export const createCaptureExport = (store: CaptureStore): CaptureExport => {
   return {
     copyBoth: async (id) => await write(id, true),
     copyImage: async (id) => await write(id, false),
+    copyDetails: async (id) => await copyString(textOf(id)),
     copyText: async (id) => {
-      const text = textOf(id);
+      const entry = store.get(id);
 
-      if (text === null) {
-        return fail("This capture can't be copied.");
-      }
-
-      await clipboard.writeText(text);
-
-      return OK;
+      return await copyString(
+        entry?.kind === "ok" ? entryPlainText(entry.record) : null
+      );
     },
     pinnedImage,
   };

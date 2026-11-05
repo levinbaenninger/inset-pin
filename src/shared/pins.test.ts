@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { PINS_MAX } from "./capture-record";
 import {
   addPin,
+  applyPinKey,
   labelPin,
   movePin,
   nudgePin,
@@ -116,5 +117,56 @@ describe(pinAt, () => {
         6
       )
     ).toBe(1);
+  });
+});
+
+describe(applyPinKey, () => {
+  const edit = { pins: three, selected: 1 };
+  const dropAt = { x: 5, y: 6 };
+
+  const nudged = (far: boolean) =>
+    applyPinKey(edit, { dx: 1, dy: -1, far, kind: "nudge" }, AREA, dropAt)
+      .pins[1];
+
+  it("nudges the selected pin one image pixel, or ten with Shift", () => {
+    expect(nudged(false)).toStrictEqual({ x: 51, y: 49 });
+    expect(nudged(true)).toStrictEqual({ x: 60, y: 40 });
+  });
+
+  it("removes the selected pin and selects the one that took its number", () => {
+    expect(applyPinKey(edit, { kind: "remove" }, AREA, dropAt)).toStrictEqual({
+      pins: [three[0], three[2]],
+      selected: 1,
+    });
+  });
+
+  it("drops a pin at the given point and selects it", () => {
+    expect(applyPinKey(edit, { kind: "drop" }, AREA, dropAt)).toStrictEqual({
+      pins: [...three, { x: 5, y: 6 }],
+      selected: 3,
+    });
+  });
+
+  it("leaves the pins alone without a selection", () => {
+    const none = { pins: three, selected: null };
+
+    expect(applyPinKey(none, { kind: "remove" }, AREA, dropAt)).toBe(none);
+    expect(
+      applyPinKey(
+        none,
+        { dx: 1, dy: 0, far: false, kind: "nudge" },
+        AREA,
+        dropAt
+      )
+    ).toBe(none);
+  });
+
+  it("selects and lets go", () => {
+    expect(
+      applyPinKey(edit, { index: 2, kind: "select" }, AREA, dropAt).selected
+    ).toBe(2);
+    expect(
+      applyPinKey(edit, { kind: "deselect" }, AREA, dropAt).selected
+    ).toBeNull();
   });
 });

@@ -1,5 +1,6 @@
 import { appendFileSync } from "node:fs";
 
+import type { Point, Rect, Size } from "@shared/geometry";
 import { BrowserWindow } from "electron";
 import type { Rectangle } from "electron";
 
@@ -14,9 +15,17 @@ export type E2eEvent =
   | "libraryOpened"
   | "libraryClosed";
 
+/** What the scripts need to click the panel's preview where the pointer was, so pin 1 lands on the marker. */
+export interface E2ePreview {
+  readonly crop: Rect<"image">;
+  readonly frame: Size<"image">;
+  readonly pointer: Point<"image">;
+}
+
 export interface E2eDetails {
   readonly bounds?: Rectangle;
   readonly draftId?: string;
+  readonly preview?: E2ePreview;
 }
 
 const logFile = process.env.INSET_E2E_LOG;

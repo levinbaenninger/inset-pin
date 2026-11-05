@@ -12,7 +12,7 @@
     "start": "electron-vite preview",
     "build": "electron-vite build",
     "screens": "electron-vite build && node scripts/screens.ts",
-    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.scripts.json",
     "test": "vitest run",
     "check": "ultracite check",
     "fix": "ultracite fix",

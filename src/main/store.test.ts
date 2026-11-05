@@ -409,7 +409,7 @@ describe(openCaptureStore, () => {
       kind: "ok",
       migratedFrom: 1,
       record: {
-        description: "Check with finance",
+        description: "This total ignores the discount row\nCheck with finance",
         pins: [{ x: 240, y: 100 }],
         title: "This total ignores the discount row",
       },
@@ -423,7 +423,7 @@ describe(openCaptureStore, () => {
       .parse(JSON.parse(await readText(ID, "capture.json")));
 
     expect(written).toMatchObject({
-      description: "Check with finance",
+      description: "This total ignores the discount row\nCheck with finance",
       pins: [{ x: 240, y: 100 }],
       schemaVersion: 2,
       status: { at: "2026-10-21T19:00:00.000Z", kind: "done" },
@@ -431,6 +431,21 @@ describe(openCaptureStore, () => {
     });
     expect("thought" in written).toBeFalsy();
     expect("pin" in written).toBeFalsy();
+  });
+
+  it("settles only once every queued write, and any queued meanwhile, is done", async () => {
+    const store = await open();
+
+    await store.publish(record, PNG);
+
+    const first = store.update(ID, fields({ title: "First" }));
+    const settled = store.settled();
+    const second = store.update(ID, fields({ title: "Second" }));
+
+    await settled;
+
+    expect(store.get(ID)).toMatchObject({ record: { title: "Second" } });
+    await expect(Promise.all([first, second])).resolves.toHaveLength(2);
   });
 
   it("marks a capture done and active again", async () => {

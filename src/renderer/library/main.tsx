@@ -11,6 +11,7 @@ import { markPlatform } from "@/shared/platform";
 import { followSystemTheme } from "@/shared/theme";
 
 import { startCommandBus } from "./command-bus";
+import { settleAllEdits } from "./pending-edits";
 import { router } from "./router";
 
 followSystemTheme();
@@ -21,6 +22,16 @@ startCommandBus();
 
 libraryBridge().on("changed", () => {
   void router.invalidate();
+});
+
+// Before the window closes or the app quits, main waits for what is typed to be saved.
+const answerFlush = async (token: string): Promise<void> => {
+  await settleAllEdits();
+  libraryBridge().flushed(token);
+};
+
+libraryBridge().on("flush", (token) => {
+  void answerFlush(token);
 });
 
 // A capture chosen from the tray or the Dock menu.

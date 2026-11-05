@@ -4,6 +4,7 @@ import {
   Delete02Icon,
   Image01Icon,
   PictureInPictureOnIcon,
+  TextAlignLeftIcon,
   Undo02Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -45,6 +46,7 @@ import { isMac } from "@/shared/platform";
 import { useLibraryState } from "./library-state";
 import { isShown, listOrder, selectionAfterRemoval } from "./list-model";
 import { useNotice } from "./notice";
+import { settleEdits } from "./pending-edits";
 
 const api = libraryBridge();
 const rootRoute = getRouteApi("__root__");
@@ -107,10 +109,22 @@ export const useCaptureCommands = (capture: SavedCapture) => {
     });
   };
 
-  const copy = async (
+  /** Saves what is typed first, so the clipboard gets what the page shows; a failed save copies nothing stale. */
+  const afterSaving = async (
     call: () => Promise<ActionResult>,
     text: string
   ): Promise<void> => {
+    const saved = await settleEdits(capture.id);
+
+    if (!saved.ok) {
+      say({
+        failed: true,
+        text: `Couldn’t save your changes, so nothing was copied. ${saved.message}`,
+      });
+
+      return;
+    }
+
     report(await settle(call), text);
   };
 
@@ -140,22 +154,34 @@ export const useCaptureCommands = (capture: SavedCapture) => {
     }
   };
 
+  // The floating window reads the saved capture, so it opens once the typing is saved.
+  const floatAfterSaving = async (): Promise<void> => {
+    await settleEdits(capture.id);
+    api.floatOnTop(capture.id);
+    say({ text: "Floating on top of other apps" });
+  };
+
   const commands = {
     askDelete: () => {
       setConfirming(true);
     },
+    copyDetails: () => {
+      void afterSaving(
+        async () => await api.copyDetails(capture.id),
+        "Copied with details"
+      );
+    },
     copyImage: () => {
-      void copy(
+      void afterSaving(
         async () => await api.copyImage(capture.id),
         "Image copied with its pins"
       );
     },
     copyText: () => {
-      void copy(async () => await api.copyText(capture.id), "Copied as text");
+      void afterSaving(async () => await api.copyText(capture.id), "Copied");
     },
     float: () => {
-      api.floatOnTop(capture.id);
-      say({ text: "Floating on top of other apps" });
+      void floatAfterSaving();
     },
     toggleDone: () => {
       void setDone(capture.id, !done);
@@ -167,8 +193,15 @@ export const useCaptureCommands = (capture: SavedCapture) => {
       icon: Copy01Icon,
       keys: KEYS.copyText,
       kind: "item",
-      label: "Copy as Text",
+      label: "Copy Text",
       run: commands.copyText,
+    },
+    {
+      icon: TextAlignLeftIcon,
+      keys: KEYS.copyDetails,
+      kind: "item",
+      label: "Copy with Details",
+      run: commands.copyDetails,
     },
     {
       icon: Image01Icon,

@@ -9,11 +9,14 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import type { EditableFields, SavedPin } from "@shared/capture-record";
 import type { LibraryCommand, SavedCapture } from "@shared/contracts";
 import {
-  nudgePin,
-  removePin,
-  selectionAfterRemove,
-  addPin,
-} from "@shared/pins";
+  emptyHistory,
+  endGesture,
+  recordPins,
+  redoPins,
+  undoPins,
+} from "@shared/pin-history";
+import type { HistoryStep } from "@shared/pin-history";
+import { applyPinKey } from "@shared/pins";
 import { captureKeyAction, fieldKeyAction, keyLabels } from "@shared/shortcuts";
 import type { PinKeyAction } from "@shared/shortcuts";
 import { getRouteApi, Link } from "@tanstack/react-router";
@@ -44,9 +47,11 @@ import { MenuEntries, useCaptureCommands } from "./capture-commands";
 import { onCommand } from "./command-bus";
 import { formatCaptureTime, readOnlyText, sourceText } from "./format";
 import { ImageEditor } from "./image-editor";
+import type { PinChange } from "./image-editor";
 import { InlineSaver } from "./inline-saver";
 import { useLibraryState } from "./library-state";
 import { PaneHeader } from "./pane-header";
+import { shownFields, trackEdits } from "./pending-edits";
 
 const api = libraryBridge();
 const route = getRouteApi("/captures/$captureId");
@@ -59,6 +64,21 @@ const fieldsOf = (capture: SavedCapture): EditableFields => ({
   steps: capture.steps,
   title: capture.title,
 });
+
+/** Which pin edits undo together: one drag, one run of nudges to a pin, one label being typed. */
+const gestureOf = (change: PinChange): string | null => {
+  if (change.kind === "drag") {
+    return `drag:${change.id}`;
+  }
+
+  return change.kind === "label" || change.kind === "nudge"
+    ? `${change.kind}:${change.index}`
+    : null;
+};
+
+/** Typing a label waits like any typing, and so does a drag until the pin is let go; the rest saves at once. */
+const savesNow = (change: PinChange): boolean =>
+  change.kind === "drag" ? change.done : change.kind !== "label";
 
 const hasTextSelection = (): boolean =>
   (window.getSelection()?.toString() ?? "") !== "";
@@ -112,7 +132,9 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
   const fieldsUi = useFieldsUi();
   const [selected, setSelected] = useState<number | null>(null);
   const [pinMode, setPinMode] = useState(false);
+  const [history, setHistory] = useState(emptyHistory<SavedPin>);
   const pointerRef = useRef<{ x: number; y: number } | null>(null);
+  const imageRef = useRef<HTMLDivElement>(null);
   const done = capture.status.kind === "done";
 
   const area = {
@@ -126,6 +148,9 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
   useEffect(() => {
     saver.adopt(fieldsOf(capture));
   }, [saver, capture]);
+
+  // Copies, exports and quitting wait for this capture's typing to be saved.
+  useEffect(() => trackEdits(capture.id, saver), [saver, capture.id]);
 
   // Leaving the capture saves what is left; closing the window runs no cleanup, so pagehide does.
   useEffect(() => {
@@ -153,107 +178,82 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
     []
   );
 
-  const setFields = (next: FieldsValue): void => {
-    saver.edit({ ...value, ...next });
+  const setFields = (next: FieldsValue, immediately = false): void => {
+    if (immediately) {
+      saver.editNow({ ...value, ...next });
+    } else {
+      saver.edit({ ...value, ...next });
+    }
   };
 
-  const setPins = (pins: readonly SavedPin[], immediately: boolean): void => {
+  /** Every pin edit goes through here, so it can be undone with ⌘Z, a gesture at a time. */
+  const editPins = (pins: readonly SavedPin[], change: PinChange): void => {
+    const before = value.pins;
+
+    // Updaters, since an edit and the selection change after it land in the same render.
+    setHistory((current) => recordPins(current, before, gestureOf(change)));
+
     const next = { ...value, pins: [...pins] };
 
-    if (immediately) {
+    if (savesNow(change)) {
       saver.editNow(next);
     } else {
       saver.edit(next);
     }
   };
 
-  const onPinKey = (action: PinKeyAction): void => {
-    const { pins } = value;
-
-    switch (action.kind) {
-      case "toggleTool": {
-        setPinMode(!pinMode);
-        break;
-      }
-
-      case "drop": {
-        const next = addPin(
-          pins,
-          pointerRef.current ?? {
-            x: Math.floor(area.width / 2),
-            y: Math.floor(area.height / 2),
-          },
-          area
-        );
-
-        if (next !== null) {
-          setPins(next, true);
-          setSelected(next.length - 1);
-        }
-
-        break;
-      }
-
-      case "select": {
-        setSelected(action.index);
-        break;
-      }
-
-      case "remove": {
-        if (selected !== null) {
-          setPins(removePin(pins, selected), true);
-          setSelected(selectionAfterRemove(pins.length, selected));
-        }
-
-        break;
-      }
-
-      case "nudge": {
-        if (selected !== null) {
-          const step = capture.image.pixelsPerDip * (action.far ? 10 : 1);
-
-          setPins(
-            nudgePin(
-              pins,
-              selected,
-              { x: action.dx * step, y: action.dy * step },
-              area
-            ),
-            true
-          );
-        }
-
-        break;
-      }
-
-      case "deselect": {
-        setSelected(null);
-        break;
-      }
-
-      default: {
-        break;
-      }
+  const restore = (step: HistoryStep<SavedPin> | null): void => {
+    if (step !== null) {
+      setHistory(step.history);
+      setSelected(null);
+      saver.editNow({ ...value, pins: [...step.pins] });
     }
   };
 
-  // A press anywhere but the image and its pin list lets the pin go, so ⌫ then asks to delete the capture.
-  useEffect(() => {
-    const release = (event: PointerEvent): void => {
-      if (
-        !(event.target instanceof Element) ||
-        event.target.closest("[data-pin-area]") === null
-      ) {
-        setSelected(null);
+  /** The selection lives in the image: choosing a pin by key puts the focus there, and leaving it lets the pin go. */
+  const select = (index: number | null): void => {
+    if (index !== selected) {
+      setHistory(endGesture);
+    }
+
+    setSelected(index);
+
+    const editor = imageRef.current?.closest("[data-pin-area]");
+
+    if (index !== null && editor?.contains(document.activeElement) !== true) {
+      imageRef.current?.focus({ preventScroll: true });
+      imageRef.current?.scrollIntoView({ block: "nearest" });
+    }
+  };
+
+  const onPinKey = (action: PinKeyAction): void => {
+    if (action.kind === "toggleTool") {
+      setPinMode(!pinMode);
+
+      return;
+    }
+
+    const next = applyPinKey(
+      { pins: value.pins, selected },
+      action,
+      area,
+      pointerRef.current ?? {
+        x: Math.floor(area.width / 2),
+        y: Math.floor(area.height / 2),
       }
-    };
+    );
 
-    window.addEventListener("pointerdown", release, { capture: true });
+    if (next.pins !== value.pins) {
+      editPins(
+        next.pins,
+        action.kind === "nudge"
+          ? { index: selected ?? 0, kind: "nudge" }
+          : { kind: action.kind === "drop" ? "add" : "remove" }
+      );
+    }
 
-    return () => {
-      window.removeEventListener("pointerdown", release, { capture: true });
-    };
-  }, []);
+    select(next.selected);
+  };
 
   usePinKeys({
     enabled: true,
@@ -279,6 +279,13 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
     if (field === "float") {
       event.preventDefault();
       commands.float();
+
+      return;
+    }
+
+    if (field === "copyDetails") {
+      event.preventDefault();
+      commands.copyDetails();
 
       return;
     }
@@ -316,6 +323,12 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
     } else if (action === "done") {
       event.preventDefault();
       commands.toggleDone();
+    } else if (action === "undo") {
+      event.preventDefault();
+      restore(undoPins(history, value.pins));
+    } else if (action === "redo") {
+      event.preventDefault();
+      restore(redoPins(history, value.pins));
     }
   });
 
@@ -335,6 +348,7 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
 
   const onMenuCommand = useEffectEvent((command: LibraryCommand) => {
     const run: Partial<Record<LibraryCommand, () => void>> = {
+      copyDetails: commands.copyDetails,
       copyImage: commands.copyImage,
       copyText: commands.copyText,
       delete: commands.askDelete,
@@ -382,7 +396,7 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
   }, []);
 
   const meta = [
-    formatCaptureTime(capture.capturedAt),
+    formatCaptureTime(capture.capturedAt, now),
     sourceText(capture.sourceLabel),
     ...(done ? ["Done"] : []),
   ].join(" · ");
@@ -431,6 +445,7 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
         <article className="mx-auto flex max-w-3xl flex-col gap-6 px-8 pt-3 pb-16">
           <div className="flex flex-col gap-1">
             <EntryFields
+              addable={!done}
               now={now}
               onChange={setFields}
               onLeave={() => {
@@ -452,18 +467,28 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
           </div>
           <ImageEditor
             image={capture.image}
-            onChange={setPins}
+            imageRef={imageRef}
+            onChange={editPins}
             onCopy={() => {
               commands.copyImage();
             }}
             onDragOut={() => {
-              api.startImageDrag(capture.id);
+              // The drag can't wait for a save, so it carries the pins on screen.
+              const shown = shownFields(capture.id) ?? value;
+
+              saver.flush();
+              api.startImageDrag({
+                id: capture.id,
+                pins: shown.pins,
+                title: shown.title.trim() === "" ? capture.title : shown.title,
+              });
             }}
             onLeaveLabel={() => {
+              setHistory(endGesture);
               saver.flush();
             }}
             onPinMode={setPinMode}
-            onSelect={setSelected}
+            onSelect={select}
             pinMode={pinMode}
             pins={value.pins}
             pointerRef={pointerRef}
