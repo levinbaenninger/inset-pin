@@ -10,6 +10,7 @@ export type TrayAction =
   | "captureAfterDelay"
   | "openLibrary"
   | "openSettings"
+  | "showShortcuts"
   | "toggleLibraryOnTop"
   | "checkForUpdates"
   | "installUpdate"
@@ -226,6 +227,12 @@ export const trayMenu = (model: TrayModel): readonly TrayItem[] => {
     SEPARATOR,
     ...updateItems(model.version, model.update),
     SEPARATOR,
+    {
+      action: "showShortcuts",
+      enabled: true,
+      kind: "item",
+      label: "Keyboard shortcuts…",
+    },
     {
       action: "openSettings",
       enabled: true,

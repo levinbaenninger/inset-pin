@@ -2,10 +2,21 @@ import { z } from "zod";
 
 import {
   CaptureIdSchema,
-  SavedThoughtSchema,
-  ThoughtSchema,
+  DescriptionSchema,
+  EditableFieldsSchema,
+  PINS_MAX,
+  StepsSchema,
+  TitleSchema,
 } from "./capture-record";
-import type { CaptureId, PointVia } from "./capture-record";
+import type {
+  CaptureId,
+  CaptureStatus,
+  PointVia,
+  SavedPin,
+  Step,
+} from "./capture-record";
+import { DueDateSchema } from "./due";
+import type { DueDate } from "./due";
 import { pt, rect } from "./geometry";
 import type { Size } from "./geometry";
 import { defineContract, event, invoke, out, send } from "./ipc";
@@ -24,10 +35,14 @@ const ImageRectSchema = z
   .object({ height: Extent, width: Extent, x: Pixel, y: Pixel })
   .transform((crop) => rect<"image">(crop.x, crop.y, crop.width, crop.height));
 
+/** Pins are in screen-image pixels while drafting; saving makes them crop pixels. */
 export const DraftContentSchema = z.object({
   crop: ImageRectSchema,
-  pin: ImagePointSchema,
-  thought: ThoughtSchema,
+  description: DescriptionSchema,
+  due: DueDateSchema.nullable(),
+  pins: z.array(ImagePointSchema).max(PINS_MAX).readonly(),
+  steps: StepsSchema,
+  title: TitleSchema,
 });
 
 export type DraftContent = z.output<typeof DraftContentSchema>;
@@ -73,7 +88,7 @@ export interface DraftView {
   readonly write: WriteStatus;
   /** The draft was set aside and shown again, so the shortcut did not capture a new point. */
   readonly reopened: boolean;
-  /** Quit was requested; the panel asks whether to save this thought first. */
+  /** Quit was requested; the panel asks whether to save this capture first. */
   readonly quitting: boolean;
   /** Changes every time the panel is shown; echoed with height reports. */
   readonly surfaceKey: string;
@@ -97,37 +112,32 @@ export interface SavedImage {
 
 export type ReadOnlyWhy = "newerVersion" | "unreadable";
 
+/** What the list shows and searches. */
+export interface SavedCapture {
+  readonly kind: "ok";
+  readonly id: CaptureId;
+  readonly title: string;
+  readonly description: string;
+  readonly steps: readonly Step[];
+  readonly due: DueDate | null;
+  readonly pins: readonly SavedPin[];
+  readonly status: CaptureStatus;
+  readonly capturedAt: string;
+  readonly updatedAt: string;
+  readonly invokedVia: PointVia;
+  readonly sourceLabel: string | null;
+  readonly image: SavedImage;
+}
+
 export type CaptureSummary =
-  | {
-      readonly kind: "ok";
-      readonly id: CaptureId;
-      readonly title: string;
-      readonly thought: string;
-      readonly capturedAt: string;
-      readonly sourceLabel: string | null;
-      readonly image: SavedImage;
-      readonly pin: { readonly x: number; readonly y: number };
-    }
+  | SavedCapture
   | {
       readonly kind: "readOnly";
       readonly id: CaptureId;
       readonly why: ReadOnlyWhy;
     };
 
-export type CaptureDetail =
-  | Extract<CaptureSummary, { kind: "readOnly" }>
-  | {
-      readonly kind: "ok";
-      readonly id: CaptureId;
-      readonly title: string;
-      readonly thought: string;
-      readonly capturedAt: string;
-      readonly updatedAt: string;
-      readonly invokedVia: PointVia;
-      readonly sourceLabel: string | null;
-      readonly image: SavedImage;
-      readonly pin: { readonly x: number; readonly y: number };
-    };
+export type CaptureDetail = CaptureSummary;
 
 export interface AppStatus {
   /** False when another app holds the capture shortcut. */
@@ -136,14 +146,22 @@ export interface AppStatus {
   readonly iconIn: IconPlace;
 }
 
-/** Commands for the shown capture, sent from the app menu. */
+/** Commands for the library and the shown capture, sent from the app menu and the tray. */
 export type LibraryCommand =
-  | "copyNote"
+  | "copyText"
   | "copyImage"
   | "edit"
   | "delete"
-  | "pin"
-  | "find";
+  | "float"
+  | "done"
+  | "description"
+  | "due"
+  | "steps"
+  | "pinTool"
+  | "find"
+  | "shortcuts"
+  | "toggleSidebar"
+  | "showDone";
 
 export type ActionResult =
   | { readonly ok: true }
@@ -180,25 +198,34 @@ export const libraryContract = defineContract({
   },
   global: "insetLibrary",
   methods: {
+    /** New capture in 3 seconds, as from the tray, so the pointer can go back to the work. */
+    captureSoon: send(z.void()),
     copyImage: invoke(CaptureIdSchema, out<ActionResult>()),
-    copyNote: invoke(CaptureIdSchema, out<ActionResult>()),
+    copyText: invoke(CaptureIdSchema, out<ActionResult>()),
+    /** Keeps the capture in a small window above every other app. */
+    floatOnTop: send(CaptureIdSchema),
     get: invoke(CaptureIdSchema, out<CaptureDetail | null>()),
     list: invoke(z.void(), out<CaptureSummary[]>()),
     /** Ctrl+, on Windows, where no app menu offers Settings. */
     openSettings: send(z.void()),
-    pinToScreen: send(CaptureIdSchema),
     remove: invoke(CaptureIdSchema, out<ActionResult>()),
+    /** Whether the capture on screen is done, so the menu can name Mark as Done; null for none. */
+    reportShown: send(z.object({ done: z.boolean() }).nullable()),
+    setDone: invoke(
+      z.object({ done: z.boolean(), id: CaptureIdSchema }),
+      out<ActionResult>()
+    ),
     startImageDrag: send(CaptureIdSchema),
     status: invoke(z.void(), out<AppStatus>()),
-    updateThought: invoke(
-      z.object({ id: CaptureIdSchema, thought: SavedThoughtSchema }),
+    update: invoke(
+      z.object({ fields: EditableFieldsSchema, id: CaptureIdSchema }),
       out<ActionResult>()
     ),
   },
   name: "library",
 });
 
-/** A capture pinned to the screen. Each pin window acts only on its own capture, which main knows by the sender. */
+/** A capture floating on top of other apps. Each window acts only on its own capture, which main knows by the sender. */
 export const pinContract = defineContract({
   events: { changed: event<null>() },
   global: "insetPin",

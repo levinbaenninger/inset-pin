@@ -15,7 +15,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { z } from "zod";
 
-import { CaptureRecordV1Schema } from "../../src/shared/capture-record.ts";
+import { CaptureRecordSchema } from "../../src/shared/capture-record.ts";
 import { DEFAULT_CROP_DIP } from "../../src/shared/geometry.ts";
 
 const root = path.resolve(import.meta.dirname, "../..");
@@ -308,7 +308,7 @@ const checkFirstLaunch = async (app: ChildProcess) => {
   enableWebAccessibility();
   record(
     "the welcome says how to capture",
-    await windowShows("Inset Context Pin is running")
+    await windowShows("Point at it, pin it, say why")
   );
 
   const mark = events().length;
@@ -458,16 +458,33 @@ const checkSave = async () => {
   );
 };
 
+/**
+ * Where the capture points: its first pin, else the crop's middle, since a new
+ * capture has no pin and centres its crop on the pointer.
+ */
+const pointOf = (stored: {
+  readonly pins: readonly { readonly x: number; readonly y: number }[];
+  readonly image: { readonly widthPx: number; readonly heightPx: number };
+}): { readonly x: number; readonly y: number } =>
+  stored.pins[0] ?? {
+    x: Math.floor(stored.image.widthPx / 2),
+    y: Math.floor(stored.image.heightPx / 2),
+  };
+
 const inspectRecord = (captureId: string) => {
   const dir = path.join(userData, "captures", captureId);
 
-  const stored = CaptureRecordV1Schema.parse(
+  const stored = CaptureRecordSchema.parse(
     JSON.parse(readFileSync(path.join(dir, "capture.json"), "utf-8"))
   );
 
   const [width = 0, height = 0, red = 0, green = 255, blue = 0] = execFileSync(
     path.join(bin, "pixel"),
-    [path.join(dir, "crop.png"), String(stored.pin.x), String(stored.pin.y)],
+    [
+      path.join(dir, "crop.png"),
+      String(pointOf(stored).x),
+      String(pointOf(stored).y),
+    ],
     { encoding: "utf-8" }
   )
     .trim()
@@ -495,8 +512,8 @@ const checkSavedRecord = (captureId: string | undefined) => {
   record("record persisted", true, captureId);
   record(
     "thought survived dismiss and restore",
-    stored.thought === thought,
-    JSON.stringify(stored.thought)
+    stored.title === thought,
+    JSON.stringify(stored.title)
   );
   record(
     "crop size matches record",
@@ -511,9 +528,9 @@ const checkEdgeWiden = async () => {
   await focusMarker();
   await openPanel("point near the screen edge");
   await typeText("Edge detail");
-  await clickButton("Widen context");
+  await clickButton("Widen");
   await delay(300);
-  await clickButton("Widen context");
+  await clickButton("Widen");
   await delay(300);
 
   const mark = events().length;
@@ -660,10 +677,7 @@ const checkQuitWithDraft = async (app: ChildProcess) => {
   await delay(300);
   trayItem("Quit Inset Context Pin");
   await delay(1000);
-  record(
-    "quit asks in the panel",
-    await windowShows("Quit Inset Context Pin?")
-  );
+  record("quit asks in the panel", await windowShows("Save before quitting?"));
   await clickButton("Cancel");
   await delay(800);
   record("quit Cancel keeps the app running", app.exitCode === null);
@@ -678,7 +692,7 @@ const checkQuitWithDraft = async (app: ChildProcess) => {
   await delay(300);
   trayItem("Quit Inset Context Pin");
   await delay(1000);
-  await clickButton("Discard and quit");
+  await clickButton("Discard");
   record("quit Discard exits", await exited(app));
   record(
     "quit Discard saves nothing",

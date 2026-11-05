@@ -50,9 +50,9 @@ const copyImage = async (onCopied: (copied: true) => void): Promise<void> => {
 };
 
 const percent = (value: number, total: number): string =>
-  `${(value / total) * 100}%`;
+  `${((value + 0.5) / total) * 100}%`;
 
-/** Round buttons on the image, shown while the pointer is over the pin. */
+/** Round buttons on the image, shown while the pointer is over the floating capture. */
 const ImageButton = ({
   children,
   label,
@@ -73,7 +73,7 @@ const ImageButton = ({
   </button>
 );
 
-/** The window's drag region gets no pointer events, so the buttons show while the pin has the keyboard, after a click. */
+/** The window's drag region gets no pointer events, so the buttons show while the window has the keyboard, after a click. */
 const useWindowFocused = (): boolean => {
   const [focused, setFocused] = useState(document.hasFocus());
 
@@ -97,7 +97,7 @@ const useWindowFocused = (): boolean => {
 const Pin = ({ capture }: { readonly capture: Saved }) => {
   const [copied, setCopied] = useExpiringState<true>(COPIED_MS);
   const focused = useWindowFocused();
-  const { image, pin, thought } = capture;
+  const { image, pins, title } = capture;
 
   const close = useCallback((): void => {
     api.close();
@@ -116,15 +116,21 @@ const Pin = ({ capture }: { readonly capture: Saved }) => {
         }}
       >
         <img
-          alt={thought}
+          alt={title}
           className="block size-full"
           draggable={false}
           src={image.url}
         />
-        <PinMarker
-          left={percent(pin.x, image.widthPx)}
-          top={percent(pin.y, image.heightPx)}
-        />
+        {pins.map((pin, index) => (
+          <PinMarker
+            // Pins have no identity beyond their number.
+            // oxlint-disable-next-line react/no-array-index-key
+            key={index}
+            left={percent(pin.x, image.widthPx)}
+            number={index + 1}
+            top={percent(pin.y, image.heightPx)}
+          />
+        ))}
       </div>
       <div
         className="absolute inset-x-1.5 top-1.5 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 data-focused:opacity-100"
@@ -157,7 +163,7 @@ const Pin = ({ capture }: { readonly capture: Saved }) => {
       {/* The padding sits outside the clamped text, or a third line would show through it. */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-linear-to-t from-black/80 to-transparent px-2.5 pt-6 pb-2">
         <p className="line-clamp-2 text-xs leading-snug wrap-break-word text-white">
-          {thought}
+          {title}
         </p>
       </div>
     </main>

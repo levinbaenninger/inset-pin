@@ -18,8 +18,8 @@ import { appOrigin, harden, secureWebPreferences } from "./window-security";
 
 const DRAG_ICON_WIDTH = 128;
 
-/** Matches --titlebar-height in src/renderer/styles.css. */
-const TITLE_BAR_HEIGHT = 40;
+/** The panes' header strips are h-11 (src/renderer/library/pane-header.tsx). */
+const TITLE_BAR_HEIGHT = 44;
 
 const isMac = process.platform === "darwin";
 
@@ -58,6 +58,10 @@ export interface LibraryWindow {
   readonly command: (command: LibraryCommand) => void;
   readonly isFloating: () => boolean;
   readonly setFloating: (on: boolean) => void;
+  /** Whether the capture on screen is done; null when none is shown. */
+  readonly shownDone: () => boolean | null;
+  /** Runs once the page has loaded; the page keeps a command that arrives before it listens. */
+  readonly whenLoaded: (run: () => void) => void;
 }
 
 export interface LibraryOptions {
@@ -67,11 +71,12 @@ export interface LibraryOptions {
   readonly url: string;
   readonly onOpened: () => void;
   readonly onClosed: () => void;
-  /** The library gained or lost the keyboard. */
+  /** The library gained or lost the keyboard, or shows another capture. */
   readonly onFocusChange: () => void;
   readonly onRejected: (channel: string, reason: string) => void;
   readonly status: () => AppStatus;
-  readonly pinToScreen: (id: CaptureId) => void;
+  readonly floatOnTop: (id: CaptureId) => void;
+  readonly captureSoon: () => void;
   readonly openSettings: () => void;
 }
 
@@ -86,6 +91,7 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
   const { exporter, store } = options;
   let window: BrowserWindow | null = null;
   let floatOnTop = false;
+  let shownDone: boolean | null = null;
 
   // Dragged copies wait here for the drop; a drop can finish after startDrag returns, so they are cleared on delete and at launch.
   const dragStaging = path.join(app.getPath("temp"), "Inset Context Pin");
@@ -102,8 +108,10 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
   const server = serveContract(
     libraryContract,
     {
+      captureSoon: options.captureSoon,
       copyImage: exporter.copyImage,
-      copyNote: exporter.copyNote,
+      copyText: exporter.copyText,
+      floatOnTop: options.floatOnTop,
       get: (id) => {
         const entry = store.get(id);
 
@@ -111,7 +119,10 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
       },
       list: () => store.list().map(toSummary),
       openSettings: options.openSettings,
-      pinToScreen: options.pinToScreen,
+      reportShown: (shown) => {
+        shownDone = shown?.done ?? null;
+        options.onFocusChange();
+      },
       remove: async (id) => {
         const result = await store.remove(id);
 
@@ -122,6 +133,11 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
         clearStaging(id);
 
         return OK;
+      },
+      setDone: async ({ done, id }) => {
+        const result = await store.setDone(id, done);
+
+        return result.ok ? OK : fail(result.message);
       },
       status: options.status,
       startImageDrag: (id) => {
@@ -142,8 +158,8 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
           icon: pinned.image.resize({ width: DRAG_ICON_WIDTH }),
         });
       },
-      updateThought: async ({ id, thought }) => {
-        const result = await store.updateThought(id, thought);
+      update: async ({ fields, id }) => {
+        const result = await store.update(id, fields);
 
         return result.ok ? OK : fail(result.message);
       },
@@ -179,9 +195,9 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
 
     const created = new BrowserWindow({
       backgroundColor: isMac ? "#00000000" : themeColors().background,
-      height: 680,
-      minHeight: 420,
-      minWidth: 560,
+      height: 720,
+      minHeight: 460,
+      minWidth: 640,
       show: false,
       title: "Recent captures",
       // On Windows only the caption buttons stay, drawn over the page; on macOS the traffic lights sit on the list.
@@ -224,6 +240,7 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
     created.on("closed", () => {
       nativeTheme.off("updated", followTheme);
       window = null;
+      shownDone = null;
       options.onClosed();
     });
 
@@ -240,7 +257,7 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
   return {
     command: (command) => {
       if (window !== null) {
-        if (command === "find") {
+        if (command === "find" || command === "shortcuts") {
           bringToFront();
           window.show();
           window.focus();
@@ -250,6 +267,18 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
       }
     },
     isFloating: () => floatOnTop,
+    shownDone: () => shownDone,
+    whenLoaded: (run) => {
+      if (window === null) {
+        return;
+      }
+
+      if (window.webContents.isLoading()) {
+        window.webContents.once("did-finish-load", run);
+      } else {
+        run();
+      }
+    },
     isFocused: () => window?.isFocused() ?? false,
     isOpen: () => window !== null,
     isVisible: () => window?.isVisible() ?? false,

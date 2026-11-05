@@ -1,7 +1,7 @@
-import { canSaveThought } from "@shared/capture-record";
+import { canSaveTitle, SCHEMA_VERSION } from "@shared/capture-record";
 import type {
   CaptureId,
-  CaptureRecordV1,
+  CaptureRecord,
   PointVia,
 } from "@shared/capture-record";
 import type {
@@ -141,10 +141,31 @@ const show = (state: DraftPhase): DraftPhase =>
     ? state
     : { ...state, shownSeq: state.shownSeq + 1, surface: "shown" };
 
-const normalize = (draft: Draft, content: DraftContent): DraftContent => ({
-  ...normalizeGeometry(content, draft.frame.size, draft.frame.ppd),
-  thought: content.thought,
-});
+const normalize = (draft: Draft, content: DraftContent): DraftContent => {
+  const { crop, pins } = normalizeGeometry(
+    content,
+    draft.frame.size,
+    draft.frame.ppd
+  );
+
+  return { ...content, crop, pins };
+};
+
+/** Anything the user would lose by quitting: words, a step, a due date or a pin. */
+export const hasContent = (content: DraftContent): boolean =>
+  content.title.trim() !== "" ||
+  content.description.trim() !== "" ||
+  content.steps.some((step) => step.text.trim() !== "") ||
+  content.due !== null ||
+  content.pins.length > 0;
+
+export const EMPTY_FIELDS = {
+  description: "",
+  due: null,
+  pins: [],
+  steps: [],
+  title: "",
+} as const satisfies Omit<DraftContent, "crop">;
 
 const withContent = (state: DraftPhase, content: DraftContent): DraftPhase => ({
   ...state,
@@ -191,16 +212,21 @@ const onCaptured = (
   }
 
   const { anchor, at, via } = state.invocation;
-  const pin = screenToImage(anchor.point, anchor.display.bounds, frame.size);
 
+  const pointer = screenToImage(
+    anchor.point,
+    anchor.display.bounds,
+    frame.size
+  );
+
+  // No pin yet: the crop centres on the pointer, and a click places pin 1.
   return stay({
     draft: {
       anchor,
       capturedAt: at,
       content: {
-        crop: defaultCrop(pin, frame.size, frame.ppd),
-        pin,
-        thought: "",
+        ...EMPTY_FIELDS,
+        crop: defaultCrop(pointer, frame.size, frame.ppd),
       },
       frame,
       id,
@@ -221,7 +247,7 @@ const onSaveRequested = (
 ): Step => {
   const current = editableDraft(state, id);
 
-  if (current === null || !canSaveThought(content.thought)) {
+  if (current === null || !canSaveTitle(content.title)) {
     return stay(state);
   }
 
@@ -298,7 +324,7 @@ const onQuitChoice = (state: DraftState, choice: QuitChoice): Step => {
     return to(IDLE, { type: "quit" });
   }
 
-  if (canSaveThought(state.draft.content.thought)) {
+  if (canSaveTitle(state.draft.content.title)) {
     const saving: DraftPhase = {
       ...state,
       quit: "afterSave",
@@ -462,17 +488,15 @@ export const trayOf = (state: DraftState): TrayState => {
     : state.surface;
 };
 
-/** Uses the savability rule, so the quit dialog's Save is never a dead end. */
+/** Asks before anything typed or placed is lost; the question's Save needs a title. */
 export const mayQuit = (state: DraftState): boolean =>
   !(
     state.phase === "draft" &&
-    (canSaveThought(state.draft.content.thought) ||
-      state.write.kind === "saving")
+    (hasContent(state.draft.content) || state.write.kind === "saving")
   );
 
-export const toRecord = (draft: Draft, savedAt: Date): CaptureRecordV1 => {
-  const { crop, pin, thought } = draft.content;
-  const relative = pinInCrop(pin, crop);
+export const toRecord = (draft: Draft, savedAt: Date): CaptureRecord => {
+  const { crop, description, due, pins, steps, title } = draft.content;
 
   return {
     capturedAt: draft.capturedAt.toISOString(),
@@ -483,11 +507,21 @@ export const toRecord = (draft: Draft, savedAt: Date): CaptureRecordV1 => {
       pixelsPerDip: draft.frame.ppd,
       widthPx: crop.width,
     },
+    description: description.trim(),
+    due,
     invokedVia: draft.via,
-    pin: { x: relative.x, y: relative.y },
-    schemaVersion: 1,
+    pins: pins.map((pin) => {
+      const relative = pinInCrop(pin, crop);
+
+      return { x: relative.x, y: relative.y };
+    }),
+    schemaVersion: SCHEMA_VERSION,
     source: { kind: "display", label: draft.anchor.display.label },
-    thought,
+    status: { kind: "active" },
+    steps: steps.flatMap((item) =>
+      item.text.trim() === "" ? [] : [{ ...item, text: item.text.trim() }]
+    ),
+    title: title.trim(),
     updatedAt: savedAt.toISOString(),
   };
 };
@@ -508,7 +542,7 @@ export type PublishResult =
 export interface DraftDeps {
   readonly capture: (display: DisplaySnapshot) => Promise<CaptureResult>;
   readonly publish: (
-    record: CaptureRecordV1,
+    record: CaptureRecord,
     png: Uint8Array
   ) => Promise<PublishResult>;
   readonly surface: DraftSurface;

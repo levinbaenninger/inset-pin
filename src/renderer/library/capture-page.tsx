@@ -1,72 +1,77 @@
 import {
   Alert02Icon,
-  ArrowLeft01Icon,
-  Copy01Icon,
-  Delete02Icon,
-  Image01Icon,
-  PencilEdit02Icon,
-  PinIcon,
-  Tick02Icon,
+  CheckmarkCircle02Icon,
+  MoreHorizontalIcon,
+  PictureInPictureOnIcon,
+  Undo02Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { canSaveThought, THOUGHT_MAX } from "@shared/capture-record";
-import type { ActionResult, CaptureDetail } from "@shared/contracts";
-import { saveShortcutLabel } from "@shared/shortcut";
+import type { EditableFields, SavedPin } from "@shared/capture-record";
+import type { LibraryCommand, SavedCapture } from "@shared/contracts";
 import {
-  getRouteApi,
-  Link,
-  useBlocker,
-  useNavigate,
-  useRouter,
-} from "@tanstack/react-router";
-import { useCallback, useState } from "react";
+  nudgePin,
+  removePin,
+  selectionAfterRemove,
+  addPin,
+} from "@shared/pins";
+import { captureKeyAction, fieldKeyAction, keyLabels } from "@shared/shortcuts";
+import type { PinKeyAction } from "@shared/shortcuts";
+import { getRouteApi, Link } from "@tanstack/react-router";
+import {
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { Kbd } from "@/components/ui/kbd";
-import { Spinner } from "@/components/ui/spinner";
-import { Textarea } from "@/components/ui/textarea";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { EntryFields, isFieldAction, useFieldsUi } from "@/fields/entry-fields";
+import type { FieldsValue } from "@/fields/entry-fields";
 import { libraryBridge } from "@/shared/bridge";
-import { useLocalKeys } from "@/shared/keys";
+import { IconButton } from "@/shared/icon-button";
+import { inLayer, isTextField } from "@/shared/key-targets";
 import { isMac } from "@/shared/platform";
-import { useExpiringState } from "@/shared/use-expiring-state";
+import { usePinKeys } from "@/shared/use-pin-keys";
 
-import { useCaptureShortcuts } from "./capture-commands";
-import { captureKeyLabels } from "./capture-keys";
-import { formatCaptureTime, readOnlyText, sourceText, viaText } from "./format";
-import { selectionAfterRemoval, visibleIds } from "./list-model";
-import { useListQuery } from "./list-query";
-import { SavedImage } from "./saved-image";
+import { MenuEntries, useCaptureCommands } from "./capture-commands";
+import { onCommand } from "./command-bus";
+import { formatCaptureTime, readOnlyText, sourceText } from "./format";
+import { ImageEditor } from "./image-editor";
+import { InlineSaver } from "./inline-saver";
+import { useLibraryState } from "./library-state";
+import { PaneHeader } from "./pane-header";
 
 const api = libraryBridge();
-
 const route = getRouteApi("/captures/$captureId");
-const rootRoute = getRouteApi("__root__");
+const KEYS = keyLabels(isMac);
 
-/** How long a copy button says "Copied". */
-const COPIED_MS = 1600;
+const fieldsOf = (capture: SavedCapture): EditableFields => ({
+  description: capture.description,
+  due: capture.due,
+  pins: capture.pins,
+  steps: capture.steps,
+  title: capture.title,
+});
 
-type SavedCapture = Extract<CaptureDetail, { kind: "ok" }>;
+const hasTextSelection = (): boolean =>
+  (window.getSelection()?.toString() ?? "") !== "";
 
-/** Only the one-pane layout needs a way back; two panes keep the list in view. */
-const BackLink = () => (
-  <Button asChild className="self-start md:hidden" size="sm" variant="ghost">
-    <Link to="/">
-      <HugeiconsIcon data-icon="inline-start" icon={ArrowLeft01Icon} />
-      Recent captures
-    </Link>
-  </Button>
-);
+/** Enter keeps its meaning on buttons, links and the image. */
+const enterActivates = (target: EventTarget | null): boolean =>
+  target instanceof Element &&
+  target.closest("button, a, [role='application']") !== null;
+
+/** Space keeps its meaning on buttons, switches and the like. */
+const spaceActivates = (target: EventTarget | null): boolean =>
+  target instanceof Element &&
+  target.closest("button, [role='checkbox'], [role='switch']") !== null;
 
 const Unavailable = ({
   description,
@@ -75,452 +80,398 @@ const Unavailable = ({
   readonly title: string;
   readonly description: string;
 }) => (
-  <div className="flex flex-col gap-4 p-6">
-    <BackLink />
-    <div className="text-muted-foreground flex gap-3 text-sm">
-      <HugeiconsIcon className="mt-0.5 shrink-0" icon={Alert02Icon} size={16} />
-      <div className="flex flex-col gap-1">
-        <h2 className="text-foreground font-medium">{title}</h2>
-        <p>{description}</p>
-      </div>
-    </div>
-  </div>
+  <>
+    <PaneHeader />
+    <main className="flex flex-1 flex-col items-center justify-center gap-3 p-8 pb-20 text-center">
+      <span className="bg-muted text-muted-foreground grid size-10 place-items-center rounded-full">
+        <HugeiconsIcon icon={Alert02Icon} size={18} />
+      </span>
+      <h2 className="text-sm font-medium">{title}</h2>
+      <p className="text-muted-foreground max-w-72 text-xs text-balance">
+        {description}
+      </p>
+      <Button asChild size="sm" variant="outline">
+        <Link to="/">Back to captures</Link>
+      </Button>
+    </main>
+  </>
 );
 
-const NOT_SAVED: ActionResult = {
-  message: "The thought could not be saved. Try again.",
-  ok: false,
-};
+/** The capture on screen, edited in place: every field saves itself. */
+const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
+  const { now } = useLibraryState();
+  const { commands, dialog, entries } = useCaptureCommands(capture);
+  const saver = useMemo(() => new InlineSaver(capture.id, api), [capture.id]);
 
-/** Never rejects, so the editor always unlocks. */
-const updateThought = async (
-  id: SavedCapture["id"],
-  thought: string
-): Promise<ActionResult> => {
-  try {
-    return await api.updateThought({ id, thought });
-  } catch {
-    return NOT_SAVED;
-  }
-};
+  const { failure, fields } = useSyncExternalStore(
+    saver.subscribe,
+    saver.state
+  );
 
-interface ThoughtEditorProps {
-  readonly capture: SavedCapture;
-  /** Null means cancelled. */
-  readonly onDone: (result: ActionResult | null) => Promise<void>;
-}
+  const value = fields ?? fieldsOf(capture);
+  const fieldsUi = useFieldsUi();
+  const [selected, setSelected] = useState<number | null>(null);
+  const [pinMode, setPinMode] = useState(false);
+  const pointerRef = useRef<{ x: number; y: number } | null>(null);
+  const done = capture.status.kind === "done";
 
-const ThoughtEditor = ({ capture, onDone }: ThoughtEditorProps) => {
-  const [thought, setThought] = useState(capture.thought);
-  const [saving, setSaving] = useState(false);
-  const savable = canSaveThought(thought) && !saving;
-  const changed = thought !== capture.thought;
+  const area = {
+    height: capture.image.heightPx,
+    width: capture.image.widthPx,
+    x: 0,
+    y: 0,
+  };
 
-  // Choosing another capture while editing would otherwise drop the change silently.
-  const leaving = useBlocker({
-    enableBeforeUnload: false,
-    shouldBlockFn: () => changed,
-    withResolver: true,
+  // The first copy is taken once; later ones only when they cannot overwrite typing.
+  useEffect(() => {
+    saver.adopt(fieldsOf(capture));
+  }, [saver, capture]);
+
+  // Leaving the capture saves what is left; closing the window runs no cleanup, so pagehide does.
+  useEffect(() => {
+    const flush = (): void => {
+      saver.flush({ leaving: true });
+    };
+
+    window.addEventListener("pagehide", flush);
+
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      saver.flush();
+    };
+  }, [saver]);
+
+  // The app menu names Mark as Done after the capture on screen.
+  useEffect(() => {
+    api.reportShown({ done });
+  }, [done]);
+
+  useEffect(
+    () => () => {
+      api.reportShown(null);
+    },
+    []
+  );
+
+  const setFields = (next: FieldsValue): void => {
+    saver.edit({ ...value, ...next });
+  };
+
+  const setPins = (pins: readonly SavedPin[], immediately: boolean): void => {
+    const next = { ...value, pins: [...pins] };
+
+    if (immediately) {
+      saver.editNow(next);
+    } else {
+      saver.edit(next);
+    }
+  };
+
+  const onPinKey = (action: PinKeyAction): void => {
+    const { pins } = value;
+
+    switch (action.kind) {
+      case "toggleTool": {
+        setPinMode(!pinMode);
+        break;
+      }
+
+      case "drop": {
+        const next = addPin(
+          pins,
+          pointerRef.current ?? {
+            x: Math.floor(area.width / 2),
+            y: Math.floor(area.height / 2),
+          },
+          area
+        );
+
+        if (next !== null) {
+          setPins(next, true);
+          setSelected(next.length - 1);
+        }
+
+        break;
+      }
+
+      case "select": {
+        setSelected(action.index);
+        break;
+      }
+
+      case "remove": {
+        if (selected !== null) {
+          setPins(removePin(pins, selected), true);
+          setSelected(selectionAfterRemove(pins.length, selected));
+        }
+
+        break;
+      }
+
+      case "nudge": {
+        if (selected !== null) {
+          const step = capture.image.pixelsPerDip * (action.far ? 10 : 1);
+
+          setPins(
+            nudgePin(
+              pins,
+              selected,
+              { x: action.dx * step, y: action.dy * step },
+              area
+            ),
+            true
+          );
+        }
+
+        break;
+      }
+
+      case "deselect": {
+        setSelected(null);
+        break;
+      }
+
+      default: {
+        break;
+      }
+    }
+  };
+
+  // A press anywhere but the image and its pin list lets the pin go, so ⌫ then asks to delete the capture.
+  useEffect(() => {
+    const release = (event: PointerEvent): void => {
+      if (
+        !(event.target instanceof Element) ||
+        event.target.closest("[data-pin-area]") === null
+      ) {
+        setSelected(null);
+      }
+    };
+
+    window.addEventListener("pointerdown", release, { capture: true });
+
+    return () => {
+      window.removeEventListener("pointerdown", release, { capture: true });
+    };
+  }, []);
+
+  usePinKeys({
+    enabled: true,
+    onAction: onPinKey,
+    pinCount: value.pins.length,
+    selected,
   });
 
-  // The field and Cancel stay locked until the save settles, so no edit is silently dropped.
-  const save = useCallback(async (): Promise<void> => {
-    if (!savable) {
+  const focusTitle = (): void => {
+    const field = fieldsUi.titleRef.current;
+
+    field?.focus();
+    field?.setSelectionRange(field.value.length, field.value.length);
+  };
+
+  const onKeyDown = useEffectEvent((event: KeyboardEvent) => {
+    if (event.defaultPrevented || event.isComposing) {
       return;
     }
 
-    setSaving(true);
-    await onDone(await updateThought(capture.id, thought));
-    setSaving(false);
-  }, [capture.id, onDone, savable, thought]);
+    const field = fieldKeyAction(event, isMac);
 
-  const cancel = useCallback((): void => {
-    if (!saving) {
-      void onDone(null);
-    }
-  }, [onDone, saving]);
-
-  const saveNow = useCallback((): void => {
-    void save();
-  }, [save]);
-
-  // Asked when another capture was chosen: saving goes on to it, like Save and quit in the panel.
-  const saveAndLeave = useCallback(async (): Promise<void> => {
-    if (!savable) {
-      return;
-    }
-
-    setSaving(true);
-    const result = await updateThought(capture.id, thought);
-
-    if (result.ok) {
-      leaving.proceed?.();
+    if (field === "float") {
+      event.preventDefault();
+      commands.float();
 
       return;
     }
 
-    leaving.reset?.();
-    await onDone(result);
-    setSaving(false);
-  }, [capture.id, leaving, onDone, savable, thought]);
+    if (field !== null && isFieldAction(field)) {
+      event.preventDefault();
+      fieldsUi.run(field, value, setFields);
 
-  const saveAndLeaveNow = useCallback((): void => {
-    void saveAndLeave();
-  }, [saveAndLeave]);
+      return;
+    }
 
-  useLocalKeys({
-    onEscape: cancel,
-    onSave: leaving.status === "blocked" ? saveAndLeaveNow : saveNow,
+    if (isTextField(event.target) || inLayer(event.target)) {
+      return;
+    }
+
+    const action = captureKeyAction(event, isMac);
+
+    if (
+      action === null ||
+      (action === "edit" && enterActivates(event.target)) ||
+      (action === "done" && spaceActivates(event.target))
+    ) {
+      return;
+    }
+
+    if (action === "edit") {
+      event.preventDefault();
+      focusTitle();
+    } else if (action === "delete") {
+      event.preventDefault();
+      commands.askDelete();
+    } else if (action === "copyImage") {
+      event.preventDefault();
+      commands.copyImage();
+    } else if (action === "done") {
+      event.preventDefault();
+      commands.toggleDone();
+    }
   });
+
+  // The copy command (⌘C, Ctrl+C or Edit > Copy) copies the capture as text when no text is selected.
+  const onCopy = useEffectEvent((event: ClipboardEvent) => {
+    if (
+      hasTextSelection() ||
+      isTextField(document.activeElement) ||
+      inLayer(document.activeElement)
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+    commands.copyText();
+  });
+
+  const onMenuCommand = useEffectEvent((command: LibraryCommand) => {
+    const run: Partial<Record<LibraryCommand, () => void>> = {
+      copyImage: commands.copyImage,
+      copyText: commands.copyText,
+      delete: commands.askDelete,
+      description: () => {
+        fieldsUi.run("description", value, setFields);
+      },
+      done: commands.toggleDone,
+      due: () => {
+        fieldsUi.run("due", value, setFields);
+      },
+      edit: focusTitle,
+      float: commands.float,
+      pinTool: () => {
+        setPinMode(!pinMode);
+      },
+      steps: () => {
+        fieldsUi.run("steps", value, setFields);
+      },
+    };
+
+    run[command]?.();
+  });
+
+  useEffect(() => {
+    const keyDown = (event: KeyboardEvent): void => {
+      onKeyDown(event);
+    };
+
+    const copy = (event: ClipboardEvent): void => {
+      onCopy(event);
+    };
+
+    window.addEventListener("keydown", keyDown);
+    document.addEventListener("copy", copy);
+
+    const stop = onCommand((command) => {
+      onMenuCommand(command);
+    });
+
+    return () => {
+      window.removeEventListener("keydown", keyDown);
+      document.removeEventListener("copy", copy);
+      stop();
+    };
+  }, []);
+
+  const meta = [
+    formatCaptureTime(capture.capturedAt),
+    sourceText(capture.sourceLabel),
+    ...(done ? ["Done"] : []),
+  ].join(" · ");
 
   return (
     <>
-      <AlertDialog
-        onOpenChange={(open) => {
-          if (!open) {
-            leaving.reset?.();
-          }
-        }}
-        open={leaving.status === "blocked"}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Save your change?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This thought has an unsaved change.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel
-              onClick={() => {
-                leaving.reset?.();
-              }}
-            >
-              Keep editing
-            </AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                leaving.proceed?.();
-              }}
-              variant="destructive"
-            >
-              Discard
-            </AlertDialogAction>
-            <Button disabled={!savable} onClick={saveAndLeaveNow}>
-              {saving ? <Spinner data-icon="inline-start" /> : null}
-              Save
-              <Kbd>{saveShortcutLabel(isMac)}</Kbd>
-            </Button>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-      <form
-        className="flex flex-col gap-2"
-        onSubmit={(event) => {
-          event.preventDefault();
-          saveNow();
-        }}
-      >
-        <Textarea
-          aria-label="Thought"
-          autoFocus
-          className="min-h-28"
-          maxLength={THOUGHT_MAX}
-          onChange={(event) => {
-            setThought(event.target.value);
-          }}
-          onFocus={(event) => {
-            const end = event.currentTarget.value.length;
-
-            event.currentTarget.setSelectionRange(end, end);
-          }}
-          readOnly={saving}
-          value={thought}
-        />
-        <div className="flex items-center justify-end gap-2">
-          <Button
-            disabled={saving}
-            onClick={cancel}
-            size="sm"
-            type="button"
-            variant="ghost"
-          >
-            Cancel
-          </Button>
-          <Button disabled={!savable} size="sm" type="submit">
-            {saving ? <Spinner data-icon="inline-start" /> : null}
-            Save thought
-            <Kbd>{saveShortcutLabel(isMac)}</Kbd>
-          </Button>
-        </div>
-      </form>
-    </>
-  );
-};
-
-const CopyButton = ({
-  copied,
-  icon,
-  label,
-  onClick,
-  shortcut,
-}: {
-  readonly copied: boolean;
-  readonly icon: typeof Copy01Icon;
-  readonly label: string;
-  readonly onClick: () => void;
-  readonly shortcut: string;
-}) => (
-  <Button
-    onClick={onClick}
-    size="sm"
-    title={`${label} (${shortcut})`}
-    variant="outline"
-  >
-    <HugeiconsIcon data-icon="inline-start" icon={copied ? Tick02Icon : icon} />
-    {copied ? "Copied" : label}
-  </Button>
-);
-
-interface DeleteButtonProps {
-  readonly open: boolean;
-  readonly onOpenChange: (open: boolean) => void;
-  readonly onDelete: () => void;
-  readonly shortcut: string;
-}
-
-const DeleteButton = ({
-  onDelete,
-  onOpenChange,
-  open,
-  shortcut,
-}: DeleteButtonProps) => (
-  <AlertDialog onOpenChange={onOpenChange} open={open}>
-    <AlertDialogTrigger asChild>
-      <Button
-        className="ml-auto"
-        size="sm"
-        title={`Delete (${shortcut})`}
-        variant="ghost-destructive"
-      >
-        <HugeiconsIcon data-icon="inline-start" icon={Delete02Icon} />
-        Delete
-      </Button>
-    </AlertDialogTrigger>
-    <AlertDialogContent>
-      <AlertDialogHeader>
-        <AlertDialogTitle>Delete this capture?</AlertDialogTitle>
-        <AlertDialogDescription>This can’t be undone.</AlertDialogDescription>
-      </AlertDialogHeader>
-      <AlertDialogFooter>
-        <AlertDialogCancel>Cancel</AlertDialogCancel>
-        <AlertDialogAction onClick={onDelete} variant="destructive">
-          Delete
-        </AlertDialogAction>
-      </AlertDialogFooter>
-    </AlertDialogContent>
-  </AlertDialog>
-);
-
-const SavedCaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
-  const navigate = useNavigate();
-  const router = useRouter();
-  const captures = rootRoute.useLoaderData();
-  const { query } = useListQuery();
-  const [editing, setEditing] = useState(false);
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const keys = captureKeyLabels(isMac);
-
-  const [status, setStatus] = useState<{
-    readonly text: string;
-    readonly failed: boolean;
-  } | null>(null);
-
-  const [copied, setCopied] = useExpiringState<"note" | "image">(COPIED_MS);
-
-  const copy = async (what: "note" | "image"): Promise<void> => {
-    const result =
-      what === "note"
-        ? await api.copyNote(capture.id)
-        : await api.copyImage(capture.id);
-
-    if (result.ok) {
-      setCopied(what);
-      setStatus({
-        failed: false,
-        text: what === "note" ? "Note copied." : "Image copied with its pin.",
-      });
-    } else {
-      setStatus({ failed: true, text: result.message });
-    }
-  };
-
-  const finishEdit = useCallback(
-    async (result: ActionResult | null): Promise<void> => {
-      if (result === null) {
-        setEditing(false);
-        setStatus(null);
-
-        return;
-      }
-
-      if (!result.ok) {
-        setStatus({ failed: true, text: result.message });
-
-        return;
-      }
-
-      // Leave the editor only once the new thought is loaded, so the old one never flashes.
-      await router.invalidate();
-      setEditing(false);
-      setStatus({ failed: false, text: "Thought saved." });
-    },
-    [router]
-  );
-
-  const remove = async (): Promise<void> => {
-    const next = selectionAfterRemoval(visibleIds(captures, query), capture.id);
-
-    const result = await api.remove(capture.id);
-
-    if (!result.ok) {
-      setStatus({ failed: true, text: result.message });
-
-      return;
-    }
-
-    // The delete was confirmed, so an unsaved edit of the deleted thought must not hold the navigation.
-    if (next !== null) {
-      await navigate({
-        ignoreBlocker: true,
-        params: { captureId: next },
-        to: "/captures/$captureId",
-      });
-
-      return;
-    }
-
-    // The empty pane opens the newest capture the list shows, so it must not see the deleted one.
-    await router.invalidate();
-    await navigate({ ignoreBlocker: true, to: "/" });
-  };
-
-  const startEditing = (): void => {
-    setStatus(null);
-    setEditing(true);
-  };
-
-  useCaptureShortcuts(
-    {
-      askDelete: () => {
-        setConfirmingDelete(true);
-      },
-      copyImage: () => {
-        void copy("image");
-      },
-      copyNote: () => {
-        void copy("note");
-      },
-      edit: startEditing,
-      id: capture.id,
-      pin: () => {
-        api.pinToScreen(capture.id);
-      },
-    },
-    !editing
-  );
-
-  return (
-    <article className="flex flex-col gap-5">
-      <section aria-label="Thought" className="flex flex-col gap-2">
-        {editing ? (
-          <ThoughtEditor capture={capture} onDone={finishEdit} />
-        ) : (
-          <p className="max-w-prose text-lg leading-relaxed wrap-break-word whitespace-pre-wrap">
-            {capture.thought}
-          </p>
-        )}
-        <p className="text-muted-foreground text-xs">
-          {formatCaptureTime(capture.capturedAt)} ·{" "}
-          {sourceText(capture.sourceLabel)} · {viaText(capture.invokedVia)}
+      <PaneHeader>
+        <p
+          className="text-muted-foreground mr-auto min-w-0 truncate text-xs"
+          title={meta}
+        >
+          {meta}
         </p>
-      </section>
-      <div className="flex flex-wrap items-center gap-2">
-        <CopyButton
-          copied={copied === "note"}
-          icon={Copy01Icon}
-          label="Copy note"
+        <IconButton
+          data-testid="toggle-done"
+          icon={done ? Undo02Icon : CheckmarkCircle02Icon}
+          keys={KEYS.done}
+          label={done ? "Mark as not done" : "Mark as done"}
           onClick={() => {
-            void copy("note");
+            commands.toggleDone();
           }}
-          shortcut={keys.copyNote}
         />
-        <CopyButton
-          copied={copied === "image"}
-          icon={Image01Icon}
-          label="Copy image"
+        <IconButton
+          icon={PictureInPictureOnIcon}
+          keys={KEYS.float}
+          label="Float on Top"
           onClick={() => {
-            void copy("image");
+            commands.float();
           }}
-          shortcut={keys.copyImage}
         />
-        <Button
-          disabled={editing}
-          onClick={startEditing}
-          size="sm"
-          title={`Edit thought (${keys.edit})`}
-          variant="outline"
-        >
-          <HugeiconsIcon data-icon="inline-start" icon={PencilEdit02Icon} />
-          Edit thought
-        </Button>
-        <Button
-          onClick={() => {
-            api.pinToScreen(capture.id);
-          }}
-          size="sm"
-          title={`Pin to screen (${keys.pin}): keep it in view above other apps`}
-          variant="outline"
-        >
-          <HugeiconsIcon data-icon="inline-start" icon={PinIcon} />
-          Pin
-        </Button>
-        <DeleteButton
-          onDelete={() => {
-            void remove();
-          }}
-          onOpenChange={setConfirmingDelete}
-          open={confirmingDelete}
-          shortcut={keys.delete}
-        />
-      </div>
-      <p
-        aria-live="polite"
-        className={
-          status?.failed === true ? "text-destructive -mt-3 text-sm" : "sr-only"
-        }
-      >
-        {status?.text}
-      </p>
-      <figure className="flex flex-col gap-2">
-        <div
-          className="w-fit max-w-full cursor-grab active:cursor-grabbing"
-          draggable
-          onDragStart={(event) => {
-            event.preventDefault();
-            api.startImageDrag(capture.id);
-          }}
-          title="Drag into another app"
-        >
-          <SavedImage
-            alt="The saved crop with the pin on the point that matters"
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <IconButton
+              data-testid="more"
+              icon={MoreHorizontalIcon}
+              label="More"
+            />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-56">
+            <MenuEntries entries={entries} kind="dropdown" />
+          </DropdownMenuContent>
+        </DropdownMenu>
+        {dialog}
+      </PaneHeader>
+      <main className="min-h-0 flex-1 [scrollbar-gutter:stable] overflow-y-auto">
+        <article className="mx-auto flex max-w-3xl flex-col gap-6 px-8 pt-3 pb-16">
+          <div className="flex flex-col gap-1">
+            <EntryFields
+              now={now}
+              onChange={setFields}
+              onLeave={() => {
+                saver.flush();
+              }}
+              onTitleBlur={() => {
+                saver.restoreBlankTitle();
+              }}
+              titlePlaceholder="Title"
+              ui={fieldsUi}
+              value={value}
+              variant="page"
+            />
+            {failure === null ? null : (
+              <p className="text-destructive text-xs" role="alert">
+                Couldn’t save. {failure}
+              </p>
+            )}
+          </div>
+          <ImageEditor
             image={capture.image}
-            pin={capture.pin}
-            size="full"
+            onChange={setPins}
+            onCopy={() => {
+              commands.copyImage();
+            }}
+            onDragOut={() => {
+              api.startImageDrag(capture.id);
+            }}
+            onLeaveLabel={() => {
+              saver.flush();
+            }}
+            onPinMode={setPinMode}
+            onSelect={setSelected}
+            pinMode={pinMode}
+            pins={value.pins}
+            pointerRef={pointerRef}
+            selected={selected}
           />
-        </div>
-      </figure>
-    </article>
+        </article>
+      </main>
+    </>
   );
 };
 
@@ -545,12 +496,6 @@ export const CapturePage = () => {
     );
   }
 
-  return (
-    <div className="pt-page flex flex-col gap-4 px-6 pb-8 md:px-8">
-      <BackLink />
-      <h2 className="sr-only">{detail.title}</h2>
-      {/* Keyed by id only: a refresh after an edit keeps the status line and its announcement. */}
-      <SavedCaptureView capture={detail} key={detail.id} />
-    </div>
-  );
+  // Keyed by id: the fields start from the stored copy once, and a reload after a save doesn't reset typing.
+  return <CaptureView capture={detail} key={detail.id} />;
 };

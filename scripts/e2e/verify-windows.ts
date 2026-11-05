@@ -17,9 +17,9 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { z } from "zod";
 
-import { PIN_RGB } from "../../src/main/pin-mark.ts";
-import { CaptureRecordV1Schema } from "../../src/shared/capture-record.ts";
+import { CaptureRecordSchema } from "../../src/shared/capture-record.ts";
 import { DEFAULT_CROP_DIP } from "../../src/shared/geometry.ts";
+import { PIN_RGB } from "../../src/shared/pin-sprite.ts";
 
 const root = path.resolve(import.meta.dirname, "../..");
 const mode = process.argv[2] === "packaged" ? "packaged" : "dev";
@@ -381,11 +381,24 @@ const openPanel = async (label: string) => {
   return { captured, shown };
 };
 
+/**
+ * Where the capture points: its first pin, else the crop's middle, since a new
+ * capture has no pin and centres its crop on the pointer.
+ */
+const pointOf = (stored: {
+  readonly pins: readonly { readonly x: number; readonly y: number }[];
+  readonly image: { readonly widthPx: number; readonly heightPx: number };
+}): { readonly x: number; readonly y: number } =>
+  stored.pins[0] ?? {
+    x: Math.floor(stored.image.widthPx / 2),
+    y: Math.floor(stored.image.heightPx / 2),
+  };
+
 /** The pin pixel of a saved crop, read from the file. */
 const inspectRecord = (captureId: string, dataDir = userData) => {
   const dir = path.join(dataDir, "captures", captureId);
 
-  const stored = CaptureRecordV1Schema.parse(
+  const stored = CaptureRecordSchema.parse(
     JSON.parse(readFileSync(path.join(dir, "capture.json"), "utf-8"))
   );
 
@@ -393,8 +406,8 @@ const inspectRecord = (captureId: string, dataDir = userData) => {
     RgbSchema.extend({ height: z.number(), width: z.number() }),
     "filepixel",
     path.join(dir, "crop.png"),
-    String(stored.pin.x),
-    String(stored.pin.y)
+    String(pointOf(stored).x),
+    String(pointOf(stored).y)
   );
 
   return {
@@ -467,7 +480,7 @@ const checkFirstLaunch = async () => {
   );
   record(
     "the welcome says how to capture",
-    await windowShows("Inset Context Pin is running"),
+    await windowShows("Point at it, pin it, say why"),
     windowText().replaceAll(/\s+/gu, " ").slice(0, 160)
   );
   await delay(500);
@@ -634,8 +647,8 @@ const checkSavedRecord = (captureId: string | undefined) => {
   record("record persisted", true, captureId);
   record(
     "thought typed across two panel sessions",
-    stored.thought === thought,
-    JSON.stringify(stored.thought)
+    stored.title === thought,
+    JSON.stringify(stored.title)
   );
   record(
     "crop is the default size",
@@ -751,9 +764,9 @@ const checkEdgeWiden = async () => {
   await focusMarker();
   await openPanel("point near the screen edge");
   await typeText("Edge detail");
-  await clickButton("Widen context");
+  await clickButton("Widen");
   await delay(300);
-  await clickButton("Widen context");
+  await clickButton("Widen");
   await delay(300);
   shotApp("06-panel-widened");
 
@@ -843,14 +856,15 @@ const checkLibrary = async (newest: string | null) => {
     helper(Ok, "focus", String(window.hwnd));
   }
 
-  await clickButton("Copy note");
+  // Ctrl+C with nothing selected copies the capture as text: its title, here.
+  keys("ctrl+c");
   await delay(400);
   record(
-    "Copy note puts the newest thought on the clipboard",
+    "Ctrl+C copies the newest capture as text",
     helper(z.string().nullable(), "cliptext") === "Via tray"
   );
 
-  await clickButton("Copy image");
+  await clickButton("Copy image with pins");
   await delay(600);
 
   const copied = path.join(work, "copied.png");
@@ -865,8 +879,9 @@ const checkLibrary = async (newest: string | null) => {
       RgbSchema,
       "filepixel",
       copied,
-      String(stored.pin.x),
-      String(stored.pin.y)
+      String(pointOf(stored).x),
+      // Just above the tip, where the pin is solid colour.
+      String(pointOf(stored).y - Math.round(3 * stored.image.pixelsPerDip))
     );
 
     const [r, g, b] = PIN_RGB;
@@ -907,7 +922,7 @@ const checkQuitWithDraft = async () => {
   await delay(1000);
   record(
     "quit asks in the panel",
-    await windowShows("Quit Inset Context Pin?"),
+    await windowShows("Save before quitting?"),
     windowText().replaceAll(/\s+/gu, " ").slice(0, 160)
   );
   record("the quit question has the keyboard", appInFront(), front().title);
@@ -929,7 +944,7 @@ const checkQuitWithDraft = async () => {
 
   await trayItem("Quit Inset Context Pin");
   await delay(1000);
-  await clickButton("Discard and quit");
+  await clickButton("Discard");
   record("quit Discard exits", app !== undefined && (await exited(app)));
   record(
     "quit Discard saves nothing",

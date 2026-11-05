@@ -1,112 +1,155 @@
 import { CaptureIdSchema } from "@shared/capture-record";
-import type { CaptureSummary } from "@shared/contracts";
+import type { CaptureId } from "@shared/capture-record";
+import type { CaptureSummary, SavedCapture } from "@shared/contracts";
+import { DueDateSchema } from "@shared/due";
+import { parseQuery } from "@shared/search";
 import { describe, expect, it } from "vitest";
 
 import {
   groupByDay,
-  matchesQuery,
+  isShown,
+  listOf,
+  listOrder,
+  matchSnippet,
   selectionAfterRemoval,
+  stepProgress,
   stepSelection,
-  visibleIds,
 } from "./list-model";
 
-const id = (n: number) =>
+const id = (n: number): CaptureId =>
   CaptureIdSchema.parse(
-    `3f1c2b9e-4a7d-4e21-9b0c-5d8e6f7a1b${String(n).padStart(2, "0")}`
+    `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`
   );
 
 const saved = (
   n: number,
-  capturedAt: Date,
-  thought = "Total ignores the discount"
-): CaptureSummary => ({
-  capturedAt: capturedAt.toISOString(),
+  capturedAt: string,
+  change: Partial<SavedCapture> = {}
+): SavedCapture => ({
+  capturedAt,
+  description: "",
+  due: null,
   id: id(n),
-  image: {
-    heightPx: 600,
-    pixelsPerDip: 2,
-    url: "inset://capture/x",
-    widthPx: 960,
-  },
+  image: { heightPx: 10, pixelsPerDip: 1, url: "", widthPx: 10 },
+  invokedVia: "shortcut",
   kind: "ok",
-  pin: { x: 1, y: 1 },
-  sourceLabel: "Built-in Retina Display",
-  thought,
-  title: thought,
+  pins: [],
+  sourceLabel: null,
+  status: { kind: "active" },
+  steps: [],
+  title: `Capture ${n}`,
+  updatedAt: capturedAt,
+  ...change,
 });
 
-const unreadable: CaptureSummary = {
+const readOnly: CaptureSummary = {
   id: id(99),
   kind: "readOnly",
   why: "unreadable",
 };
 
-const NOW = new Date(2026, 9, 22, 9, 30);
-const at = (day: number, hour: number) => new Date(2026, 9, day, hour);
+/** Local times, so the tests hold in every time zone. */
+const local = (day: number, hour: number) =>
+  new Date(2026, 10, day, hour).toISOString();
 
-describe(matchesQuery, () => {
-  const capture = saved(1, NOW, "Total ignores the DISCOUNT\nfor Meier AG");
+const now = new Date(2026, 10, 5, 12);
 
-  it("matches every word in any order and case", () => {
-    expect(matchesQuery(capture, "  meier discount ")).toBeTruthy();
-    expect(matchesQuery(capture, "meier invoice")).toBeFalsy();
+describe(listOf, () => {
+  it("puts done captures in Done and everything else in the active list", () => {
+    expect(
+      listOf(
+        saved(1, local(5, 9), { status: { at: local(5, 10), kind: "done" } })
+      )
+    ).toBe("done");
+    expect(listOf(saved(2, local(5, 9)))).toBe("active");
+    expect(listOf(readOnly)).toBe("active");
+  });
+});
+
+describe(isShown, () => {
+  const quote = saved(1, local(5, 9), {
+    description: "Delivery comes late",
+    due: DueDateSchema.parse("2026-11-05"),
+    title: "Quote",
   });
 
-  it("searches the source as well as the thought", () => {
-    expect(matchesQuery(capture, "retina")).toBeTruthy();
+  it("filters by list, words and due date", () => {
+    expect(isShown(quote, "active", parseQuery(""), false, now)).toBeTruthy();
+    expect(isShown(quote, "done", parseQuery(""), false, now)).toBeFalsy();
+    expect(
+      isShown(quote, "active", parseQuery("delivery"), true, now)
+    ).toBeTruthy();
+    expect(
+      isShown(quote, "active", parseQuery("due:overdue"), true, now)
+    ).toBeFalsy();
+    expect(
+      isShown(quote, "active", parseQuery("due:today"), true, now)
+    ).toBeTruthy();
   });
 
-  it("shows everything, read-only entries included, for an empty query", () => {
-    expect(matchesQuery(unreadable, " ")).toBeTruthy();
-    expect(matchesQuery(unreadable, "total")).toBeFalsy();
+  it("hides read-only entries while searching", () => {
+    expect(
+      isShown(readOnly, "active", parseQuery(""), false, now)
+    ).toBeTruthy();
+    expect(isShown(readOnly, "active", parseQuery("x"), true, now)).toBeFalsy();
   });
 });
 
 describe(groupByDay, () => {
-  it("groups by local day in list order and labels today and yesterday", () => {
+  it("groups by local day, names today and yesterday, and puts read-only last", () => {
     const groups = groupByDay(
       [
-        saved(1, at(22, 8)),
-        saved(2, at(22, 0)),
-        saved(3, at(21, 23)),
-        saved(4, at(16, 12)),
-        unreadable,
+        saved(1, local(5, 10)),
+        saved(2, local(5, 8)),
+        saved(3, local(4, 20)),
+        saved(4, local(1, 9)),
+        readOnly,
       ],
-      NOW
+      now
     );
 
     expect(
       groups.map((group) =>
         group.kind === "day"
-          ? [group.relative, group.day.getDate(), group.captures.length]
+          ? [group.relative, group.captures.length]
           : ["readOnly", group.captures.length]
       )
     ).toStrictEqual([
-      ["today", 22, 2],
-      ["yesterday", 21, 1],
-      [null, 16, 1],
+      ["today", 2],
+      ["yesterday", 1],
+      [null, 1],
       ["readOnly", 1],
     ]);
   });
 
-  it("returns no groups for no captures", () => {
-    expect(groupByDay([], NOW)).toStrictEqual([]);
+  it("groups done captures by when they were done", () => {
+    const [group] = groupByDay(
+      [saved(1, local(1, 9), { status: { at: local(5, 9), kind: "done" } })],
+      now
+    );
+
+    expect(group?.kind === "day" && group.relative).toBe("today");
+  });
+});
+
+describe(listOrder, () => {
+  it("orders newest first and read-only last", () => {
+    expect(
+      listOrder([readOnly, saved(1, local(4, 9)), saved(2, local(5, 9))]).map(
+        (capture) => capture.id
+      )
+    ).toStrictEqual([id(2), id(1), id(99)]);
   });
 });
 
 describe(stepSelection, () => {
   const ids = [id(1), id(2), id(3)];
 
-  it("moves by one and stops at the ends", () => {
-    expect(stepSelection(ids, id(2), 1)).toBe(id(3));
+  it("steps and stays at the ends", () => {
+    expect(stepSelection(ids, id(1), 1)).toBe(id(2));
     expect(stepSelection(ids, id(3), 1)).toBe(id(3));
     expect(stepSelection(ids, id(1), -1)).toBe(id(1));
-  });
-
-  it("starts at the first capture when nothing visible is selected", () => {
     expect(stepSelection(ids, null, 1)).toBe(id(1));
-    expect(stepSelection(ids, id(9), -1)).toBe(id(1));
-    expect(stepSelection([], null, 1)).toBeNull();
   });
 });
 
@@ -117,29 +160,50 @@ describe(selectionAfterRemoval, () => {
     expect(selectionAfterRemoval(ids, id(2))).toBe(id(3));
     expect(selectionAfterRemoval(ids, id(3))).toBe(id(2));
     expect(selectionAfterRemoval([id(1)], id(1))).toBeNull();
-  });
-
-  it("selects the first shown capture when the removed one was hidden", () => {
-    expect(selectionAfterRemoval(ids, id(9))).toBe(id(1));
-    expect(selectionAfterRemoval([], id(9))).toBeNull();
+    expect(selectionAfterRemoval(ids, id(7))).toBe(id(1));
   });
 });
 
-describe(visibleIds, () => {
-  it("keeps the list's order and only what the search shows", () => {
-    const captures = [
-      saved(1, at(22, 8), "Total ignores the discount"),
-      saved(2, at(22, 7), "Button looks disabled"),
-      saved(3, at(21, 9), "Discount applied twice"),
-      unreadable,
-    ];
+describe(stepProgress, () => {
+  it("counts checked steps", () => {
+    expect(
+      stepProgress([{ done: true }, { done: false }, { done: true }])
+    ).toStrictEqual({ done: 2, total: 3 });
+    expect(stepProgress([])).toBeNull();
+  });
+});
 
-    expect(visibleIds(captures, "discount")).toStrictEqual([id(1), id(3)]);
-    expect(visibleIds(captures, "")).toStrictEqual([
-      id(1),
-      id(2),
-      id(3),
-      id(99),
-    ]);
+describe(matchSnippet, () => {
+  const capture = saved(1, local(5, 9), {
+    description: "First line\nChairs are over budget",
+    pins: [
+      { x: 1, y: 1 },
+      { label: "Delivery fee", x: 2, y: 2 },
+    ],
+    steps: [{ done: false, id: "s", text: "Ask Rieder" }],
+    title: "Quote",
+  });
+
+  it("shows the line that matched when the title did not", () => {
+    expect(matchSnippet(capture, ["chairs"])).toBe("Chairs are over budget");
+    expect(matchSnippet(capture, ["rieder"])).toBe("Ask Rieder");
+    expect(matchSnippet(capture, ["delivery"])).toBe("2 · Delivery fee");
+  });
+
+  it("starts the excerpt near a match far into a long line", () => {
+    const long = saved(2, local(5, 9), {
+      description:
+        "The first part of this line runs on for a while before the word delivery appears",
+      title: "Quote",
+    });
+
+    expect(matchSnippet(long, ["delivery"])).toBe(
+      "…before the word delivery appears"
+    );
+  });
+
+  it("shows nothing when the title holds every word, or without a search", () => {
+    expect(matchSnippet(capture, ["quote"])).toBeNull();
+    expect(matchSnippet(capture, [])).toBeNull();
   });
 });

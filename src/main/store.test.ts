@@ -10,8 +10,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { CaptureIdSchema } from "@shared/capture-record";
-import type { CaptureRecordV1 } from "@shared/capture-record";
+import type { CaptureRecord, EditableFields } from "@shared/capture-record";
+import { DueDateSchema } from "@shared/due";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { z } from "zod";
 
 import { failNextWrite, nodeStoreFs, openCaptureStore } from "./store";
 import type { CaptureStore, StoreFs } from "./store";
@@ -26,19 +28,44 @@ const PNG = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
 
 const EDIT_TIME = new Date("2026-10-21T19:00:00.000Z");
 
-const record: CaptureRecordV1 = {
+const record: CaptureRecord = {
   capturedAt: "2026-10-21T18:40:12.345Z",
+  description: "",
+  due: null,
   id: ID,
   image: { file: "crop.png", heightPx: 600, pixelsPerDip: 2, widthPx: 960 },
   invokedVia: "shortcut",
-  pin: { x: 240, y: 100 },
-  schemaVersion: 1,
+  pins: [{ x: 240, y: 100 }],
+  schemaVersion: 2,
   source: { kind: "display", label: "Built-in Retina Display" },
-  thought: "This total ignores the discount row",
+  status: { kind: "active" },
+  steps: [],
+  title: "This total ignores the discount row",
   updatedAt: "2026-10-21T18:40:31.002Z",
 };
 
-const retried: CaptureRecordV1 = {
+const v1Json = JSON.stringify({
+  capturedAt: record.capturedAt,
+  id: ID,
+  image: record.image,
+  invokedVia: "shortcut",
+  pin: { x: 240, y: 100 },
+  schemaVersion: 1,
+  source: record.source,
+  thought: "This total ignores the discount row\nCheck with finance",
+  updatedAt: record.updatedAt,
+});
+
+const fields = (change: Partial<EditableFields> = {}): EditableFields => ({
+  description: record.description,
+  due: record.due,
+  pins: record.pins,
+  steps: record.steps,
+  title: record.title,
+  ...change,
+});
+
+const retried: CaptureRecord = {
   ...record,
   updatedAt: "2026-10-21T18:45:00.000Z",
 };
@@ -179,7 +206,7 @@ describe(openCaptureStore, () => {
       value: record,
     });
     await expect(reopenList()).resolves.toStrictEqual([
-      { id: ID, kind: "ok", record },
+      { id: ID, kind: "ok", migratedFrom: null, record },
     ]);
     await expect(
       readFile(path.join(root, ID, "crop.png"))
@@ -242,7 +269,7 @@ describe(openCaptureStore, () => {
       value: record,
     });
     await expect(reopenList()).resolves.toStrictEqual([
-      { id: ID, kind: "ok", record },
+      { id: ID, kind: "ok", migratedFrom: null, record },
     ]);
   });
 
@@ -258,19 +285,21 @@ describe(openCaptureStore, () => {
     await expect(listDir()).resolves.toStrictEqual([".staging", ".trash", ID]);
   });
 
-  it("refuses a second publish of the same id with a different thought", async () => {
+  it("refuses a second publish of the same id with a different title", async () => {
     const store = await open();
 
     await store.publish(record, PNG);
 
     await expect(
-      store.publish({ ...retried, thought: "Edited before the retry" }, PNG)
+      store.publish({ ...retried, title: "Edited before the retry" }, PNG)
     ).resolves.toStrictEqual({
       error: "writeFailed",
       message: "Another entry already uses this capture id.",
       ok: false,
     });
-    expect(store.list()).toStrictEqual([{ id: ID, kind: "ok", record }]);
+    expect(store.list()).toStrictEqual([
+      { id: ID, kind: "ok", migratedFrom: null, record },
+    ]);
     await expect(readText(ID, "capture.json")).resolves.toBe(
       JSON.stringify(record, null, 2)
     );
@@ -285,13 +314,16 @@ describe(openCaptureStore, () => {
       ok: true,
       value: record,
     });
-    expect(store.list()).toStrictEqual([{ id: ID, kind: "ok", record }]);
+    expect(store.list()).toStrictEqual([
+      { id: ID, kind: "ok", migratedFrom: null, record },
+    ]);
     await expect(listDir(".staging")).resolves.toStrictEqual([]);
   });
 
-  it.each<[string, Partial<CaptureRecordV1>]>([
-    ["thought", { thought: "Edited before the retry" }],
-    ["pin", { pin: { x: 241, y: 100 } }],
+  it.each<[string, Partial<CaptureRecord>]>([
+    ["title", { title: "Edited before the retry" }],
+    ["pin", { pins: [{ x: 241, y: 100 }] }],
+    ["pin count", { pins: [] }],
     ["crop size", { image: { ...record.image, widthPx: 1358 } }],
   ])(
     "keeps the draft when the entry at the final path has a different %s",
@@ -312,18 +344,16 @@ describe(openCaptureStore, () => {
   );
 
   it("never rewrites or removes an entry from a newer version", async () => {
-    const foreignJson = `{"schemaVersion":2,"id":"${FOREIGN_ID}"}`;
+    const foreignJson = `{"schemaVersion":3,"id":"${FOREIGN_ID}"}`;
 
     await seed(FOREIGN_ID, foreignJson);
 
     const store = await open();
 
     expect(store.list()).toStrictEqual([
-      { id: FOREIGN_ID, kind: "foreign", schemaVersion: 2 },
+      { id: FOREIGN_ID, kind: "foreign", schemaVersion: 3 },
     ]);
-    await expect(
-      store.updateThought(FOREIGN_ID, "edit")
-    ).resolves.toMatchObject({
+    await expect(store.update(FOREIGN_ID, fields())).resolves.toMatchObject({
       error: "readOnly",
     });
     await expect(store.remove(FOREIGN_ID)).resolves.toMatchObject({
@@ -335,33 +365,88 @@ describe(openCaptureStore, () => {
     expect(store.imageFile(FOREIGN_ID)).toBeNull();
   });
 
-  it("updates the thought, stamps updatedAt and keeps unknown keys", async () => {
+  it("updates the fields, stamps updatedAt and keeps unknown keys", async () => {
     await seed(ID, JSON.stringify({ ...record, future: 1 }));
 
     const store = await open();
 
+    const change = fields({
+      description: "Check with finance",
+      due: DueDateSchema.parse("2026-11-07"),
+      pins: [
+        { label: "Total", x: 240, y: 100 },
+        { x: 10, y: 20 },
+      ],
+      steps: [{ done: true, id: "s1", text: "Ask" }],
+      title: "New title",
+    });
+
     const updated = {
       ...record,
+      ...change,
       future: 1,
-      thought: "New thought",
       updatedAt: "2026-10-21T19:00:00.000Z",
     };
 
-    await expect(store.updateThought(ID, "New thought")).resolves.toStrictEqual(
-      {
-        ok: true,
-        value: updated,
-      }
-    );
+    await expect(store.update(ID, change)).resolves.toStrictEqual({
+      ok: true,
+      value: updated,
+    });
     await expect(readText(ID, "capture.json")).resolves.toBe(
       JSON.stringify(updated, null, 2)
     );
     await expect(reopenList()).resolves.toStrictEqual([
-      { id: ID, kind: "ok", record: updated },
+      { id: ID, kind: "ok", migratedFrom: null, record: updated },
     ]);
   });
 
-  it("keeps the old thought on disk and in the cache when an edit cannot be committed", async () => {
+  it("reads a v1 capture as v2 and leaves its file alone until an edit", async () => {
+    await seed(ID, v1Json);
+
+    const store = await open();
+
+    expect(store.get(ID)).toMatchObject({
+      kind: "ok",
+      migratedFrom: 1,
+      record: {
+        description: "Check with finance",
+        pins: [{ x: 240, y: 100 }],
+        title: "This total ignores the discount row",
+      },
+    });
+    await expect(readText(ID, "capture.json")).resolves.toBe(v1Json);
+
+    await store.setDone(ID, true);
+
+    const written = z
+      .record(z.string(), z.unknown())
+      .parse(JSON.parse(await readText(ID, "capture.json")));
+
+    expect(written).toMatchObject({
+      description: "Check with finance",
+      pins: [{ x: 240, y: 100 }],
+      schemaVersion: 2,
+      status: { at: "2026-10-21T19:00:00.000Z", kind: "done" },
+      title: "This total ignores the discount row",
+    });
+    expect("thought" in written).toBeFalsy();
+    expect("pin" in written).toBeFalsy();
+  });
+
+  it("marks a capture done and active again", async () => {
+    const store = await open();
+
+    await store.publish(record, PNG);
+
+    await expect(store.setDone(ID, true)).resolves.toMatchObject({
+      value: { status: { kind: "done" } },
+    });
+    await expect(store.setDone(ID, false)).resolves.toMatchObject({
+      value: { status: { kind: "active" } },
+    });
+  });
+
+  it("keeps the old record on disk and in the cache when an edit cannot be committed", async () => {
     const fault = createFaultFs();
     const store = await open(fault.fs);
 
@@ -369,10 +454,17 @@ describe(openCaptureStore, () => {
     fault.control.failWhen = (op, target) =>
       op === "rename" && target.endsWith("capture.json");
 
-    await expect(store.updateThought(ID, "Lost?")).resolves.toMatchObject({
+    await expect(
+      store.update(ID, fields({ title: "Lost?" }))
+    ).resolves.toMatchObject({
       error: "writeFailed",
     });
-    expect(store.get(ID)).toStrictEqual({ id: ID, kind: "ok", record });
+    expect(store.get(ID)).toStrictEqual({
+      id: ID,
+      kind: "ok",
+      migratedFrom: null,
+      record,
+    });
     await expect(readText(ID, "capture.json")).resolves.toBe(
       JSON.stringify(record, null, 2)
     );
@@ -382,12 +474,19 @@ describe(openCaptureStore, () => {
     ]);
   });
 
-  it("refuses to save a blank thought", async () => {
+  it("refuses a blank title and a pin outside the crop", async () => {
     const store = await open();
 
     await store.publish(record, PNG);
 
-    await expect(store.updateThought(ID, "  \n")).resolves.toMatchObject({
+    await expect(
+      store.update(ID, fields({ title: "  " }))
+    ).resolves.toMatchObject({
+      error: "invalid",
+    });
+    await expect(
+      store.update(ID, fields({ pins: [{ x: 960, y: 0 }] }))
+    ).resolves.toMatchObject({
       error: "invalid",
     });
   });
@@ -410,7 +509,7 @@ describe(openCaptureStore, () => {
 
     const results = await Promise.all([
       store.publish(record, PNG),
-      store.updateThought(ID, "Edited"),
+      store.update(ID, fields({ title: "Edited" })),
       store.remove(ID),
     ]);
 
@@ -456,7 +555,7 @@ describe(openCaptureStore, () => {
       value: record,
     });
     await expect(reopenList()).resolves.toStrictEqual([
-      { id: ID, kind: "ok", record },
+      { id: ID, kind: "ok", migratedFrom: null, record },
     ]);
   });
 

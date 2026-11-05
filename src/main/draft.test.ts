@@ -59,13 +59,16 @@ const point: DraftEvent = {
 
 const initialContent: DraftContent = {
   crop: rect(960, 600, 960, 600),
-  pin: pt(1440, 900),
-  thought: "",
+  description: "",
+  due: null,
+  pins: [],
+  steps: [],
+  title: "",
 };
 
-const typed = (thought: string): DraftContent => ({
+const typed = (title: string): DraftContent => ({
   ...initialContent,
-  thought,
+  title,
 });
 
 const run = (state: DraftState, ...events: readonly DraftEvent[]): Step => {
@@ -80,8 +83,8 @@ const run = (state: DraftState, ...events: readonly DraftEvent[]): Step => {
 
 const captured = run(IDLE, point, { frame, id: ID, type: "captured" }).state;
 
-const withThought = (thought: string): DraftState =>
-  run(captured, { content: typed(thought), id: ID, type: "edited" }).state;
+const withThought = (title: string): DraftState =>
+  run(captured, { content: typed(title), id: ID, type: "edited" }).state;
 
 const draftOf = (state: DraftState): Draft => {
   if (state.phase !== "draft") {
@@ -108,7 +111,7 @@ describe(step, () => {
     });
   });
 
-  it("opens the draft with the sampled point as pin and the default crop", () => {
+  it("opens the draft without pins, the crop centred on the sampled point", () => {
     expect(captured).toMatchObject({
       draft: {
         capturedAt: AT,
@@ -139,10 +142,12 @@ describe(step, () => {
     });
   });
 
-  it("restores a dismissed draft with its id, time, pin and thought", () => {
+  it("restores a dismissed draft with its id, time, pins and fields", () => {
     const moved: DraftContent = {
       ...typed("Discount row"),
-      pin: pt(1500, 950),
+      description: "Check with finance",
+      pins: [pt(1500, 950), pt(1000, 700)],
+      steps: [{ done: false, id: "s1", text: "Ask" }],
     };
 
     const dismissed = run(
@@ -191,9 +196,9 @@ describe(step, () => {
 
   it("repairs untrusted geometry from the renderer", () => {
     const outside: DraftContent = {
+      ...typed("x"),
       crop: rect(2800, 0, 960, 600),
-      pin: pt(0, 0),
-      thought: "x",
+      pins: [pt(0, 0)],
     };
 
     expect(
@@ -201,13 +206,26 @@ describe(step, () => {
         step(captured, { content: outside, id: ID, type: "edited" }).state
       ).content
     ).toStrictEqual({
+      ...typed("x"),
       crop: { height: 600, width: 960, x: 1920, y: 0 },
-      pin: { x: 1920, y: 0 },
-      thought: "x",
+      pins: [{ x: 1920, y: 0 }],
     });
   });
 
-  it("refuses to save a blank thought", () => {
+  it("refuses to save without a title, even with other fields", () => {
+    expect(
+      step(captured, {
+        content: { ...typed(""), description: "Only this" },
+        id: ID,
+        type: "saveRequested",
+      })
+    ).toStrictEqual({
+      effects: [],
+      state: captured,
+    });
+  });
+
+  it("refuses to save a blank title", () => {
     expect(
       step(captured, { content: typed("  \n"), id: ID, type: "saveRequested" })
     ).toStrictEqual({
@@ -424,24 +442,55 @@ describe(step, () => {
 });
 
 describe(mayQuit, () => {
-  it("holds quit only for a savable or saving draft", () => {
+  it("holds quit for anything typed or placed, or a save under way", () => {
     const saving = step(withThought("x"), {
       content: typed("x"),
       id: ID,
       type: "saveRequested",
     }).state;
 
+    const edited = (change: Partial<DraftContent>) =>
+      run(captured, {
+        content: { ...typed(""), ...change },
+        id: ID,
+        type: "edited",
+      }).state;
+
     expect(
       [IDLE, withThought(""), withThought("x"), saving].map(mayQuit)
     ).toStrictEqual([true, true, false, false]);
+    expect(
+      [
+        edited({ pins: [pt(1440, 900)] }),
+        edited({ description: "Note" }),
+        edited({ steps: [{ done: false, id: "s", text: "Do" }] }),
+        edited({ steps: [{ done: false, id: "s", text: " " }] }),
+      ].map(mayQuit)
+    ).toStrictEqual([false, false, false, true]);
+  });
+
+  it("asks on quit for pins without a title, and Save from the question does nothing", () => {
+    const pinned = run(captured, {
+      content: { ...typed(""), pins: [pt(1440, 900)] },
+      id: ID,
+      type: "edited",
+    }).state;
+
+    const asking = step(pinned, { type: "quitHeld" }).state;
+
+    expect(asking).toMatchObject({ quit: "asking" });
+    expect(step(asking, { choice: "save", type: "quitChoice" })).toMatchObject({
+      effects: [{ type: "focus" }],
+      state: { quit: "none" },
+    });
   });
 });
 
 describe(toRecord, () => {
-  it("stores the pin relative to the approved crop", () => {
+  it("stores every pin relative to the approved crop, in order, and trims the fields", () => {
     const widened = scaleCrop(
       rect(960, 600, 960, 600),
-      pt(1200, 700),
+      [pt(1200, 700)],
       2,
       frame.size,
       2
@@ -449,11 +498,22 @@ describe(toRecord, () => {
 
     const draft: Draft = {
       ...draftOf(captured),
-      content: { crop: widened, pin: pt(1200, 700), thought: "Here" },
+      content: {
+        ...typed("  Here "),
+        crop: widened,
+        description: "\nWhy it matters\n",
+        pins: [pt(1200, 700), pt(800, 600)],
+        steps: [
+          { done: false, id: "a", text: " Ask " },
+          { done: false, id: "b", text: "  " },
+        ],
+      },
     };
 
     expect(toRecord(draft, SAVED_AT)).toStrictEqual({
       capturedAt: "2026-10-21T18:40:12.345Z",
+      description: "Why it matters",
+      due: null,
       id: ID,
       image: {
         file: "crop.png",
@@ -462,10 +522,15 @@ describe(toRecord, () => {
         widthPx: 1920,
       },
       invokedVia: "shortcut",
-      pin: { x: 480, y: 200 },
-      schemaVersion: 1,
+      pins: [
+        { x: 480, y: 200 },
+        { x: 80, y: 100 },
+      ],
+      schemaVersion: 2,
       source: { kind: "display", label: "Built-in Retina Display" },
-      thought: "Here",
+      status: { kind: "active" },
+      steps: [{ done: false, id: "a", text: "Ask" }],
+      title: "Here",
       updatedAt: "2026-10-21T18:41:00.000Z",
     });
   });
@@ -633,7 +698,10 @@ describe("draft and store together", () => {
 
     controller.invoke(point.invocation);
     await settle();
-    controller.save(ID, typed("This total ignores the discount row"));
+    controller.save(ID, {
+      ...typed("This total ignores the discount row"),
+      pins: [pt(1440, 900)],
+    });
     await vi.waitFor(() => {
       expect(controller.view()).toStrictEqual({ kind: "none" });
     });
@@ -645,8 +713,8 @@ describe("draft and store together", () => {
         id: ID,
         kind: "ok",
         record: {
-          pin: { x: 480, y: 300 },
-          thought: "This total ignores the discount row",
+          pins: [{ x: 480, y: 300 }],
+          title: "This total ignores the discount row",
         },
       },
     ]);
@@ -699,7 +767,7 @@ describe("draft and store together", () => {
 
     expect(controller.view()).toMatchObject({
       draftId: ID,
-      seed: { thought: "Retry me" },
+      seed: { title: "Retry me" },
       write: {
         kind: "failed",
         message: "Simulated write failure (INSET_FAIL_NEXT_WRITE)",
@@ -713,7 +781,7 @@ describe("draft and store together", () => {
     });
 
     await expect(reopenedList()).resolves.toMatchObject([
-      { id: ID, kind: "ok", record: { thought: "Retry me" } },
+      { id: ID, kind: "ok", record: { title: "Retry me" } },
     ]);
   });
 });

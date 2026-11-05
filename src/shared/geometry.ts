@@ -45,9 +45,9 @@ export interface DisplaySnapshot {
   readonly scaleFactor: number;
 }
 
-/** Invariant: crop lies inside the image and pin lies inside crop. */
+/** Invariant: crop lies inside the image and every pin lies inside crop. */
 export interface PinGeometry {
-  readonly pin: Point<"image">;
+  readonly pins: readonly Point<"image">[];
   readonly crop: Rect<"image">;
 }
 
@@ -99,13 +99,40 @@ const shiftInside = (
     crop.height
   );
 
-const containPin = (crop: Rect<"image">, pin: Point<"image">): Rect<"image"> =>
-  rect(
-    clamp(crop.x, pin.x - crop.width + 1, pin.x),
-    clamp(crop.y, pin.y - crop.height + 1, pin.y),
-    crop.width,
-    crop.height
-  );
+/** The smallest box around the pins as edges, or null without pins. */
+const pinEdges = (
+  pins: readonly Point<"image">[]
+): {
+  readonly left: number;
+  readonly top: number;
+  readonly right: number;
+  readonly bottom: number;
+} | null =>
+  pins.length === 0
+    ? null
+    : {
+        bottom: Math.max(...pins.map((pin) => pin.y)) + 1,
+        left: Math.min(...pins.map((pin) => pin.x)),
+        right: Math.max(...pins.map((pin) => pin.x)) + 1,
+        top: Math.min(...pins.map((pin) => pin.y)),
+      };
+
+/** Moves the crop the least it takes to hold every pin; it must be large enough already. */
+const containPins = (
+  crop: Rect<"image">,
+  pins: readonly Point<"image">[]
+): Rect<"image"> => {
+  const edges = pinEdges(pins);
+
+  return edges === null
+    ? crop
+    : rect(
+        clamp(crop.x, edges.right - crop.width, edges.left),
+        clamp(crop.y, edges.bottom - crop.height, edges.top),
+        crop.width,
+        crop.height
+      );
+};
 
 export const clampPin = (
   point: Point<"image">,
@@ -116,8 +143,9 @@ export const clampPin = (
     clamp(Math.round(point.y), crop.y, crop.y + crop.height - 1)
   );
 
+/** Centred on the point under the pointer; a new capture has no pins. */
 export const defaultCrop = (
-  pin: Point<"image">,
+  center: Point<"image">,
   image: Size<"image">,
   ppd: number
 ): Rect<"image"> => {
@@ -130,8 +158,8 @@ export const defaultCrop = (
 
   return shiftInside(
     rect(
-      Math.round(pin.x - width / 2),
-      Math.round(pin.y - height / 2),
+      Math.round(center.x - width / 2),
+      Math.round(center.y - height / 2),
       width,
       height
     ),
@@ -139,37 +167,57 @@ export const defaultCrop = (
   );
 };
 
-/** The pin never moves and keeps its relative position in the preview. */
+/**
+ * Scales about the pins' middle, or the crop's without pins, which keeps its
+ * relative place in the preview. The crop never gets smaller than the pins
+ * need, and keeps every pin inside.
+ */
 export const scaleCrop = (
   crop: Rect<"image">,
-  pin: Point<"image">,
+  pins: readonly Point<"image">[],
   factor: number,
   image: Size<"image">,
   ppd: number
 ): Rect<"image"> => {
   const min = minCropSize(image, ppd);
-  const width = clamp(Math.round(crop.width * factor), min.width, image.width);
+  const edges = pinEdges(pins);
+  const needW = edges === null ? 0 : edges.right - edges.left;
+  const needH = edges === null ? 0 : edges.bottom - edges.top;
+
+  const width = clamp(
+    Math.round(crop.width * factor),
+    Math.max(min.width, needW),
+    image.width
+  );
 
   const height = clamp(
     Math.round(crop.height * factor),
-    min.height,
+    Math.max(min.height, needH),
     image.height
   );
 
-  const fractionX = (pin.x - crop.x) / crop.width;
-  const fractionY = (pin.y - crop.y) / crop.height;
+  const anchor =
+    edges === null
+      ? pt<"image">(crop.x + crop.width / 2, crop.y + crop.height / 2)
+      : pt<"image">(
+          (edges.left + edges.right - 1) / 2,
+          (edges.top + edges.bottom - 1) / 2
+        );
+
+  const fractionX = (anchor.x - crop.x) / crop.width;
+  const fractionY = (anchor.y - crop.y) / crop.height;
 
   const scaled = shiftInside(
     rect(
-      Math.round(pin.x - fractionX * width),
-      Math.round(pin.y - fractionY * height),
+      Math.round(anchor.x - fractionX * width),
+      Math.round(anchor.y - fractionY * height),
       width,
       height
     ),
     image
   );
 
-  return containPin(scaled, pin);
+  return containPins(scaled, pins);
 };
 
 /** Repairs untrusted geometry against the frame. Idempotent. */
@@ -190,7 +238,7 @@ export const normalizeGeometry = (
     image
   );
 
-  return { crop, pin: clampPin(geometry.pin, crop) };
+  return { crop, pins: geometry.pins.map((pin) => clampPin(pin, crop)) };
 };
 
 export const isWidest = (crop: Size<"image">, image: Size<"image">): boolean =>
@@ -211,14 +259,14 @@ export const pinInCrop = (
   crop: Rect<"image">
 ): Point<"crop"> => pt(pin.x - crop.x, pin.y - crop.y);
 
-/** Moves the crop over the image; it stays inside the image and around the pin. */
+/** Moves the crop over the image; it stays inside the image and around every pin. */
 export const moveCrop = (
   crop: Rect<"image">,
   delta: Point<"image">,
-  pin: Point<"image">,
+  pins: readonly Point<"image">[],
   image: Size<"image">
 ): Rect<"image"> =>
-  containPin(
+  containPins(
     shiftInside(
       rect(
         Math.round(crop.x + delta.x),
@@ -228,7 +276,7 @@ export const moveCrop = (
       ),
       image
     ),
-    pin
+    pins
   );
 
 /** A corner or an edge of the crop, by compass direction. */
@@ -236,42 +284,47 @@ export type CropHandle = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
 
 /**
  * Moves the handle's edges to the point. An edge stops at the image, at the
- * pin and at the smallest crop, so the crop keeps the pin and its minimum size.
+ * pins and at the smallest crop, so the crop keeps every pin and its minimum size.
  */
 export const resizeCrop = (
   crop: Rect<"image">,
   handle: CropHandle,
   point: Point<"image">,
-  pin: Point<"image">,
+  pins: readonly Point<"image">[],
   image: Size<"image">,
   ppd: number
 ): Rect<"image"> => {
   const min = minCropSize(image, ppd);
+  const edges = pinEdges(pins);
+  const keepLeft = edges?.left ?? Number.POSITIVE_INFINITY;
+  const keepTop = edges?.top ?? Number.POSITIVE_INFINITY;
+  const keepRight = edges?.right ?? 0;
+  const keepBottom = edges?.bottom ?? 0;
   let left = crop.x;
   let top = crop.y;
   let right = crop.x + crop.width;
   let bottom = crop.y + crop.height;
 
   if (handle.includes("w")) {
-    left = clamp(Math.round(point.x), 0, Math.min(pin.x, right - min.width));
+    left = clamp(Math.round(point.x), 0, Math.min(keepLeft, right - min.width));
   }
 
   if (handle.includes("e")) {
     right = clamp(
       Math.round(point.x),
-      Math.max(pin.x + 1, left + min.width),
+      Math.max(keepRight, left + min.width),
       image.width
     );
   }
 
   if (handle.includes("n")) {
-    top = clamp(Math.round(point.y), 0, Math.min(pin.y, bottom - min.height));
+    top = clamp(Math.round(point.y), 0, Math.min(keepTop, bottom - min.height));
   }
 
   if (handle.includes("s")) {
     bottom = clamp(
       Math.round(point.y),
-      Math.max(pin.y + 1, top + min.height),
+      Math.max(keepBottom, top + min.height),
       image.height
     );
   }

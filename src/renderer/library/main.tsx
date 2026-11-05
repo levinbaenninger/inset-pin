@@ -10,11 +10,14 @@ import { handleMenuKeys } from "@/shared/keys";
 import { markPlatform } from "@/shared/platform";
 import { followSystemTheme } from "@/shared/theme";
 
+import { startCommandBus } from "./command-bus";
 import { router } from "./router";
 
 followSystemTheme();
 
 markPlatform();
+
+startCommandBus();
 
 libraryBridge().on("changed", () => {
   void router.invalidate();

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 
-import { CaptureIdSchema, deriveTitle } from "@shared/capture-record";
+import { CaptureIdSchema } from "@shared/capture-record";
 import type { PointVia } from "@shared/capture-record";
 import {
   captureContract,
@@ -161,6 +161,9 @@ const start = async (): Promise<void> => {
 
   let updater: Updater | null = null;
 
+  // The library's New capture button reaches the delayed capture, defined further down, through this.
+  const startCapture = { soon: ignore };
+
   // A pin and the library open each other, so a pin reaches the library through this once it exists.
   let openLibrary: LibraryWindow["open"] = ignore;
 
@@ -183,6 +186,9 @@ const start = async (): Promise<void> => {
   });
 
   const library = createLibraryWindow({
+    captureSoon: () => {
+      startCapture.soon();
+    },
     exporter,
     onClosed: () => {
       e2eLog("libraryClosed");
@@ -199,7 +205,7 @@ const start = async (): Promise<void> => {
     openSettings: () => {
       settingsWindow.open();
     },
-    pinToScreen: pins.open,
+    floatOnTop: pins.open,
     preload: preloadPath("library"),
     status: () => ({
       iconIn: settings.current().iconIn,
@@ -371,6 +377,8 @@ const start = async (): Promise<void> => {
     menus.refresh();
   };
 
+  startCapture.soon = captureAfterDelay;
+
   const menuModel = (): TrayModel => ({
     countdownPending: countdown !== null,
     draft: draft.tray(),
@@ -381,7 +389,7 @@ const start = async (): Promise<void> => {
       .list()
       .flatMap((entry) =>
         entry.kind === "ok"
-          ? [{ id: entry.record.id, title: deriveTitle(entry.record.thought) }]
+          ? [{ id: entry.record.id, title: entry.record.title }]
           : []
       ),
     shortcutRegistered,
@@ -412,6 +420,18 @@ const start = async (): Promise<void> => {
     }
   };
 
+  /** The sheet lives in the library, which opens first when it is closed. */
+  const showShortcuts = (): void => {
+    if (library.isOpen()) {
+      library.command("shortcuts");
+    } else {
+      library.open();
+      library.whenLoaded(() => {
+        library.command("shortcuts");
+      });
+    }
+  };
+
   const run = (action: TrayAction): void => {
     if (action === "showDraft") {
       draft.invoke({ kind: "reopen" });
@@ -419,6 +439,8 @@ const start = async (): Promise<void> => {
       library.open();
     } else if (action === "openSettings") {
       settingsWindow.open();
+    } else if (action === "showShortcuts") {
+      showShortcuts();
     } else if (action === "toggleLibraryOnTop") {
       library.setFloating(!library.isFloating());
       menus.refresh();
@@ -454,6 +476,9 @@ const start = async (): Promise<void> => {
       library.open();
     },
     openSettings: settingsWindow.open,
+    showShortcuts: () => {
+      showShortcuts();
+    },
     setFloatOnTop: (on) => {
       library.setFloating(on);
       menus.refresh();
@@ -471,6 +496,7 @@ const start = async (): Promise<void> => {
       floatOnTop: library.isFloating(),
       libraryFocused: library.isFocused(),
       libraryOpen: library.isOpen(),
+      shownDone: library.shownDone(),
       update: model.update,
     };
 

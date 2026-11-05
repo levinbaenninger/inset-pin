@@ -5,12 +5,13 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import {
   CaptureIdSchema,
-  CaptureRecordV1Schema,
+  CaptureRecordSchema,
   parseStoredEntry,
 } from "@shared/capture-record";
 import type {
   CaptureId,
-  CaptureRecordV1,
+  CaptureRecord,
+  EditableFields,
   StoredEntry,
 } from "@shared/capture-record";
 import { z } from "zod";
@@ -103,13 +104,18 @@ export interface CaptureStore {
   /** Main-process only (protocol, clipboard, drag). */
   readonly imageFile: (id: CaptureId) => string | null;
   readonly publish: (
-    record: CaptureRecordV1,
+    record: CaptureRecord,
     png: Uint8Array
-  ) => Promise<StoreResult<CaptureRecordV1>>;
-  readonly updateThought: (
+  ) => Promise<StoreResult<CaptureRecord>>;
+  /** Rewrites the record as the current version, so a v1 file becomes v2 on its first edit. */
+  readonly update: (
     id: CaptureId,
-    thought: string
-  ) => Promise<StoreResult<CaptureRecordV1>>;
+    fields: EditableFields
+  ) => Promise<StoreResult<CaptureRecord>>;
+  readonly setDone: (
+    id: CaptureId,
+    done: boolean
+  ) => Promise<StoreResult<CaptureRecord>>;
   readonly remove: (id: CaptureId) => Promise<StoreResult<null>>;
   readonly subscribe: (listener: () => void) => () => void;
 }
@@ -146,13 +152,20 @@ const failure = <T>(error: StoreError, message: string): StoreResult<T> => ({
 
 const success = <T>(value: T): StoreResult<T> => ({ ok: true, value });
 
+const contentOf = (record: CaptureRecord): string =>
+  JSON.stringify([
+    record.title,
+    record.description,
+    record.steps,
+    record.due,
+    record.pins,
+    record.image.widthPx,
+    record.image.heightPx,
+  ]);
+
 /** A retry of the same draft: the times may differ, the content may not. */
-const sameCapture = (a: CaptureRecordV1, b: CaptureRecordV1): boolean =>
-  a.thought === b.thought &&
-  a.pin.x === b.pin.x &&
-  a.pin.y === b.pin.y &&
-  a.image.widthPx === b.image.widthPx &&
-  a.image.heightPx === b.image.heightPx;
+const sameCapture = (a: CaptureRecord, b: CaptureRecord): boolean =>
+  contentOf(a) === contentOf(b);
 
 const newestFirst = (a: StoredEntry, b: StoredEntry): number => {
   const timeA = a.kind === "ok" ? a.record.capturedAt : "";
@@ -299,8 +312,8 @@ export const openCaptureStore = async (
   };
 
   const adoptExisting = async (
-    record: CaptureRecordV1
-  ): Promise<CaptureRecordV1 | null> => {
+    record: CaptureRecord
+  ): Promise<CaptureRecord | null> => {
     const entry = await readEntry(record.id);
 
     return entry?.kind === "ok" && sameCapture(entry.record, record)
@@ -309,9 +322,9 @@ export const openCaptureStore = async (
   };
 
   const publishNow = async (
-    record: CaptureRecordV1,
+    record: CaptureRecord,
     png: Uint8Array
-  ): Promise<StoreResult<CaptureRecordV1>> => {
+  ): Promise<StoreResult<CaptureRecord>> => {
     const cached = cache.get(record.id);
 
     if (cached !== undefined) {
@@ -320,7 +333,7 @@ export const openCaptureStore = async (
         : failure("writeFailed", "Another entry already uses this capture id.");
     }
 
-    const parsed = CaptureRecordV1Schema.safeParse(record);
+    const parsed = CaptureRecordSchema.safeParse(record);
 
     if (!parsed.success) {
       return failure("invalid", z.prettifyError(parsed.error));
@@ -345,21 +358,31 @@ export const openCaptureStore = async (
         return failure("writeFailed", errorMessage(error));
       }
 
-      commit({ id: record.id, kind: "ok", record: adopted });
+      commit({
+        id: record.id,
+        kind: "ok",
+        migratedFrom: null,
+        record: adopted,
+      });
 
       return success(adopted);
     }
 
     await syncQuietly(root);
-    commit({ id: record.id, kind: "ok", record: parsed.data });
+    commit({
+      id: record.id,
+      kind: "ok",
+      migratedFrom: null,
+      record: parsed.data,
+    });
 
     return success(parsed.data);
   };
 
-  const updateThoughtNow = async (
+  const rewriteNow = async (
     id: CaptureId,
-    thought: string
-  ): Promise<StoreResult<CaptureRecordV1>> => {
+    change: (record: CaptureRecord) => CaptureRecord
+  ): Promise<StoreResult<CaptureRecord>> => {
     const entry = cache.get(id);
 
     if (entry === undefined) {
@@ -370,9 +393,8 @@ export const openCaptureStore = async (
       return failure("readOnly", "This capture is read-only.");
     }
 
-    const parsed = CaptureRecordV1Schema.safeParse({
-      ...entry.record,
-      thought,
+    const parsed = CaptureRecordSchema.safeParse({
+      ...change(entry.record),
       updatedAt: now().toISOString(),
     });
 
@@ -394,7 +416,7 @@ export const openCaptureStore = async (
       return failure("writeFailed", errorMessage(error));
     }
 
-    commit({ id, kind: "ok", record: parsed.data });
+    commit({ id, kind: "ok", migratedFrom: null, record: parsed.data });
 
     return success(parsed.data);
   };
@@ -440,7 +462,19 @@ export const openCaptureStore = async (
         listeners.delete(listener);
       };
     },
-    updateThought: async (id, thought) =>
-      await enqueue(async () => await updateThoughtNow(id, thought)),
+    setDone: async (id, done) =>
+      await enqueue(
+        async () =>
+          await rewriteNow(id, (record) => ({
+            ...record,
+            status: done
+              ? { at: now().toISOString(), kind: "done" }
+              : { kind: "active" },
+          }))
+      ),
+    update: async (id, fields) =>
+      await enqueue(
+        async () => await rewriteNow(id, (record) => ({ ...record, ...fields }))
+      ),
   };
 };

@@ -15,6 +15,7 @@ const actions = (): AppMenuActions => ({
   openLibrary: vi.fn<() => void>(),
   openSettings: vi.fn<() => void>(),
   setFloatOnTop: vi.fn<(on: boolean) => void>(),
+  showShortcuts: vi.fn<() => void>(),
 });
 
 const state: AppMenuState = {
@@ -22,6 +23,7 @@ const state: AppMenuState = {
   floatOnTop: false,
   libraryFocused: true,
   libraryOpen: true,
+  shownDone: false,
   update: IDLE,
 };
 
@@ -62,12 +64,20 @@ describe(appMenuTemplate, () => {
     const keyed = capture.filter((entry) => entry.accelerator !== undefined);
 
     expect(keyed.map((entry) => entry.label)).toStrictEqual([
-      "Copy Note",
+      "Copy as Text",
       "Copy Image",
-      "Edit Thought",
-      "Pin to Screen",
-      "Delete",
+      "Edit Title",
+      "Add Description",
+      "Add Next Steps",
+      "Set Due Date…",
+      "Pin Tool",
+      "Float on Top",
+      "Mark as Done",
+      "Delete…",
     ]);
+    expect(keyed.map((entry) => entry.accelerator)).toContain(
+      "Alt+CommandOrControl+F"
+    );
     expect(
       keyed.every((entry) => entry.registerAccelerator === false)
     ).toBeTruthy();
@@ -76,15 +86,53 @@ describe(appMenuTemplate, () => {
   it("sends a capture command to the library", () => {
     const run = actions();
 
-    const pin = item(
+    const float = item(
       submenu(appMenuTemplate(state, run), "Capture"),
-      "Pin to Screen"
+      "Float on Top"
     );
 
     // @ts-expect-error the click handler ignores its arguments
-    pin?.click?.();
+    float?.click?.();
 
-    expect(run.libraryCommand).toHaveBeenCalledWith("pin");
+    expect(run.libraryCommand).toHaveBeenCalledWith("float");
+  });
+
+  it("calls the pin marker a pin and floating Float on Top, never Pin", () => {
+    const labels = appMenuTemplate(state, actions()).flatMap((menu) =>
+      Array.isArray(menu.submenu)
+        ? menu.submenu.map((entry) => entry.label ?? "")
+        : []
+    );
+
+    expect(labels).not.toContain("Pin to Screen");
+    expect(labels).toContain("Pin Tool");
+  });
+
+  it("names Mark as Done after the shown capture's state", () => {
+    expect(
+      item(
+        submenu(
+          appMenuTemplate({ ...state, shownDone: true }, actions()),
+          "Capture"
+        ),
+        "Mark as Not Done"
+      )
+    ).toBeDefined();
+  });
+
+  it("offers the shortcut sheet in Help with ⌘/", () => {
+    const run = actions();
+
+    const sheet = item(
+      submenu(appMenuTemplate(state, run), "help"),
+      "Keyboard Shortcuts"
+    );
+
+    // @ts-expect-error the click handler ignores its arguments
+    sheet?.click?.();
+
+    expect(sheet?.accelerator).toBe("CommandOrControl+/");
+    expect(run.showShortcuts).toHaveBeenCalledOnce();
   });
 
   it("disables what has nowhere to go", () => {
@@ -94,12 +142,13 @@ describe(appMenuTemplate, () => {
         floatOnTop: false,
         libraryFocused: false,
         libraryOpen: false,
+        shownDone: null,
         update: IDLE,
       },
       actions()
     );
 
-    expect(item(submenu(template, "Capture"), "Delete")?.enabled).toBeFalsy();
+    expect(item(submenu(template, "Capture"), "Delete…")?.enabled).toBeFalsy();
     expect(
       item(submenu(template, "File"), "New Capture in 3 Seconds")?.enabled
     ).toBeFalsy();

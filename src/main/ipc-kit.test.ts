@@ -30,8 +30,11 @@ const fromPanel: IpcSenderEvent = {
 
 const content = {
   crop: { height: 600, width: 960, x: 0, y: 0 },
-  pin: { x: 10, y: 20 },
-  thought: "hello",
+  description: "",
+  due: null,
+  pins: [{ x: 10, y: 20 }],
+  steps: [],
+  title: "hello",
 };
 
 const setup = (
@@ -136,7 +139,7 @@ describe(serveContract, () => {
     const { send, rejected, saved } = setup();
 
     send("save", fromPanel, {
-      content: { ...content, pin: { x: -1, y: 0 } },
+      content: { ...content, pins: [{ x: -1, y: 0 }] },
       id: ID,
     });
     send("save", fromPanel, { content, id: ID.toUpperCase() });
