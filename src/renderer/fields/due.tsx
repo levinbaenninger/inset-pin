@@ -37,9 +37,10 @@ const STATE_CLASS: Record<DueState, string> = {
 };
 
 /**
- * The small due chip in a list row: a calendar icon and the day. Once the day
- * has passed it says "Overdue", as Window Links' rows do; the date is in its
- * tooltip and accessible name.
+ * The small due chip in a list row: a calendar icon and the day, "Overdue ·
+ * Nov 3" once it has passed. In the narrowest rows the icon goes so the date
+ * fits; anything longer is cut, with the whole day in its tooltip and
+ * accessible name.
  */
 export const DueChip = ({
   due,
@@ -57,10 +58,12 @@ export const DueChip = ({
     data-due-state={dueState(due, now)}
     title={dueSentence(due, now)}
   >
-    <HugeiconsIcon className="shrink-0" icon={Calendar03Icon} size={11} />
-    <span className="truncate">
-      {dueState(due, now) === "overdue" ? "Overdue" : dueChipText(due, now)}
-    </span>
+    <HugeiconsIcon
+      className="shrink-0 @max-[124px]:hidden"
+      icon={Calendar03Icon}
+      size={11}
+    />
+    <span className="truncate">{dueChipText(due, now)}</span>
   </span>
 );
 

@@ -144,7 +144,7 @@ function DropdownMenuShortcut({
     <span
       data-slot="dropdown-menu-shortcut"
       className={cn(
-        "text-muted-foreground ml-auto pl-4 text-xs tracking-wide",
+        "text-muted-foreground ml-auto pl-4 text-xs tabular-nums",
         className
       )}
       {...props}

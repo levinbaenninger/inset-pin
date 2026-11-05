@@ -61,11 +61,11 @@ Click the Dock icon, choose **Recent captures…** from the pin icon, or start t
 - **Edit in place.** Title, description, next steps, Due and pin labels save as you type. The chips under the title add a missing field, and the same keys work: `⌘D`, `⇧⌘S`, `⇧⌘D`. `Return` edits the title. The Due chip's `×` clears the day.
 - **Pins.** Under the image, every pin is listed as "1 · label". Press `P` or click **Add pins** to place more, drag a pin to move it, and `⌫` removes the selected one. `⌘Z` undoes a pin edit (a whole drag at once) and `⇧⌘Z` redoes it. A pin stays selected only while the image has the focus.
 - **Search** with `⌘F` or `Ctrl+F`. It looks in titles, descriptions, steps and pin labels. `due:today`, `due:overdue`, `due:week` (overdue, today and the next six days), `due:any` and `due:none` filter by Due. Typing `due:` lists them; the filter button in the field offers them too. Matches are highlighted.
-- **Mark as done** (`Space`, or the check button) moves a capture to **Done**, at the foot of the sidebar; the notice offers Undo.
+- **Mark as done** (`Space` on a focused sidebar row, or the check button) moves a capture to **Done**, at the foot of the sidebar; the notice offers Undo.
 - **Copy Text** (`⌘C` when nothing is selected) copies the title and description. **Copy with Details** (`⌥⌘C`) adds the steps as `- [ ]` items, `Due: <date>` and the pin labels. **Copy Image** (`⇧⌘C`) copies the crop with every pin drawn on it. Dragging the image into another app drops the same picture as a file. Every copy saves what you are typing first, so it matches the screen.
 - **Float on Top** (`⌥⌘F` or `Ctrl+Alt+F`, previously "Pin") keeps the capture in a small window above every other app.
 - **Delete…** (`⌫`) asks first.
-- The ⋯ button and a right-click on a row hold the same commands with their keys. **Settings** and **Keyboard shortcuts** sit at the foot of the sidebar.
+- The ⋯ button and a right-click on a row hold the same commands with their keys. With a sidebar row in focus, as after a right-click, those keys act on that row's capture, not the one open. **Settings** and **Keyboard shortcuts** sit at the foot of the sidebar.
 
 Captures saved by an older version open with nothing lost. A one-line thought becomes the title. A longer one stays whole, exactly as typed, as the description, and its first line becomes the title. The old pin becomes pin 1. The file is rewritten in the new format only when you change the capture.
 

@@ -79,9 +79,13 @@ const settle = async (
 /**
  * Everything that can be done to one capture, once: the right-click menu in
  * the sidebar, the capture's ⋯ menu and its keys all use these. Delete asks
- * first, in the dialog this returns.
+ * first, in the dialog this returns. `from` says whose menu it is: Space marks
+ * done only on a focused row, so only a row's menu shows it.
  */
-export const useCaptureCommands = (capture: SavedCapture) => {
+export const useCaptureCommands = (
+  capture: SavedCapture,
+  from: "row" | "page"
+) => {
   const navigate = useNavigate();
   const router = useRouter();
   const captures = rootRoute.useLoaderData();
@@ -109,23 +113,32 @@ export const useCaptureCommands = (capture: SavedCapture) => {
     });
   };
 
-  /** Saves what is typed first, so the clipboard gets what the page shows; a failed save copies nothing stale. */
-  const afterSaving = async (
-    call: () => Promise<ActionResult>,
-    text: string
+  /** Saves what is typed first, so the output is what the page shows; after a failed save nothing stale goes out. */
+  const whenSaved = async (
+    then: () => Promise<void> | void,
+    skipped: string
   ): Promise<void> => {
     const saved = await settleEdits(capture.id);
 
     if (!saved.ok) {
       say({
         failed: true,
-        text: `Couldn’t save your changes, so nothing was copied. ${saved.message}`,
+        text: `Couldn’t save your changes, so ${skipped}. ${saved.message}`,
       });
 
       return;
     }
 
-    report(await settle(call), text);
+    await then();
+  };
+
+  const afterSaving = async (
+    call: () => Promise<ActionResult>,
+    text: string
+  ): Promise<void> => {
+    await whenSaved(async () => {
+      report(await settle(call), text);
+    }, "nothing was copied");
   };
 
   const remove = async (): Promise<void> => {
@@ -156,9 +169,10 @@ export const useCaptureCommands = (capture: SavedCapture) => {
 
   // The floating window reads the saved capture, so it opens once the typing is saved.
   const floatAfterSaving = async (): Promise<void> => {
-    await settleEdits(capture.id);
-    api.floatOnTop(capture.id);
-    say({ text: "Floating on top of other apps" });
+    await whenSaved(() => {
+      api.floatOnTop(capture.id);
+      say({ text: "Floating on top of other apps" });
+    }, "it didn’t float");
   };
 
   const commands = {
@@ -220,7 +234,7 @@ export const useCaptureCommands = (capture: SavedCapture) => {
     { id: "status", kind: "separator" },
     {
       icon: done ? Undo02Icon : CheckmarkCircle02Icon,
-      keys: KEYS.done,
+      keys: from === "row" ? KEYS.done : undefined,
       kind: "item",
       label: done ? "Mark as Not Done" : "Mark as Done",
       run: commands.toggleDone,
@@ -242,6 +256,9 @@ export const useCaptureCommands = (capture: SavedCapture) => {
         <AlertDialogHeader>
           <AlertDialogTitle>Delete this capture?</AlertDialogTitle>
           <AlertDialogDescription>
+            <span className="text-foreground line-clamp-2 font-medium">
+              {capture.title}
+            </span>
             Its image and notes are removed from this computer. To keep it out
             of the list instead, mark it as done.
           </AlertDialogDescription>

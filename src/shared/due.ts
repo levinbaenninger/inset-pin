@@ -122,9 +122,13 @@ export const dueState = (due: DueDate, now: Date): DueState => {
   return days < WEEK_DAYS ? "soon" : "later";
 };
 
-/** "Today", "Tomorrow", "Yesterday", the weekday within six days, else a short date. */
-export const dueLabel = (due: DueDate, now: Date, locale?: string): string =>
-  dayLabel(fromDueDate(due), now, locale);
+/** "Today", "Tomorrow", "Yesterday", the weekday within six days ("Wed"), else a short date. */
+export const dueLabel = (
+  due: DueDate,
+  now: Date,
+  locale?: string,
+  weekday: "short" | "long" = "short"
+): string => dayLabel(fromDueDate(due), now, locale, weekday);
 
 /** What the chip reads: an overdue day says so in words, not by colour alone. */
 export const dueChipText = (due: DueDate, now: Date, locale?: string): string =>
@@ -132,13 +136,13 @@ export const dueChipText = (due: DueDate, now: Date, locale?: string): string =>
     ? `Overdue · ${dueLabel(due, now, locale)}`
     : dueLabel(due, now, locale);
 
-/** What the chip says aloud: "Due today", "Overdue, was due yesterday", "Due Friday". */
+/** What the chip says aloud and in its tooltip, weekday in full: "Due today", "Overdue, was due yesterday", "Due Friday". */
 export const dueSentence = (
   due: DueDate,
   now: Date,
   locale?: string
 ): string => {
-  const label = dueLabel(due, now, locale);
+  const label = dueLabel(due, now, locale, "long");
   const days = daysUntil(due, now);
   const spoken = Math.abs(days) <= 1 ? label.toLocaleLowerCase() : label;
 

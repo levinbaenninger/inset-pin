@@ -45,6 +45,7 @@ import { usePinKeys } from "@/shared/use-pin-keys";
 
 import { MenuEntries, useCaptureCommands } from "./capture-commands";
 import { onCommand } from "./command-bus";
+import { useCopyEntry } from "./copy-entry";
 import { formatCaptureTime, readOnlyText, sourceText } from "./format";
 import { ImageEditor } from "./image-editor";
 import type { PinChange } from "./image-editor";
@@ -80,18 +81,10 @@ const gestureOf = (change: PinChange): string | null => {
 const savesNow = (change: PinChange): boolean =>
   change.kind === "drag" ? change.done : change.kind !== "label";
 
-const hasTextSelection = (): boolean =>
-  (window.getSelection()?.toString() ?? "") !== "";
-
 /** Enter keeps its meaning on buttons, links and the image. */
 const enterActivates = (target: EventTarget | null): boolean =>
   target instanceof Element &&
   target.closest("button, a, [role='application']") !== null;
-
-/** Space keeps its meaning on buttons, switches and the like. */
-const spaceActivates = (target: EventTarget | null): boolean =>
-  target instanceof Element &&
-  target.closest("button, [role='checkbox'], [role='switch']") !== null;
 
 const Unavailable = ({
   description,
@@ -120,7 +113,7 @@ const Unavailable = ({
 /** The capture on screen, edited in place: every field saves itself. */
 const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
   const { now } = useLibraryState();
-  const { commands, dialog, entries } = useCaptureCommands(capture);
+  const { commands, dialog, entries } = useCaptureCommands(capture, "page");
   const saver = useMemo(() => new InlineSaver(capture.id, api), [capture.id]);
 
   const { failure, fields } = useSyncExternalStore(
@@ -303,10 +296,11 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
 
     const action = captureKeyAction(event, isMac);
 
+    // Space marks done only on a focused sidebar row, as in every Inset list.
     if (
       action === null ||
-      (action === "edit" && enterActivates(event.target)) ||
-      (action === "done" && spaceActivates(event.target))
+      action === "done" ||
+      (action === "edit" && enterActivates(event.target))
     ) {
       return;
     }
@@ -320,9 +314,6 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
     } else if (action === "copyImage") {
       event.preventDefault();
       commands.copyImage();
-    } else if (action === "done") {
-      event.preventDefault();
-      commands.toggleDone();
     } else if (action === "undo") {
       event.preventDefault();
       restore(undoPins(history, value.pins));
@@ -332,19 +323,7 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
     }
   });
 
-  // The copy command (⌘C, Ctrl+C or Edit > Copy) copies the capture as text when no text is selected.
-  const onCopy = useEffectEvent((event: ClipboardEvent) => {
-    if (
-      hasTextSelection() ||
-      isTextField(document.activeElement) ||
-      inLayer(document.activeElement)
-    ) {
-      return;
-    }
-
-    event.preventDefault();
-    commands.copyText();
-  });
+  useCopyEntry(null, commands.copyText);
 
   const onMenuCommand = useEffectEvent((command: LibraryCommand) => {
     const run: Partial<Record<LibraryCommand, () => void>> = {
@@ -377,12 +356,7 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
       onKeyDown(event);
     };
 
-    const copy = (event: ClipboardEvent): void => {
-      onCopy(event);
-    };
-
     window.addEventListener("keydown", keyDown);
-    document.addEventListener("copy", copy);
 
     const stop = onCommand((command) => {
       onMenuCommand(command);
@@ -390,7 +364,6 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
 
     return () => {
       window.removeEventListener("keydown", keyDown);
-      document.removeEventListener("copy", copy);
       stop();
     };
   }, []);
@@ -413,7 +386,6 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
         <IconButton
           data-testid="toggle-done"
           icon={done ? Undo02Icon : CheckmarkCircle02Icon}
-          keys={KEYS.done}
           label={done ? "Mark as not done" : "Mark as done"}
           onClick={() => {
             commands.toggleDone();

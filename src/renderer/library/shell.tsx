@@ -310,7 +310,8 @@ export const Shell = () => {
           <div className="px-2.5 pb-2">
             <SearchField />
           </div>
-          {searching && shown.length > 0 ? (
+          {/* A due: still being typed filters nothing, so it gets no count. */}
+          {!isEmptyQuery(parsed) && shown.length > 0 ? (
             <p className="text-muted-foreground px-4 pb-1 text-xs tabular-nums">
               {shown.length} of {inList} {list === "done" ? "done" : ""}
             </p>

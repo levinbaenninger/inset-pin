@@ -15,7 +15,8 @@ import {
   highlightParts,
   withDueFilter,
 } from "@shared/search";
-import { keyLabels } from "@shared/shortcuts";
+import { keyLabels, rowKeyAction } from "@shared/shortcuts";
+import type { RowKeyAction } from "@shared/shortcuts";
 import { Link } from "@tanstack/react-router";
 import { Fragment } from "react";
 
@@ -43,6 +44,7 @@ import { cn } from "@/lib/utils";
 import { isMac } from "@/shared/platform";
 
 import { MenuEntries, useCaptureCommands } from "./capture-commands";
+import { useCopyEntry } from "./copy-entry";
 import { dayLabel, readOnlyText, timeOfDay } from "./format";
 import { useLibraryState } from "./library-state";
 import type { CaptureGroup, ListKind } from "./list-model";
@@ -73,7 +75,12 @@ const Highlighted = ({
     )
   );
 
-/** The time and step progress, with the Due chip right-aligned, as every Inset list shows it. */
+/**
+ * The time and step progress, with the Due chip right-aligned, as every Inset
+ * list shows it. The items run right to left and wrap out of sight below, so
+ * a narrow row drops the time first, then the progress, and the Due chip
+ * keeps its day.
+ */
 const RowMeta = ({
   capture,
   now,
@@ -84,8 +91,12 @@ const RowMeta = ({
   const progress = stepProgress(capture.steps);
 
   return (
-    <span className="text-muted-foreground flex min-w-0 items-center gap-2 text-xs tabular-nums">
-      <span className="shrink-0">{timeOfDay(capture.capturedAt)}</span>
+    <span className="text-muted-foreground flex h-4.5 min-w-0 flex-row-reverse flex-wrap items-center justify-end gap-x-2 overflow-hidden text-xs tabular-nums">
+      {capture.due === null ? null : (
+        <span className="ml-auto flex max-w-full min-w-0">
+          <DueChip due={capture.due} now={now} />
+        </span>
+      )}
       {progress === null ? null : (
         <span
           aria-label={`${progress.done} of ${progress.total} next steps done`}
@@ -95,13 +106,18 @@ const RowMeta = ({
           {progress.done}/{progress.total}
         </span>
       )}
-      {capture.due === null ? null : (
-        <span className="ml-auto flex min-w-0 shrink justify-end">
-          <DueChip due={capture.due} now={now} />
-        </span>
-      )}
+      <span className="shrink-0">{timeOfDay(capture.capturedAt)}</span>
     </span>
   );
+};
+
+const ROW_SELECTOR = "[data-testid='capture-row']";
+
+const focusNeighbour = (row: HTMLElement): void => {
+  const rows = [...document.querySelectorAll<HTMLElement>(ROW_SELECTOR)];
+  const at = rows.indexOf(row);
+
+  (rows[at + 1] ?? rows[at - 1])?.focus();
 };
 
 const CaptureRow = ({
@@ -112,8 +128,19 @@ const CaptureRow = ({
   readonly active: boolean;
 }) => {
   const { now, parsed } = useLibraryState();
-  const { commands, dialog, entries } = useCaptureCommands(capture);
+  const { commands, dialog, entries } = useCaptureCommands(capture, "row");
   const snippet = matchSnippet(capture, parsed.terms);
+
+  // The keys its right-click menu lists act on the row in focus, which need not be the capture shown.
+  const run: Record<RowKeyAction, () => void> = {
+    copyDetails: commands.copyDetails,
+    copyImage: commands.copyImage,
+    delete: commands.askDelete,
+    done: commands.toggleDone,
+    float: commands.float,
+  };
+
+  useCopyEntry(capture.id, commands.copyText);
 
   return (
     <li>
@@ -123,28 +150,41 @@ const CaptureRow = ({
             aria-current={active ? "page" : undefined}
             className={cn(
               "focus-visible:ring-ring/50 data-[state=open]:bg-foreground/5 flex items-start gap-2.5 rounded-md px-2 py-2 outline-none focus-visible:ring-3",
-              active ? "bg-foreground/10" : "hover:bg-foreground/5"
+              active
+                ? "bg-foreground/10"
+                : "hover:bg-foreground/5 focus:bg-foreground/5"
             )}
             data-capture-id={capture.id}
             data-testid="capture-row"
-            // Space marks the focused row's capture done, which need not be the one shown.
+            // The menu's keys then act on this row once it closes.
+            onContextMenu={(event) => {
+              event.currentTarget.focus();
+            }}
             onKeyDown={(event) => {
-              const plain =
-                !event.metaKey &&
-                !event.ctrlKey &&
-                !event.altKey &&
-                !event.shiftKey;
+              const action = event.nativeEvent.isComposing
+                ? null
+                : rowKeyAction(event, isMac);
 
-              if (event.key === " " && plain) {
+              if (action !== null) {
                 event.preventDefault();
-                commands.toggleDone();
+
+                if (event.repeat) {
+                  return;
+                }
+
+                // The row leaves the list, so the focus moves on first and Space again does the next one.
+                if (action === "done") {
+                  focusNeighbour(event.currentTarget);
+                }
+
+                run[action]();
               }
             }}
             params={{ captureId: capture.id }}
             to="/captures/$captureId"
           >
             <Thumbnail image={capture.image} pins={capture.pins} />
-            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <span className="@container flex min-w-0 flex-1 flex-col gap-0.5">
               <span
                 className={cn(
                   "line-clamp-2 text-sm leading-snug font-medium wrap-break-word",

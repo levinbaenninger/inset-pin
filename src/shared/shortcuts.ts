@@ -235,6 +235,32 @@ export const captureKeyAction = (
   return null;
 };
 
+/** What a key does to the capture of the sidebar row in focus, which need not be the one shown. ⌘C arrives as the copy event instead. */
+export type RowKeyAction =
+  | "copyDetails"
+  | "copyImage"
+  | "float"
+  | "delete"
+  | "done";
+
+/** The keys a capture's right-click menu lists, so each acts on the row it was opened on. */
+export const rowKeyAction = (
+  press: KeyPress,
+  isMac: boolean
+): RowKeyAction | null => {
+  const field = fieldKeyAction(press, isMac);
+
+  if (field === "copyDetails" || field === "float") {
+    return field;
+  }
+
+  const action = captureKeyAction(press, isMac);
+
+  return action === "copyImage" || action === "delete" || action === "done"
+    ? action
+    : null;
+};
+
 /** Tighten and widen in the capture panel: ⌘= shows less, ⌘− shows more. */
 export const zoomKeyAction = (
   press: KeyPress,
@@ -413,7 +439,7 @@ export const libraryShortcuts = (isMac: boolean): readonly ShortcutGroup[] => {
         { keys: keys.copyText, label: "Copy Text" },
         { keys: keys.copyDetails, label: "Copy with Details" },
         { keys: keys.copyImage, label: "Copy Image (with pins)" },
-        { keys: keys.done, label: "Mark as done, or not done" },
+        { keys: keys.done, label: "Mark a focused row done, or not done" },
         { keys: keys.delete, label: "Delete…" },
         { keys: keys.undo, label: "Undo a pin edit" },
         { keys: keys.redo, label: "Redo a pin edit" },

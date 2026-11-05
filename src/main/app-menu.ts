@@ -70,7 +70,7 @@ const captureSubmenu = (
   const entry = (
     command: LibraryCommand,
     label: string,
-    accelerator: string
+    accelerator?: string
   ): MenuItemConstructorOptions => ({
     accelerator,
     click: () => {
@@ -93,10 +93,10 @@ const captureSubmenu = (
     entry("pinTool", "Pin Tool", "P"),
     SEPARATOR,
     entry("float", "Float on Top", "Alt+CommandOrControl+F"),
+    // Space marks a focused row done; a plain key can't be a Mac menu key without taking it from every field.
     entry(
       "done",
-      state.shownDone === true ? "Mark as Not Done" : "Mark as Done",
-      "Space"
+      state.shownDone === true ? "Mark as Not Done" : "Mark as Done"
     ),
     SEPARATOR,
     entry("delete", "Delete…", "Backspace"),

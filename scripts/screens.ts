@@ -417,6 +417,8 @@ interface Scene {
   act?: (page: Page, platform: Platform) => Promise<void>;
   /** Fit the window to the page's reported height first, as the panel and Settings do. */
   fit?: boolean;
+  /** localStorage the page finds when it loads, such as the sidebar's width. */
+  storage?: Readonly<Record<string, string>>;
 }
 
 const mod = (platform: Platform) => (platform === "macos" ? "Meta" : "Control");
@@ -541,6 +543,28 @@ const makeScenes = (
       name: "library-2-overdue",
       page: "library",
       platforms: ["macos"],
+    },
+    {
+      data: library(),
+      hash: `/captures/${uuid(3)}`,
+      name: "library-16-narrow-sidebar",
+      page: "library",
+      // The narrowest sidebar: the overdue row keeps "Overdue · <date>" and drops its time and steps first.
+      storage: { "inset.sidebar": '{"collapsed":false,"width":220}' },
+    },
+    {
+      act: async (page, platform) => {
+        // Delete on a focused row asks about that row's capture, not the one open.
+        await page.getByTestId("capture-row").nth(1).focus();
+        await page.keyboard.press(
+          platform === "macos" ? "Backspace" : "Delete"
+        );
+        await page.getByRole("alertdialog").waitFor();
+      },
+      data: library(),
+      hash: `/captures/${uuid(1)}`,
+      name: "library-17-delete-row",
+      page: "library",
     },
     {
       act: async (page) => {
@@ -765,6 +789,15 @@ const shoot = async (
   const input: BridgeInput = { ...scene.data, page: scene.page };
 
   await page.addInitScript(installBridge, input);
+
+  if (scene.storage !== undefined) {
+    await page.addInitScript((entries) => {
+      for (const [key, value] of Object.entries(entries)) {
+        localStorage.setItem(key, value);
+      }
+    }, scene.storage);
+  }
+
   await page.goto(
     `${origin}/${scene.page}.html${scene.hash === undefined ? "" : `#${scene.hash}`}`
   );

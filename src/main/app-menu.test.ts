@@ -73,7 +73,6 @@ describe(appMenuTemplate, () => {
       "Due…",
       "Pin Tool",
       "Float on Top",
-      "Mark as Done",
       "Delete…",
     ]);
     expect(keyed.map((entry) => entry.accelerator)).toContain(

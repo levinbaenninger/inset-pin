@@ -6,6 +6,7 @@ import {
   libraryShortcuts,
   panelShortcuts,
   pinKeyAction,
+  rowKeyAction,
   zoomKeyAction,
 } from "./shortcuts";
 import type { KeyPress } from "./shortcuts";
@@ -146,6 +147,49 @@ describe(captureKeyAction, () => {
   it("leaves other chords alone", () => {
     expect(captureKeyAction(press("Enter", mac), true)).toBeNull();
     expect(captureKeyAction(press("c", mac), true)).toBeNull();
+  });
+});
+
+const rowKeys = (isMac: boolean, held: Partial<KeyPress>) => [
+  rowKeyAction(press("c", { ...held, altKey: true, code: "KeyC" }), isMac),
+  rowKeyAction(press("C", { ...held, shiftKey: true }), isMac),
+  rowKeyAction(press("f", { ...held, altKey: true, code: "KeyF" }), isMac),
+  rowKeyAction(press(isMac ? "Backspace" : "Delete"), isMac),
+  rowKeyAction(press(" "), isMac),
+];
+
+describe(rowKeyAction, () => {
+  it("takes the keys a row's menu lists, on macOS and Windows", () => {
+    expect(rowKeys(true, mac)).toStrictEqual([
+      "copyDetails",
+      "copyImage",
+      "float",
+      "delete",
+      "done",
+    ]);
+    expect(rowKeys(false, win)).toStrictEqual([
+      "copyDetails",
+      "copyImage",
+      "float",
+      "delete",
+      "done",
+    ]);
+  });
+
+  it("matches ⌥⌘F by the physical key when macOS types ƒ", () => {
+    expect(
+      rowKeyAction(press("ƒ", { ...mac, altKey: true, code: "KeyF" }), true)
+    ).toBe("float");
+  });
+
+  it("leaves the open capture's own keys to the page", () => {
+    expect([
+      rowKeyAction(press("Enter"), true),
+      rowKeyAction(press("z", mac), true),
+      rowKeyAction(press("d", mac), true),
+      rowKeyAction(press("ArrowDown"), true),
+      rowKeyAction(press("c", mac), true),
+    ]).toStrictEqual([null, null, null, null, null]);
   });
 });
 

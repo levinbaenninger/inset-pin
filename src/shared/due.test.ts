@@ -110,7 +110,7 @@ describe(dueLabel, () => {
       "Today",
       "Tomorrow",
       "Yesterday",
-      "Wednesday",
+      "Wed",
       "Nov 12",
       "Nov 2",
       "Jan 8, 2027",
@@ -119,7 +119,7 @@ describe(dueLabel, () => {
 
   it("follows the locale it is given", () => {
     expect(dueLabel(day("2026-11-12"), now, "en-GB")).toBe("12 Nov");
-    expect(dueLabel(day("2026-11-11"), now, "de-CH")).toBe("Mittwoch");
+    expect(dueLabel(day("2026-11-11"), now, "de-CH")).toBe("Mi");
   });
 });
 
@@ -142,6 +142,11 @@ describe(dueChipText, () => {
     );
     expect(dueSentence(day("2026-11-05"), now, "en-US")).toBe("Due today");
     expect(dueSentence(day("2026-11-12"), now, "en-US")).toBe("Due Nov 12");
+  });
+
+  it("writes the weekday in full aloud, while the chip keeps it short", () => {
+    expect(dueChipText(day("2026-11-11"), now, "en-US")).toBe("Wed");
+    expect(dueSentence(day("2026-11-11"), now, "en-US")).toBe("Due Wednesday");
   });
 });
 
