@@ -22,9 +22,20 @@ const COPIED_MS = 1600;
 /** Long enough to read why nothing was copied. */
 const FAILED_MS = 4000;
 
+/** A refusal with Retry stays long enough to reach for the button. */
+const RETRY_MS = 8000;
+
+/** A copy refused for unsaved changes offers Retry, which saves them in the library. */
 type CopyOutcome =
   | { readonly kind: "copied" }
-  | { readonly kind: "failed"; readonly message: string };
+  | { readonly kind: "saved" }
+  | {
+      readonly kind: "failed";
+      readonly message: string;
+      readonly retry: boolean;
+    };
+
+const UNREACHABLE = "Inset couldn’t reach the app. Try again.";
 
 type Saved = Extract<CaptureDetail, { kind: "ok" }>;
 
@@ -53,12 +64,34 @@ const copyImage = async (
   onDone: (outcome: CopyOutcome) => void
 ): Promise<void> => {
   const result = await api.copyImage().catch(() => ({
-    message: "Inset couldn’t reach the app. Try again.",
+    message: UNREACHABLE,
+    ok: false as const,
+    retry: false,
+  }));
+
+  onDone(
+    result.ok
+      ? { kind: "copied" }
+      : { kind: "failed", message: result.message, retry: result.retry }
+  );
+};
+
+const retrySave = async (
+  onDone: (outcome: CopyOutcome) => void
+): Promise<void> => {
+  const result = await api.retrySave().catch(() => ({
+    message: UNREACHABLE,
     ok: false as const,
   }));
 
   onDone(
-    result.ok ? { kind: "copied" } : { kind: "failed", message: result.message }
+    result.ok
+      ? { kind: "saved" }
+      : {
+          kind: "failed",
+          message: `Couldn’t save your changes. ${result.message}`,
+          retry: true,
+        }
   );
 };
 
@@ -111,7 +144,68 @@ const COPY_BUTTON = {
   copied: { icon: Tick02Icon, label: "Copied" },
   failed: { icon: Alert02Icon, label: "Couldn’t copy" },
   idle: { icon: Image01Icon, label: "Copy image" },
+  saved: { icon: Image01Icon, label: "Copy image" },
 } as const;
+
+const lifetimeOf = (outcome: CopyOutcome): number => {
+  if (outcome.kind !== "failed") {
+    return outcome.kind === "saved" ? FAILED_MS : COPIED_MS;
+  }
+
+  return outcome.retry ? RETRY_MS : FAILED_MS;
+};
+
+const NOTE =
+  "flex items-start gap-1.5 text-xs leading-snug font-medium wrap-break-word text-white";
+
+/** Under the image: the title, or how the last copy went. */
+const Caption = ({
+  onRetry,
+  outcome,
+  title,
+}: {
+  readonly outcome: CopyOutcome | null;
+  readonly title: string;
+  readonly onRetry: () => void;
+}) => {
+  if (outcome?.kind === "failed") {
+    return (
+      <p className={NOTE} data-testid="copy-failed" role="alert">
+        <HugeiconsIcon
+          className="text-destructive mt-px shrink-0"
+          icon={Alert02Icon}
+          size={13}
+        />
+        <span className="line-clamp-3">{outcome.message}</span>
+        {outcome.retry ? (
+          <button
+            className="app-no-drag focus-visible:ring-ring/50 pointer-events-auto ml-auto shrink-0 rounded-full bg-white/15 px-2 py-0.5 text-white outline-none hover:bg-white/25 focus-visible:ring-3"
+            data-testid="retry-save"
+            onClick={onRetry}
+            type="button"
+          >
+            Retry
+          </button>
+        ) : null}
+      </p>
+    );
+  }
+
+  if (outcome?.kind === "saved") {
+    return (
+      <output className={NOTE} data-testid="saved">
+        <HugeiconsIcon className="mt-px shrink-0" icon={Tick02Icon} size={13} />
+        <span className="line-clamp-3">Saved. You can copy it now.</span>
+      </output>
+    );
+  }
+
+  return (
+    <p className="line-clamp-2 text-xs leading-snug wrap-break-word text-white">
+      {title}
+    </p>
+  );
+};
 
 const Pin = ({ capture }: { readonly capture: Saved }) => {
   const [lifetime, setLifetime] = useState(COPIED_MS);
@@ -123,6 +217,11 @@ const Pin = ({ capture }: { readonly capture: Saved }) => {
   const close = useCallback((): void => {
     api.close();
   }, []);
+
+  const show = (outcome: CopyOutcome): void => {
+    setLifetime(lifetimeOf(outcome));
+    setCopied(outcome);
+  };
 
   useLocalKeys({ onEscape: close });
 
@@ -164,10 +263,7 @@ const Pin = ({ capture }: { readonly capture: Saved }) => {
         <ImageButton
           label={button.label}
           onClick={() => {
-            void copyImage((outcome) => {
-              setLifetime(outcome.kind === "failed" ? FAILED_MS : COPIED_MS);
-              setCopied(outcome);
-            });
+            void copyImage(show);
           }}
         >
           <HugeiconsIcon icon={button.icon} size={14} />
@@ -183,24 +279,13 @@ const Pin = ({ capture }: { readonly capture: Saved }) => {
       </div>
       {/* The padding sits outside the clamped text, or a third line would show through it. */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-linear-to-t from-black/80 to-transparent px-2.5 pt-6 pb-2">
-        {copied?.kind === "failed" ? (
-          <p
-            className="flex items-start gap-1.5 text-xs leading-snug font-medium wrap-break-word text-white"
-            data-testid="copy-failed"
-            role="alert"
-          >
-            <HugeiconsIcon
-              className="text-destructive mt-px shrink-0"
-              icon={Alert02Icon}
-              size={13}
-            />
-            <span className="line-clamp-3">{copied.message}</span>
-          </p>
-        ) : (
-          <p className="line-clamp-2 text-xs leading-snug wrap-break-word text-white">
-            {title}
-          </p>
-        )}
+        <Caption
+          onRetry={() => {
+            void retrySave(show);
+          }}
+          outcome={copied}
+          title={title}
+        />
       </div>
     </main>
   );

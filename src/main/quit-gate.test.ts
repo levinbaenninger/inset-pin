@@ -14,6 +14,11 @@ const setup = (draft: "none" | "open") => {
     releaseWindows: () => {
       calls.push("release");
     },
+    // As main: the restart starts again from the top, where the library saves first.
+    restart: () => {
+      calls.push("restart");
+      gate.restartToUpdate();
+    },
     restartToUpdate: () => {
       calls.push("restartToUpdate");
     },
@@ -35,7 +40,7 @@ describe(createQuitGate, () => {
     expect(calls).toStrictEqual(["release", "restartToUpdate"]);
   });
 
-  it("restarts into the update once the draft lets the quit go on", () => {
+  it("restarts from the top once the draft lets a held restart go on, so the library saves first", () => {
     const { calls, draftEnds, gate } = setup("open");
 
     gate.restartToUpdate();
@@ -45,7 +50,7 @@ describe(createQuitGate, () => {
     draftEnds();
     gate.resume();
 
-    expect(calls).toStrictEqual(["release", "restartToUpdate"]);
+    expect(calls).toStrictEqual(["restart", "release", "restartToUpdate"]);
   });
 
   it("quits plainly when the latest held quit was a plain one", () => {

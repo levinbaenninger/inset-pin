@@ -4,6 +4,7 @@ import type {
   CaptureRecord,
   PointVia,
 } from "@shared/capture-record";
+import { LEAVE_SAVE_WAIT_MS } from "@shared/contracts";
 import type {
   CaptureProblem,
   CaptureView,
@@ -19,6 +20,8 @@ import {
 } from "@shared/geometry";
 import type { DisplaySnapshot, Point, Rect, Size } from "@shared/geometry";
 import { insetUrl } from "@shared/inset-url";
+
+import { saveErrorText } from "./save-error";
 
 export interface Anchor {
   readonly point: Point<"screen">;
@@ -65,7 +68,11 @@ export interface Draft {
   readonly content: DraftContent;
 }
 
-/** "asking" means the panel shows the quit question and waits for an answer. */
+/**
+ * - asking: the panel shows the quit question and waits for an answer; with a
+ *   save on its way, that save didn't finish within the limit, and its landing quits.
+ * - afterSave: a save is on its way and the quit follows it, asking if it isn't done within the limit.
+ */
 export type QuitState = "none" | "asking" | "afterSave";
 
 export type DraftState =
@@ -109,7 +116,9 @@ export type DraftEvent =
   | { readonly type: "dismissed" }
   | { readonly type: "discarded"; readonly id: CaptureId }
   | { readonly type: "quitHeld" }
-  | { readonly type: "quitChoice"; readonly choice: QuitChoice };
+  | { readonly type: "quitChoice"; readonly choice: QuitChoice }
+  /** The limit on the save a quit waits for ran out. */
+  | { readonly type: "saveOverdue" };
 
 /** Window visibility and the view are derived from state, never emitted as effects. */
 export type Effect =
@@ -117,7 +126,11 @@ export type Effect =
   | { readonly type: "publish"; readonly draft: Draft }
   | { readonly type: "focus" }
   | { readonly type: "quit" }
-  | { readonly type: "notify"; readonly message: string };
+  | { readonly type: "notify"; readonly message: string }
+  /** Starts the limit on the save a quit waits for (SPEC round 7). */
+  | { readonly type: "saveDeadline" }
+  /** Removes the capture a discarded save may still write; the store runs it after that save. */
+  | { readonly type: "remove"; readonly id: CaptureId };
 
 export interface Step {
   readonly state: DraftState;
@@ -299,7 +312,7 @@ const onQuitHeld = (state: DraftState): Step => {
   }
 
   if (state.write.kind === "saving") {
-    return stay({ ...state, quit: "afterSave" });
+    return to({ ...state, quit: "afterSave" }, { type: "saveDeadline" });
   }
 
   // The panel asks; its answer comes back as a quitChoice event.
@@ -315,9 +328,11 @@ const onQuitChoice = (state: DraftState, choice: QuitChoice): Step => {
     return to({ ...state, quit: "none" }, { type: "focus" });
   }
 
-  // Never quit during a write: wait for it, and keep the draft if it fails.
+  // A save that didn't finish in time: Discard quits at once, and Save keeps waiting for it.
   if (state.write.kind === "saving") {
-    return stay({ ...state, quit: "afterSave" });
+    return choice === "discard"
+      ? to(IDLE, { id: state.draft.id, type: "remove" }, { type: "quit" })
+      : stay(state);
   }
 
   if (choice === "discard") {
@@ -331,11 +346,23 @@ const onQuitChoice = (state: DraftState, choice: QuitChoice): Step => {
       write: { kind: "saving" },
     };
 
-    return to(saving, { draft: saving.draft, type: "publish" });
+    return to(
+      saving,
+      { draft: saving.draft, type: "publish" },
+      { type: "saveDeadline" }
+    );
   }
 
   return to({ ...state, quit: "none" }, { type: "focus" });
 };
+
+/** The save a quit waits for didn't land in time: the panel asks, and Cancel and Discard answer at once. */
+const onSaveOverdue = (state: DraftState): Step =>
+  state.phase === "draft" &&
+  state.quit === "afterSave" &&
+  state.write.kind === "saving"
+    ? to(show({ ...state, quit: "asking" }), { type: "focus" })
+    : stay(state);
 
 /** Pure; unknown or stale events leave the state unchanged. */
 export const step = (state: DraftState, event: DraftEvent): Step => {
@@ -377,9 +404,7 @@ export const step = (state: DraftState, event: DraftEvent): Step => {
         return stay(state);
       }
 
-      return current.quit === "afterSave"
-        ? to(IDLE, { type: "quit" })
-        : stay(IDLE);
+      return current.quit === "none" ? stay(IDLE) : to(IDLE, { type: "quit" });
     }
 
     case "publishFailed": {
@@ -400,6 +425,10 @@ export const step = (state: DraftState, event: DraftEvent): Step => {
 
     case "quitChoice": {
       return onQuitChoice(state, event.choice);
+    }
+
+    case "saveOverdue": {
+      return onSaveOverdue(state);
     }
 
     default: {
@@ -550,6 +579,8 @@ export interface DraftDeps {
   readonly now: () => Date;
   readonly quit: () => void;
   readonly notify: (message: string) => void;
+  /** Deletes a saved capture; queued after any publish of it already on its way. */
+  readonly remove: (id: CaptureId) => Promise<void>;
 }
 
 export interface DraftController {
@@ -594,6 +625,8 @@ export const createDraftController = (deps: DraftDeps): DraftController => {
   const listeners = new Set<() => void>();
   const queue: DraftEvent[] = [];
   let draining = false;
+  /** One limit at a time: a newer wait for a save restarts it. */
+  let deadline: ReturnType<typeof setTimeout> | undefined;
 
   const reconcileSurface = (
     before: SurfaceState,
@@ -650,7 +683,7 @@ export const createDraftController = (deps: DraftDeps): DraftController => {
     } catch (error) {
       dispatch({
         id: draft.id,
-        message: errorMessage(error),
+        message: saveErrorText(error),
         type: "publishFailed",
       });
     }
@@ -680,6 +713,19 @@ export const createDraftController = (deps: DraftDeps): DraftController => {
 
       case "notify": {
         deps.notify(effect.message);
+        break;
+      }
+
+      case "saveDeadline": {
+        clearTimeout(deadline);
+        deadline = setTimeout(() => {
+          dispatch({ type: "saveOverdue" });
+        }, LEAVE_SAVE_WAIT_MS);
+        break;
+      }
+
+      case "remove": {
+        void deps.remove(effect.id);
         break;
       }
 

@@ -3,14 +3,15 @@ import { cn } from "cn";
 import { Slot } from "radix-ui";
 import * as React from "react";
 
+// A prompt's default action (data-default-action), the one Return triggers, shows its ring on any focus: the prompt focuses it by script, which a browser may not count as keyboard focus.
 const buttonVariants = cva(
-  "group/button focus-visible:border-ring focus-visible:ring-ring/50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:ring-3 active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 aria-invalid:ring-3 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+  "group/button data-default-action:focus:border-ring data-default-action:focus:ring-ring/50 focus-visible:border-ring focus-visible:ring-ring/50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:ring-3 active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 aria-invalid:ring-3 data-default-action:focus:ring-3 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {
     variants: {
       variant: {
         // Its focus ring is its own colour, one soft halo rather than a grey border inside a grey ring.
         default:
-          "bg-primary text-primary-foreground hover:bg-primary/80 focus-visible:border-primary focus-visible:ring-primary/30",
+          "bg-primary text-primary-foreground hover:bg-primary/80 focus-visible:border-primary focus-visible:ring-primary/30 data-default-action:focus:border-primary data-default-action:focus:ring-primary/30",
         outline:
           "border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
         secondary:

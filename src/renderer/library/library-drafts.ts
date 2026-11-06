@@ -12,13 +12,23 @@ import type { LeavePrompt } from "./leave-hold";
 export const drafts = new DraftStore(libraryBridge());
 
 /** The close or quit the library holds while changes couldn't be saved. */
-export const leaveHold = createLeaveHold(drafts, () => {
-  libraryBridge().resumeLeaving();
+export const leaveHold = createLeaveHold({
+  drafts,
+  resume: () => {
+    libraryBridge().resumeLeaving();
+  },
+  shown: () => {
+    libraryBridge().leavePromptShown();
+  },
 });
 
 /** This capture's draft, or undefined when it is clean. */
 export const useDraft = (id: CaptureId): Draft | undefined =>
   useSyncExternalStore(drafts.subscribe, () => drafts.get(id));
+
+/** Counts up each time this capture's changes are discarded, so its page shows what is saved again. */
+export const useDiscards = (id: CaptureId): number =>
+  useSyncExternalStore(drafts.subscribe, () => drafts.discards(id));
 
 export const useLeavePrompt = (): LeavePrompt | null =>
   useSyncExternalStore(leaveHold.subscribe, leaveHold.get);

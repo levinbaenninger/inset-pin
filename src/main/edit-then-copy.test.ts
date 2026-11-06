@@ -6,10 +6,10 @@ import { CaptureIdSchema, CaptureRecordSchema } from "@shared/capture-record";
 import type { CaptureRecord, EditableFields } from "@shared/capture-record";
 import { DueDateSchema } from "@shared/due";
 import { entryText } from "@shared/entry-text";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DraftStore } from "../renderer/library/drafts";
-import { openCaptureStore } from "./store";
+import { nodeStoreFs, openCaptureStore } from "./store";
 import type { CaptureStore } from "./store";
 
 const ID = CaptureIdSchema.parse("3f1c2b9e-4a7d-4e21-9b0c-5d8e6f7a1b2c");
@@ -31,6 +31,8 @@ const v1Json = JSON.stringify({
 
 let root = "";
 let store: CaptureStore;
+
+const nothing = (): void => undefined;
 
 const stored = (): CaptureRecord => {
   const entry = store.get(ID);
@@ -102,6 +104,84 @@ describe("copying right after an edit", () => {
     await drafts.settle(ID);
 
     expect(stored().pins).toStrictEqual([{ x: 300, y: 200 }]);
+  });
+});
+
+describe("Discard changes on the real store", () => {
+  afterEach(removeStore);
+
+  it("puts back the edit saved before the discarded one, though the page still passes the copy it loaded first", async () => {
+    root = await mkdtemp(path.join(tmpdir(), "inset-edit-copy-"));
+    await mkdir(path.join(root, ID));
+    await writeFile(path.join(root, ID, "capture.json"), v1Json);
+
+    const disk = {
+      full: false,
+      holdNext: false,
+      release: nothing,
+      waiting: false,
+    };
+
+    store = await openCaptureStore(root, {
+      fs: {
+        ...nodeStoreFs,
+        writeFileDurable: async (target, data) => {
+          if (disk.holdNext) {
+            disk.holdNext = false;
+            disk.waiting = true;
+            // oxlint-disable-next-line promise/avoid-new -- the test lets the held write go on later, through this callback.
+            await new Promise<void>((resolve) => {
+              disk.release = resolve;
+            });
+          }
+
+          if (disk.full) {
+            throw Object.assign(new Error("full"), { code: "ENOSPC" });
+          }
+
+          await nodeStoreFs.writeFileDurable(target, data);
+        },
+      },
+      retryDelaysMs: [],
+    });
+
+    const loaded = fieldsOf(stored());
+    const drafts = openDrafts();
+    const saved = { ...loaded, description: "Saved first", title: "Saved" };
+
+    drafts.edit(ID, saved, loaded, { now: true });
+    await expect(drafts.retry(ID)).resolves.toStrictEqual({ ok: true });
+
+    disk.full = true;
+    drafts.edit(ID, { ...saved, title: "Discard me" }, loaded, { now: true });
+    await vi.waitFor(() => {
+      expect(drafts.get(ID)?.kind).toBe("failed");
+    });
+
+    disk.full = false;
+    disk.holdNext = true;
+
+    const retried = drafts.retry(ID);
+
+    await vi.waitFor(() => {
+      expect(disk.waiting).toBeTruthy();
+    });
+    drafts.discard(ID);
+    disk.release();
+    await retried;
+    await vi.waitFor(() => {
+      expect(drafts.get(ID)).toBeUndefined();
+    });
+    await store.settled();
+
+    const written = CaptureRecordSchema.parse(
+      JSON.parse(await readFile(path.join(root, ID, "capture.json"), "utf-8"))
+    );
+
+    expect([written.title, written.description]).toStrictEqual([
+      "Saved",
+      "Saved first",
+    ]);
   });
 });
 

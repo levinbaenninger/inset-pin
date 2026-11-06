@@ -271,7 +271,15 @@ const start = async (): Promise<void> => {
 
       e2eLog(result.ok ? "saved" : "saveFailed", { draftId: record.id });
 
-      if (result.ok && settings.current().copyAfterSave) {
+      const shown = draft.view();
+
+      // A capture discarded while its save was on its way is removed after it, so it isn't copied either.
+      if (
+        result.ok &&
+        settings.current().copyAfterSave &&
+        shown.kind === "draft" &&
+        shown.draftId === record.id
+      ) {
         const copied = await copy(record.id, "imageAndDetails");
 
         if (!copied.ok) {
@@ -283,6 +291,9 @@ const start = async (): Promise<void> => {
     },
     quit: () => {
       resumeQuit();
+    },
+    remove: async (id) => {
+      await store.remove(id);
     },
     surface,
   });
@@ -357,7 +368,7 @@ const start = async (): Promise<void> => {
         const id = pins.captureOf(sender.id);
 
         return id === null
-          ? { message: "This pin has no capture.", ok: false }
+          ? { message: "This pin has no capture.", ok: false, retry: false }
           : await copy(id, "image");
       },
       get: (_input, sender) => {
@@ -372,6 +383,13 @@ const start = async (): Promise<void> => {
         if (id !== null) {
           library.open(id);
         }
+      },
+      retrySave: async (_input, sender) => {
+        const id = pins.captureOf(sender.id);
+
+        return id === null
+          ? { message: "This pin has no capture.", ok: false }
+          : await library.retryEdits(id);
       },
     },
     {
@@ -439,6 +457,12 @@ const start = async (): Promise<void> => {
       settingsWindow.allowClose();
       library.allowClose();
     },
+    // A restart the draft held starts again from the top, so the library saves its typing and the disk finishes first.
+    restart: () => {
+      library.leave("restart", () => {
+        quitGate.restartToUpdate();
+      });
+    },
     // Set only as the install starts, so a restart the draft holds still saves the library's typing on the next quit.
     restartToUpdate: () => {
       editsSaved = true;
@@ -448,22 +472,10 @@ const start = async (): Promise<void> => {
 
   resumeQuit = quitGate.resume;
 
-  /** Once the library let the quit go on, what it sent is written first. */
-  const quitOnceWritten = async (): Promise<void> => {
-    await store.settled();
-    editsSaved = true;
-    app.quit();
-  };
-
-  const restartOnceWritten = async (): Promise<void> => {
-    await store.settled();
-    quitGate.restartToUpdate();
-  };
-
   const installUpdate = (): void => {
     if (updater?.state().kind === "ready") {
       library.leave("restart", () => {
-        void restartOnceWritten();
+        quitGate.restartToUpdate();
       });
     }
   };
@@ -698,7 +710,8 @@ const start = async (): Promise<void> => {
     if (!editsSaved) {
       event.preventDefault();
       library.leave("quit", () => {
-        void quitOnceWritten();
+        editsSaved = true;
+        app.quit();
       });
 
       return;

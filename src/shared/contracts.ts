@@ -192,13 +192,40 @@ const SavedEditsSchema = z.union([
 /** What main is about to do once the library's typing is saved: close the window, quit, or quit to install an update. */
 export type Leaving = "close" | "quit" | "restart";
 
-/** How long the library waits for its saves before a close or a quit, before it asks the user about what is still unsaved. */
-export const LEAVE_SAVE_WAIT_MS = 1000;
+/**
+ * The limit on every wait for a save (SPEC round 7): the library's wait
+ * before a close or a quit, a Retry in its prompt, main's wait for the
+ * page's answer and for the disk, and a copy's wait for its save.
+ */
+export const LEAVE_SAVE_WAIT_MS = 3000;
 
-/** Main asks the library to save what is typed: into one capture before copying it, or into every one before the window closes or the app quits. */
+/** What a wait that ran out says, wherever it shows. */
+export const SAVE_TOO_SLOW = "Saving didn’t finish in time.";
+
+/**
+ * Main asks the library to save what is typed: into one capture before
+ * copying it (or again, for Retry on a refused copy), or into every one
+ * before the window closes or the app quits.
+ */
 export type FlushRequest =
-  | { readonly token: string; readonly id: CaptureId }
+  | {
+      readonly token: string;
+      readonly id: CaptureId;
+      readonly retry: boolean;
+    }
   | { readonly token: string; readonly id: null; readonly leaving: Leaving };
+
+/**
+ * How a copy went. A copy refused because the capture's changes aren't saved
+ * offers Retry, which saves them so the user can copy again.
+ */
+export type CopyResult =
+  | { readonly ok: true }
+  | {
+      readonly ok: false;
+      readonly message: string;
+      readonly retry: boolean;
+    };
 
 export const captureContract = defineContract({
   events: { view: event<CaptureView>() },
@@ -235,9 +262,9 @@ export const libraryContract = defineContract({
   methods: {
     /** New capture in 3 seconds, as from the tray, so the pointer can go back to the work. */
     captureSoon: send(z.void()),
-    copyDetails: invoke(CaptureIdSchema, out<ActionResult>()),
-    copyImage: invoke(CaptureIdSchema, out<ActionResult>()),
-    copyText: invoke(CaptureIdSchema, out<ActionResult>()),
+    copyDetails: invoke(CaptureIdSchema, out<CopyResult>()),
+    copyImage: invoke(CaptureIdSchema, out<CopyResult>()),
+    copyText: invoke(CaptureIdSchema, out<CopyResult>()),
     /** The answer to a `flush` event: the edits reached the disk, with what a copy carries, or why not. */
     flushed: send(
       z.object({ result: SavedEditsSchema, token: z.string().max(100) })
@@ -246,6 +273,8 @@ export const libraryContract = defineContract({
     floatOnTop: send(CaptureIdSchema),
     get: invoke(CaptureIdSchema, out<CaptureDetail | null>()),
     list: invoke(z.void(), out<CaptureSummary[]>()),
+    /** The prompt about unsaved changes is on screen, so main brings the window in front. */
+    leavePromptShown: send(z.void()),
     /** One of the page's menus opened or closed; while one is open, the app menu's keys stand aside. */
     menuOpen: send(z.boolean()),
     /** Ctrl+, on Windows, where no app menu offers Settings. */
@@ -271,6 +300,8 @@ export const libraryContract = defineContract({
       })
     ),
     status: invoke(z.void(), out<AppStatus>()),
+    /** How many captures hold changes that aren't saved, sent whenever it changes, so main knows without asking a page that may not answer. */
+    unsavedCount: send(z.number().int().min(0).max(100_000)),
     update: invoke(
       z.object({ fields: EditableFieldsSchema, id: CaptureIdSchema }),
       out<ActionResult>()
@@ -285,9 +316,11 @@ export const pinContract = defineContract({
   global: "insetPin",
   methods: {
     close: send(z.void()),
-    copyImage: invoke(z.void(), out<ActionResult>()),
+    copyImage: invoke(z.void(), out<CopyResult>()),
     get: invoke(z.void(), out<CaptureDetail | null>()),
     openInLibrary: send(z.void()),
+    /** Retry on a refused copy: the library saves this capture's changes again. */
+    retrySave: invoke(z.void(), out<ActionResult>()),
   },
   name: "pin",
 });

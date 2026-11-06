@@ -3,6 +3,8 @@ export interface QuitGateDeps {
   readonly holdIfNeeded: () => "allow" | "hold";
   readonly releaseWindows: () => void;
   readonly quit: () => void;
+  /** Starts a held restart again from the top, which comes back through `restartToUpdate`. */
+  readonly restart: () => void;
   readonly restartToUpdate: () => void;
 }
 
@@ -41,8 +43,7 @@ export const createQuitGate = (deps: QuitGateDeps): QuitGate => {
     resume: () => {
       if (held === "restartToUpdate") {
         held = "quit";
-        deps.releaseWindows();
-        deps.restartToUpdate();
+        deps.restart();
       } else {
         deps.quit();
       }

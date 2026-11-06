@@ -1,6 +1,7 @@
 import { Alert02Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { canSaveTitle } from "@shared/capture-record";
+import { SAVE_TOO_SLOW } from "@shared/contracts";
 import type {
   DraftContent,
   DraftView,
@@ -20,6 +21,14 @@ import type { PinKeyAction } from "@shared/shortcuts";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { Spinner } from "@/components/ui/spinner";
@@ -96,74 +105,103 @@ const DraftCaption = ({ view }: { readonly view: DraftView }) => {
   );
 };
 
-const QUIT_TITLE_ID = "quit-title";
-const QUIT_DETAIL_ID = "quit-detail";
-
-/** Asked in the panel, next to the capture it is about, instead of in a separate system dialog. */
+/**
+ * Asked over the panel, about the capture in it, before the app quits.
+ * Return saves whichever button has the focus, Escape cancels, and Space
+ * presses the focused button, so Discard stays a deliberate choice.
+ */
 const QuitQuestion = ({
   answer,
   savable,
+  write,
 }: {
   readonly answer: (choice: QuitChoice) => void;
   readonly savable: boolean;
+  /** Saving: the save the quit waited for didn't finish in time, and it quits once it lands. Failed: the dialog covers the panel's error, so it says why. */
+  readonly write: WriteStatus;
 }) => {
   const firstRef = useRef<HTMLButtonElement>(null);
+  const saving = write.kind === "saving";
 
-  useEffect(() => {
-    firstRef.current?.focus();
-  }, []);
+  let detail = "Add a title to save it.";
+
+  if (saving) {
+    detail = SAVE_TOO_SLOW;
+  } else if (savable) {
+    detail = "This capture isn’t saved yet.";
+  }
+
+  if (write.kind === "failed") {
+    detail = `${detail} ${write.message}`;
+  }
 
   return (
-    <div
-      aria-describedby={QUIT_DETAIL_ID}
-      aria-labelledby={QUIT_TITLE_ID}
-      className="bg-muted flex items-center gap-2 rounded-lg py-1.5 pr-1.5 pl-3"
-      role="alertdialog"
-    >
-      <div className="flex min-w-0 flex-1 flex-col text-xs">
-        <p className="font-medium" id={QUIT_TITLE_ID}>
-          Save before quitting?
-        </p>
-        <p className="text-muted-foreground" id={QUIT_DETAIL_ID}>
-          {savable
-            ? "This capture isn’t saved yet."
-            : "Add a title to save it."}
-        </p>
-      </div>
-      <Button
-        onClick={() => {
+    <AlertDialog
+      onOpenChange={(open) => {
+        if (!open) {
           answer("cancel");
+        }
+      }}
+      open
+    >
+      <AlertDialogContent
+        data-testid="quit-prompt"
+        // Before the focused button sees it, so Return on Discard or Cancel still saves.
+        onKeyDownCapture={(event) => {
+          if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+            event.preventDefault();
+            event.stopPropagation();
+
+            if (savable) {
+              answer("save");
+            }
+          }
         }}
-        ref={savable ? undefined : firstRef}
-        size="sm"
-        type="button"
-        variant="ghost"
-      >
-        Cancel
-      </Button>
-      <Button
-        onClick={() => {
-          answer("discard");
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          firstRef.current?.focus();
         }}
-        size="sm"
-        type="button"
-        variant="destructive"
       >
-        Discard
-      </Button>
-      <Button
-        disabled={!savable}
-        onClick={() => {
-          answer("save");
-        }}
-        ref={savable ? firstRef : undefined}
-        size="sm"
-        title={`Save and quit (${KEYS.save})`}
-        type="button"
-      >
-        Save
-      </Button>
-    </div>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Save before quitting?</AlertDialogTitle>
+          <AlertDialogDescription>{detail}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <Button
+            onClick={() => {
+              answer("cancel");
+            }}
+            ref={savable ? undefined : firstRef}
+            type="button"
+            variant="outline"
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={() => {
+              answer("discard");
+            }}
+            type="button"
+            variant="destructive"
+          >
+            Discard
+          </Button>
+          <Button
+            data-default-action=""
+            disabled={!savable}
+            onClick={() => {
+              answer("save");
+            }}
+            ref={savable ? firstRef : undefined}
+            title={`Save and quit (${KEYS.save})`}
+            type="button"
+          >
+            {saving ? <Spinner data-icon="inline-start" /> : null}
+            Save
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 };
 
@@ -456,51 +494,54 @@ export const DraftEditor = ({ view }: DraftEditorProps) => {
         </Alert>
       ) : null}
       {view.quitting ? (
-        <QuitQuestion answer={answerQuit} savable={savable} />
-      ) : (
-        <div className="flex items-center gap-1">
-          <Button
-            disabled={busy}
-            onClick={() => {
-              discard.press();
-            }}
-            size="sm"
-            type="button"
-            variant={armed ? "destructive" : "ghost-destructive"}
-          >
-            {armed ? "Click again to discard" : "Discard"}
-          </Button>
-          <p aria-live="polite" className="sr-only">
-            {armed ? "Esc keeps it" : ""}
+        <QuitQuestion
+          answer={answerQuit}
+          savable={savable}
+          write={view.write}
+        />
+      ) : null}
+      <div className="flex items-center gap-1">
+        <Button
+          disabled={busy}
+          onClick={() => {
+            discard.press();
+          }}
+          size="sm"
+          type="button"
+          variant={armed ? "destructive" : "ghost-destructive"}
+        >
+          {armed ? "Click again to discard" : "Discard"}
+        </Button>
+        <p aria-live="polite" className="sr-only">
+          {armed ? "Esc keeps it" : ""}
+        </p>
+        <span className="flex-1" />
+        {!savable && hasContent(content) ? (
+          <p className="text-muted-foreground mr-1 text-xs">
+            Add a title to save
           </p>
-          <span className="flex-1" />
-          {!savable && hasContent(content) ? (
-            <p className="text-muted-foreground mr-1 text-xs">
-              Add a title to save
-            </p>
-          ) : null}
-          <IconButton
-            icon={SHORTCUTS_ICON}
-            keys={KEYS.shortcuts}
-            label="Keyboard shortcuts"
-            onClick={() => {
-              setSheetOpen(true);
-            }}
-            side="top"
-            type="button"
-          />
-          <Button
-            disabled={busy || !savable}
-            size="sm"
-            title={savable ? `Save (${KEYS.save})` : "Add a title to save"}
-            type="submit"
-          >
-            {busy ? <Spinner data-icon="inline-start" /> : null}
-            {view.write.kind === "failed" ? "Retry" : "Save"}
-            <Kbd>{KEYS.save}</Kbd>
-          </Button>
-        </div>
-      )}
+        ) : null}
+        <IconButton
+          icon={SHORTCUTS_ICON}
+          keys={KEYS.shortcuts}
+          label="Keyboard shortcuts"
+          onClick={() => {
+            setSheetOpen(true);
+          }}
+          side="top"
+          type="button"
+        />
+        <Button
+          disabled={busy || !savable}
+          size="sm"
+          title={savable ? `Save (${KEYS.save})` : "Add a title to save"}
+          type="submit"
+        >
+          {busy ? <Spinner data-icon="inline-start" /> : null}
+          {view.write.kind === "failed" ? "Retry" : "Save"}
+          <Kbd>{KEYS.save}</Kbd>
+        </Button>
+      </div>
     </form>
   );
 };

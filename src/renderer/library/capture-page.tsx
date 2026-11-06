@@ -40,11 +40,11 @@ import { usePinKeys } from "@/shared/use-pin-keys";
 import { MenuEntries, onMenuKey, useCaptureCommands } from "./capture-commands";
 import { onCommand } from "./command-bus";
 import { useCopyEntry } from "./copy-entry";
-import { isWriting, writesNothing } from "./draft-lifecycle";
+import { writesNothing } from "./draft-lifecycle";
 import { formatCaptureTime, readOnlyText, sourceText } from "./format";
 import { ImageEditor } from "./image-editor";
 import type { PinChange } from "./image-editor";
-import { drafts, useDraft } from "./library-drafts";
+import { drafts, useDiscards, useDraft } from "./library-drafts";
 import { useLibraryState } from "./library-state";
 import { PaneHeader } from "./pane-header";
 import { SaveFailure } from "./save-failure";
@@ -115,15 +115,16 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
   const { now } = useLibraryState();
   const { commands, dialog, entries } = useCaptureCommands(capture);
   const draft = useDraft(id);
-
-  const [value, setValue] = useState(
-    () => drafts.get(id)?.values ?? fieldsOf(capture)
-  );
+  // What is saved: the library's last save when it made one, which the capture loaded here may not show yet.
+  const saved = drafts.saved(id) ?? fieldsOf(capture);
+  const [value, setValue] = useState(() => drafts.get(id)?.values ?? saved);
 
   const fieldsUi = useFieldsUi();
   const [selected, setSelected] = useState<number | null>(null);
   const [pinMode, setPinMode] = useState(false);
   const [history, setHistory] = useState(emptyHistory<SavedPin>);
+  // Retry beside the error waits at most the save limit; the draft then says the save didn't finish.
+  const [retrying, setRetrying] = useState(false);
   const pointerRef = useRef<{ x: number; y: number } | null>(null);
   const imageRef = useRef<HTMLDivElement>(null);
   const done = capture.status.kind === "done";
@@ -141,9 +142,20 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
   if (shownStored !== capture) {
     setShownStored(capture);
 
-    if (draft === undefined && !writesNothing(value, fieldsOf(capture))) {
-      setValue(fieldsOf(capture));
+    if (draft === undefined && !writesNothing(value, saved)) {
+      setValue(saved);
     }
+  }
+
+  // Discard changes, from the error or from the prompt before a close: every field, the pin undo history and the selection go back to what is saved.
+  const discards = useDiscards(id);
+  const [shownDiscards, setShownDiscards] = useState(discards);
+
+  if (shownDiscards !== discards) {
+    setShownDiscards(discards);
+    setValue(drafts.get(id)?.values ?? saved);
+    setHistory(emptyHistory<SavedPin>());
+    setSelected(null);
   }
 
   // Leaving the capture saves what is left, and the draft outlives the page; closing the window runs no cleanup, so pagehide does.
@@ -187,7 +199,7 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
     if (!canSaveTitle(value.title)) {
       change({
         ...value,
-        title: drafts.get(id)?.confirmed.title ?? capture.title,
+        title: drafts.get(id)?.confirmed.title ?? saved.title,
       });
     }
   };
@@ -445,14 +457,17 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
                 error={draft.error}
                 onDiscard={() => {
                   drafts.discard(id);
-                  setValue(fieldsOf(capture));
                   focusTitle();
                 }}
                 onRetry={() => {
-                  drafts.flush(id);
+                  setRetrying(true);
                   focusTitle();
+                  void (async () => {
+                    await drafts.retry(id);
+                    setRetrying(false);
+                  })();
                 }}
-                writing={isWriting(draft)}
+                retrying={retrying}
               />
             )}
           </div>
@@ -469,7 +484,7 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
               api.startImageDrag({
                 id,
                 pins: value.pins,
-                title: canSaveTitle(value.title) ? value.title : capture.title,
+                title: canSaveTitle(value.title) ? value.title : saved.title,
               });
             }}
             onLeaveLabel={() => {

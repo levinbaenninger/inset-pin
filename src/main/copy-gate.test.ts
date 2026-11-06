@@ -6,6 +6,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { CaptureIdSchema } from "@shared/capture-record";
 import type { CaptureRecord, EditableFields } from "@shared/capture-record";
 import type { ActionResult } from "@shared/contracts";
+import { DueDateSchema } from "@shared/due";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { DraftStore } from "../renderer/library/drafts";
@@ -39,6 +40,15 @@ const fieldsOf = (record: CaptureRecord): EditableFields => ({
   steps: record.steps,
   title: record.title,
 });
+
+const nothing = (): void => undefined;
+
+const REFUSED = {
+  message:
+    "Couldn’t save your changes, so nothing was copied. The disk is full.",
+  ok: false,
+  retry: true,
+};
 
 /** Lets every save and copy started so far run as far as it can. */
 const settleDown = async (): Promise<void> => {
@@ -91,7 +101,9 @@ describe(createCopyGate, () => {
     ...nodeStoreFs,
     writeFileDurable: async (target, data) => {
       if (full) {
-        throw new Error("ENOSPC: no space left on device");
+        throw Object.assign(new Error("ENOSPC: no space left on device"), {
+          code: "ENOSPC",
+        });
       }
 
       await nodeStoreFs.writeFileDurable(target, data);
@@ -206,27 +218,95 @@ describe(createCopyGate, () => {
       await copy(ID, "imageAndDetails"),
     ];
 
-    const refused = {
-      message:
-        "Couldn’t save your changes, so nothing was copied. ENOSPC: no space left on device",
-      ok: false,
-    };
-
-    expect(results).toStrictEqual([refused, refused, refused, refused]);
+    expect(results).toStrictEqual([REFUSED, REFUSED, REFUSED, REFUSED]);
     expect(pasted).toStrictEqual([]);
     expect(stored().title).toBe("Total ignores the discount");
   });
 
-  it("copies the typing once saving works again", async () => {
+  it("refuses a failed draft at once once the disk recovers, without saving it again, and copies it after Retry", async () => {
     full = true;
     typeTitle("Typed while the disk is full");
     await copy(ID, "text");
     full = false;
 
+    await expect(copy(ID, "text")).resolves.toStrictEqual(REFUSED);
+    expect([stored().title, pasted]).toStrictEqual([
+      "Total ignores the discount",
+      [],
+    ]);
+
+    await expect(drafts.retry(ID)).resolves.toStrictEqual({ ok: true });
     await expect(copy(ID, "text")).resolves.toStrictEqual({ ok: true });
     expect(pasted).toStrictEqual([
       { "text/plain": "Typed while the disk is full\n\nRow 12 drops it" },
     ]);
+  });
+
+  it("with nothing typed, copies every field as stored when the copy started, though the record changes during the wait", async () => {
+    let answer = nothing;
+
+    const waiting = createCopyGate({
+      clipboard: recording,
+      pinnedImage: () => null,
+      saveEdits: async () => {
+        // oxlint-disable-next-line promise/avoid-new -- the test answers for the page later.
+        await new Promise<void>((resolve) => {
+          answer = resolve;
+        });
+
+        return { fields: null, ok: true };
+      },
+      store,
+    });
+
+    const copying = waiting(ID, "details");
+
+    await store.update(ID, {
+      ...fieldsOf(stored()),
+      due: DueDateSchema.parse("2026-11-09"),
+      title: "Renamed during the wait",
+    });
+    answer();
+
+    await expect(copying).resolves.toStrictEqual({ ok: true });
+    expect(pasted).toStrictEqual([
+      {
+        "text/plain":
+          "Total ignores the discount\n\nRow 12 drops it\n\n1 · Total",
+      },
+    ]);
+  });
+
+  it("copies the Due in the snapshot taken when the copy started, though a later Due reaches the disk", async () => {
+    hold();
+    drafts.edit(
+      ID,
+      { ...fieldsOf(stored()), due: DueDateSchema.parse("2026-11-07") },
+      fieldsOf(stored())
+    );
+
+    const copying = copy(ID, "details");
+
+    drafts.edit(
+      ID,
+      { ...fieldsOf(stored()), due: DueDateSchema.parse("2026-11-20") },
+      fieldsOf(stored())
+    );
+    drafts.flush(ID);
+    release();
+
+    await expect(copying).resolves.toStrictEqual({ ok: true });
+    await settleDown();
+    release();
+    await settleDown();
+
+    expect(pasted).toStrictEqual([
+      {
+        "text/plain":
+          "Total ignores the discount\n\nRow 12 drops it\n\nDue: 2026-11-07\n\n1 · Total",
+      },
+    ]);
+    expect(stored().due).toBe("2026-11-20");
   });
 
   it("copies the snapshot taken when the copy started, though a second edit reaches the disk during the wait", async () => {
@@ -259,11 +339,7 @@ describe(createCopyGate, () => {
     full = true;
     release();
 
-    await expect(copying).resolves.toStrictEqual({
-      message:
-        "Couldn’t save your changes, so nothing was copied. ENOSPC: no space left on device",
-      ok: false,
-    });
+    await expect(copying).resolves.toStrictEqual(REFUSED);
     expect(pasted).toStrictEqual([]);
     expect(drafts.get(ID)).toMatchObject({
       kind: "failed",
@@ -277,6 +353,7 @@ describe(createCopyGate, () => {
     await expect(copy(ID, "image")).resolves.toStrictEqual({
       message: "This capture can’t be copied.",
       ok: false,
+      retry: false,
     });
     expect(pasted).toStrictEqual([]);
   });

@@ -1,5 +1,5 @@
 import type { CaptureId, EditableFields } from "@shared/capture-record";
-import type { ActionResult, SavedEdits } from "@shared/contracts";
+import type { CopyResult, SavedEdits } from "@shared/contracts";
 import { entryPlainText, entryText } from "@shared/entry-text";
 import { clipboard, ClipboardItem } from "electron";
 
@@ -16,7 +16,7 @@ export type CopyFormat = "text" | "details" | "image" | "imageAndDetails";
 export type CopyGate = (
   id: CaptureId,
   format: CopyFormat
-) => Promise<ActionResult>;
+) => Promise<CopyResult>;
 
 /** The clipboard as the gate writes to it; tests pass one that records. */
 export interface ClipboardWriter {
@@ -60,9 +60,13 @@ export interface CopyGateOptions {
   ) => Pick<PinnedImage, "png"> | null;
 }
 
-const OK: ActionResult = { ok: true };
+const OK: CopyResult = { ok: true };
 
-const fail = (message: string): ActionResult => ({ message, ok: false });
+const fail = (message: string): CopyResult => ({
+  message,
+  ok: false,
+  retry: false,
+});
 
 const fieldsOf = (record: EditableFields): EditableFields => ({
   description: record.description,
@@ -76,8 +80,9 @@ const fieldsOf = (record: EditableFields): EditableFields => ({
  * The one way anything reaches the clipboard (clipboard-writers.test.ts holds
  * every other file to that). It has the library save what is typed into the
  * capture and wait for the disk, then copies the snapshot the library took
- * when the copy started, never the capture as it is once the wait is over.
- * When that save fails it copies nothing and says why.
+ * when the copy started, never the capture as it is once the wait is over:
+ * with nothing typed, that snapshot is the record as stored when the copy
+ * started. When that save fails it copies nothing, says why and offers Retry.
  */
 export const createCopyGate =
   ({
@@ -87,22 +92,25 @@ export const createCopyGate =
     store,
   }: CopyGateOptions): CopyGate =>
   async (id, format) => {
-    const saved = await saveEdits(id);
-
-    if (!saved.ok) {
-      return fail(
-        `Couldn’t save your changes, so nothing was copied. ${saved.message}`
-      );
-    }
-
     const entry = store.get(id);
 
     if (entry?.kind !== "ok") {
       return fail("This capture can’t be copied.");
     }
 
-    // Nothing typed: the stored capture is what the library shows.
-    const copied = saved.fields ?? fieldsOf(entry.record);
+    const stored = fieldsOf(entry.record);
+    const saved = await saveEdits(id);
+
+    if (!saved.ok) {
+      return {
+        message: `Couldn’t save your changes, so nothing was copied. ${saved.message}`,
+        ok: false,
+        retry: true,
+      };
+    }
+
+    // Nothing typed: the record as stored when the copy started is what the library showed.
+    const copied = saved.fields ?? stored;
 
     if (format === "text" || format === "details") {
       try {

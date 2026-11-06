@@ -5,18 +5,19 @@ import { Button } from "@/components/ui/button";
 
 /**
  * A save that failed: the typing stays on screen until Retry saves it or
- * Discard changes drops it. While a save is on its way, discarding waits.
+ * Discard changes drops it. Discard works at once, even while a retry is on
+ * its way; Retry waits for that retry's answer, at most the save limit.
  */
 export const SaveFailure = ({
   error,
   onDiscard,
   onRetry,
-  writing,
+  retrying,
 }: {
   readonly error: string;
   readonly onRetry: () => void;
   readonly onDiscard: () => void;
-  readonly writing: boolean;
+  readonly retrying: boolean;
 }) => (
   <div
     className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs"
@@ -32,10 +33,10 @@ export const SaveFailure = ({
       Couldn’t save your changes. {error}
     </p>
     <span className="flex gap-1">
-      <Button onClick={onRetry} size="xs" variant="outline">
+      <Button disabled={retrying} onClick={onRetry} size="xs" variant="outline">
         Retry
       </Button>
-      <Button disabled={writing} onClick={onDiscard} size="xs" variant="ghost">
+      <Button onClick={onDiscard} size="xs" variant="destructive">
         Discard changes
       </Button>
     </span>

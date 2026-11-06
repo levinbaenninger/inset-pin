@@ -19,7 +19,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 
 import { chromium } from "playwright";
-import type { Browser, Page } from "playwright";
+import type { Browser, Locator, Page } from "playwright";
 import { z } from "zod";
 
 import { drawPins, pinSprite } from "../src/shared/pin-sprite.ts";
@@ -477,6 +477,37 @@ const resumes = async (page: Page) =>
 const asking = (count: string, message: string, discard: string) =>
   `${count} couldn’t be saved${message}Cancel${discard}Retry`;
 
+/** The page's answer to main while it holds a close or a quit. */
+const HELD = {
+  message: "The library holds this to save or ask first.",
+  ok: false,
+} as const;
+
+const SLOW = "Saving didn’t finish in time.";
+
+/** Whether the element gets to the state in time; never throws, so the check reads the outcome. */
+const settles = async (
+  locator: Locator,
+  state: "attached" | "detached" | "visible",
+  timeout: number
+): Promise<boolean> => {
+  try {
+    await locator.waitFor({ state, timeout });
+
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const focusedId = async (page: Page) =>
+  await page.evaluate(
+    () =>
+      (document.activeElement instanceof HTMLElement
+        ? document.activeElement.dataset.testid
+        : null) ?? null
+  );
+
 const makeScenes = (
   captures: readonly Capture[],
   desktop: Targets
@@ -566,6 +597,26 @@ const makeScenes = (
       data: { view: { ...filled, quitting: true } },
       fit: true,
       name: "capture-7-quit",
+      page: "capture",
+      platforms: ["macos"],
+    },
+    {
+      data: { view: { ...filled, quitting: true, write: { kind: "saving" } } },
+      fit: true,
+      name: "capture-9-quit-save-too-slow",
+      page: "capture",
+      platforms: ["macos"],
+    },
+    {
+      data: {
+        view: {
+          ...filled,
+          quitting: true,
+          write: { kind: "failed", message: "The disk is full." },
+        },
+      },
+      fit: true,
+      name: "capture-10-quit-save-failed",
       page: "capture",
       platforms: ["macos"],
     },
@@ -769,6 +820,7 @@ const makeScenes = (
       act: async (page) => {
         await failTypingInTitle(page);
         await askToLeave(page, "quit");
+        await page.getByTestId("leave-prompt").waitFor();
       },
       data: library(),
       hash: `/captures/${uuid(1)}`,
@@ -780,12 +832,42 @@ const makeScenes = (
       act: async (page) => {
         await failTypingInTitle(page);
         await askToLeave(page, "close");
+        await page.getByTestId("leave-prompt").waitFor();
       },
       data: library(),
       hash: `/captures/${uuid(1)}`,
       name: "library-21-unsaved-close",
       page: "library",
       platforms: ["windows"],
+    },
+    {
+      // Round 7: a copy of a capture whose changes couldn't be saved is refused at once and offers Retry.
+      act: async (page, platform) => {
+        await failTypingInTitle(page);
+        await page.keyboard.press(`${mod(platform)}+Alt+c`);
+        await page.getByTestId("notice-action").waitFor();
+      },
+      data: library(),
+      hash: `/captures/${uuid(1)}`,
+      name: "library-22-copy-refused",
+      page: "library",
+      platforms: ["macos"],
+    },
+    {
+      // Round 7: a save still on its way after the 3 s limit holds the quit and says so.
+      act: async (page) => {
+        await page.evaluate(() => {
+          globalThis.__holdSaves = true;
+        });
+        await typeInTitle(page, " (slow disk)");
+        await askToLeave(page, "quit");
+        await page.getByTestId("leave-prompt").waitFor();
+      },
+      data: library(),
+      hash: `/captures/${uuid(1)}`,
+      name: "library-23-save-too-slow",
+      page: "library",
+      platforms: ["macos"],
     },
     {
       data: { view: SETTINGS_VIEW },
@@ -1123,7 +1205,22 @@ const makeReport = (platform: Platform) => {
     }
   };
 
-  return { expectSame, failures };
+  /** Runs one check; one that throws, as a missing element does on an older build, is a FAIL and the rest still run. */
+  const attempt = async (
+    label: string,
+    run: () => Promise<void>
+  ): Promise<void> => {
+    try {
+      await run();
+    } catch (error) {
+      const why = String(error).split("\n")[0] ?? "";
+
+      console.log(`FAIL ${platform} ${label}: threw ${why}`);
+      failures.push(`${platform} ${label}`);
+    }
+  };
+
+  return { attempt, expectSame, failures };
 };
 
 const openLibrary = async (
@@ -1422,18 +1519,32 @@ const checkRowMenu = async (
       []
     );
 
+    // Round 7: the disk recovers, but a failed draft is refused at once until Retry saves it.
     await page.evaluate(() => {
       globalThis.__failSaves = false;
     });
     await page.keyboard.press("Meta+c");
     await page.waitForTimeout(300);
 
-    const copied = await takeCalls();
+    const recovered = await takeCalls();
+
+    await page.getByTestId("notice-action").click();
+    await page.waitForTimeout(300);
+
+    const retried = await takeCalls();
+
+    await page.getByTestId("more").focus();
+    await page.keyboard.press("Meta+c");
+    await page.waitForTimeout(300);
 
     expectSame(
-      "plain ⌘C on the page saves the typing, then copies A",
-      copied.slice(-2),
-      [`update:${a}:${aTitle} (edited) again`, `copyText:${a}`]
+      "once the disk recovers, plain ⌘C still refuses A's failed draft without saving it; the notice's Retry saves it, and ⌘C then copies A",
+      { copied: await takeCalls(), recovered, retried },
+      {
+        copied: [`copyText:${a}`],
+        recovered: [],
+        retried: [`update:${a}:${aTitle} (edited) again`],
+      }
     );
   }
 
@@ -1691,14 +1802,16 @@ const checkCopyGate = async (
     await page.evaluate(() => {
       const asked = globalThis.__asked ?? [];
 
-      const copies = (globalThis.__calls ?? []).filter((call) =>
-        call.startsWith("copy")
-      );
+      const calls = globalThis.__calls ?? [];
 
       globalThis.__asked = [];
       globalThis.__calls = [];
 
-      return { asked, copies };
+      return {
+        asked,
+        copies: calls.filter((call) => call.startsWith("copy")),
+        saves: calls.filter((call) => call.startsWith("update")),
+      };
     });
 
   const openRowMenu = async (): Promise<void> => {
@@ -1899,6 +2012,7 @@ const checkCopyGate = async (
   interface CopyOutcome {
     readonly asked: readonly string[];
     readonly copies: readonly string[];
+    readonly saves: readonly string[];
     readonly notice: { readonly failed: boolean; readonly text: string };
   }
 
@@ -1916,7 +2030,8 @@ const checkCopyGate = async (
       text: element.textContent ?? "",
     }));
 
-    const outcome = { ...(await take()), notice };
+    const { asked, copies, saves } = await take();
+    const outcome = { asked, copies, notice, saves };
 
     if (await page.getByRole("menu").isVisible()) {
       await page.keyboard.press("Escape");
@@ -1941,30 +2056,46 @@ const checkCopyGate = async (
     field.focus();
     field.setSelectionRange(field.value.length, field.value.length);
   });
-  await page.keyboard.type(" (typed)");
   await page.evaluate(() => {
     globalThis.__failSaves = true;
   });
+  await page.keyboard.type(" (typed)");
+  await page.getByTestId("save-failure").waitFor();
 
   const refused = {
     failed: true,
-    text: "Couldn’t save your changes, so nothing was copied. The disk is full.",
+    text: "Couldn’t save your changes, so nothing was copied. The disk is full.Retry",
   };
 
+  const refusedEach = Object.fromEntries(
+    ways.map(({ copies, way }) => [
+      way,
+      { asked: [`${copies}:${a}`], copies: [], notice: refused, saves: [] },
+    ])
+  );
+
   expectSame(
-    "while saves fail, every way to copy A asks the gate, copies nothing and says why",
+    "once A's save has failed, every way to copy A asks the gate, refuses at once without saving again, says why and offers Retry",
     await tryEach(),
-    Object.fromEntries(
-      ways.map(({ copies, way }) => [
-        way,
-        { asked: [`${copies}:${a}`], copies: [], notice: refused },
-      ])
-    )
+    refusedEach
   );
 
   await page.evaluate(() => {
     globalThis.__failSaves = false;
   });
+
+  expectSame(
+    "once the disk recovers, every way to copy A still refuses until Retry, and saves nothing by itself",
+    await tryEach(),
+    refusedEach
+  );
+
+  await page.getByTestId("notice-action").click();
+  await page.waitForTimeout(300);
+
+  const retriedNotice = await page.getByTestId("notice").textContent();
+  const { saves: retriedSaves } = await take();
+  const retried = { notice: retriedNotice, saves: retriedSaves };
 
   const said = {
     copyDetails: "Copied with details",
@@ -1973,18 +2104,27 @@ const checkCopyGate = async (
   } as const;
 
   expectSame(
-    "once saves work, every way to copy A copies A",
-    await tryEach(),
-    Object.fromEntries(
-      ways.map(({ copies, way }) => [
-        way,
-        {
-          asked: [`${copies}:${a}`],
-          copies: [`${copies}:${a}`],
-          notice: { failed: false, text: said[copies] },
-        },
-      ])
-    )
+    "the refusal's Retry saves A once and says so; every way to copy A then copies A",
+    { copied: await tryEach(), retried },
+    {
+      copied: Object.fromEntries(
+        ways.map(({ copies, way }) => [
+          way,
+          {
+            asked: [`${copies}:${a}`],
+            copies: [`${copies}:${a}`],
+            notice: { failed: false, text: said[copies] },
+            saves: [],
+          },
+        ])
+      ),
+      retried: {
+        notice: "Saved. You can copy it now.",
+        saves: [
+          `update:${a}:${captures.find((one) => one.id === a)?.title ?? ""} (typed)`,
+        ],
+      },
+    }
   );
 
   await context.close();
@@ -2037,23 +2177,54 @@ const checkFloatCopy = async (
   });
   await page.getByRole("button", { name: "Copy image" }).click();
   await page.waitForTimeout(200);
-  expectSame("a refused copy in the floating window says why", await state(), {
-    alert:
-      "Couldn’t save your changes, so nothing was copied. The disk is full.",
-    calls: [],
-    copyButton: "Couldn’t copy",
-  });
+  expectSame(
+    "a refused copy in the floating window says why and offers Retry",
+    await state(),
+    {
+      alert:
+        "Couldn’t save your changes, so nothing was copied. The disk is full.Retry",
+      calls: [],
+      copyButton: "Couldn’t copy",
+    }
+  );
 
   await page.evaluate(() => {
     globalThis.__failSaves = false;
   });
   await page.getByRole("button", { name: "Couldn’t copy" }).click();
   await page.waitForTimeout(200);
-  expectSame("then a copy that works says Copied", await state(), {
-    alert: null,
-    calls: ["copyImage:pin"],
-    copyButton: "Copied",
-  });
+
+  const recovered = await state();
+
+  await page.getByTestId("retry-save").click();
+  await page.waitForTimeout(200);
+
+  const retried = {
+    ...(await state()),
+    saved: await page.getByTestId("saved").textContent(),
+  };
+
+  await page.getByRole("button", { name: "Copy image" }).click();
+  await page.waitForTimeout(200);
+  expectSame(
+    "once the disk recovers the floating window still refuses until Retry; Retry saves, and the copy then works",
+    { copied: await state(), recovered, retried },
+    {
+      copied: { alert: null, calls: ["copyImage:pin"], copyButton: "Copied" },
+      recovered: {
+        alert:
+          "Couldn’t save your changes, so nothing was copied. The disk is full.Retry",
+        calls: [],
+        copyButton: "Couldn’t copy",
+      },
+      retried: {
+        alert: null,
+        calls: ["retrySave:pin"],
+        copyButton: "Copy image",
+        saved: "Saved. You can copy it now.",
+      },
+    }
+  );
 
   await context.close();
 
@@ -2072,14 +2243,15 @@ const checkDrafts = async (
   captures: readonly Capture[],
   platform: Platform
 ): Promise<string[]> => {
-  const { expectSame, failures } = makeReport(platform);
+  const { attempt, expectSame, failures } = makeReport(platform);
   const a = uuid(1);
   const aTitle = captures.find((one) => one.id === a)?.title ?? "";
   const m = mod(platform);
 
+  // The notice's text, then its Retry button.
   const refused = {
     failed: true,
-    text: "Couldn’t save your changes, so nothing was copied. The disk is full.",
+    text: "Couldn’t save your changes, so nothing was copied. The disk is full.Retry",
   };
 
   const session = async () => {
@@ -2195,16 +2367,51 @@ const checkDrafts = async (
         .locator(`${ROW}[data-capture-id='${id}'] [data-meta='unsaved']`)
         .isVisible();
 
+    /** The title a row shows; null when there is none to read. */
+    const rowTitle = async (id: string) =>
+      await page.evaluate(
+        (selector) => document.querySelector(selector)?.textContent ?? null,
+        `${ROW}[data-capture-id='${id}'] [data-testid='row-title']`
+      );
+
+    /** Every field of the open capture as it shows. */
+    const fields = async () =>
+      await page.evaluate(() => ({
+        description:
+          document.querySelector<HTMLTextAreaElement>(
+            "[data-testid='description-field']"
+          )?.value ?? null,
+        due:
+          document.querySelector("[data-testid='due-chip']")?.textContent ??
+          null,
+        pins: [
+          ...document.querySelectorAll<HTMLInputElement>(
+            "[data-testid='pin-list'] input"
+          ),
+        ].map((input) => input.value),
+        steps: [
+          ...document.querySelectorAll<HTMLInputElement>(
+            "[data-testid='steps-editor'] input[aria-label^='Next step']"
+          ),
+        ].map((input) => input.value),
+        title:
+          document.querySelector<HTMLTextAreaElement>(
+            "[data-testid='title-field']"
+          )?.value ?? null,
+      }));
+
     return {
       b,
       bTitle,
       context,
       copyFromRow,
+      fields,
       notice,
       open,
       outcome,
       page,
       release,
+      rowTitle,
       set,
       shown,
       take,
@@ -2318,282 +2525,909 @@ const checkDrafts = async (
     await s.context.close();
   }
 
-  // Leaving A after its save has failed and settled, then copying A from its row; Retry, then Discard changes.
-  {
+  // Leaving A after its save has failed and settled, then copying A from its row; typing on, Retry, then Discard changes.
+  await attempt(
+    "a settled failure, its copies, Retry and Discard changes",
+    async () => {
+      const s = await session();
+      const { page } = s;
+
+      try {
+        await s.set("__failSaves", true);
+        await typeInTitle(page, " (failed)");
+        await page.getByTestId("save-failure").waitFor();
+        await s.open(s.b, s.bTitle);
+        await page.waitForTimeout(1200);
+        await s.take();
+        await s.set("__failSaves", false);
+        await s.copyFromRow(a);
+        await page.waitForTimeout(300);
+
+        const copied = await s.outcome();
+        const marked = await s.unsavedRow(a);
+        const rowTitle = await s.rowTitle(a);
+
+        await s.open(a, aTitle);
+
+        expectSame(
+          "once the disk recovers, a copy from the row of A, whose failed save has settled after A was left, is refused at once without saving again, offers Retry, and the row keeps the typed title",
+          { copied, marked, reopened: await s.shown(), rowTitle },
+          {
+            copied: {
+              asked: [`copyText:${a}`],
+              clipboard: [],
+              copies: [],
+              notice: refused,
+              saves: [],
+            },
+            marked: true,
+            reopened: { failure, title: `${aTitle} (failed)` },
+            rowTitle: `${aTitle} (failed)`,
+          }
+        );
+
+        // Typing on while the error shows doesn't make a copy save it either.
+        await typeInTitle(page, "!");
+        await page.keyboard.press(`${m}+Alt+c`);
+        await page.waitForTimeout(150);
+
+        const typedOn = await s.outcome();
+
+        await page.waitForTimeout(900);
+
+        expectSame(
+          "a copy made just after typing on from a failed save is refused at once too; the typing then saves after its pause, as typing does",
+          { copied: typedOn, later: await s.take(), shown: await s.shown() },
+          {
+            copied: {
+              asked: [`copyDetails:${a}`],
+              clipboard: [],
+              copies: [],
+              notice: refused,
+              saves: [],
+            },
+            later: {
+              asked: [],
+              clipboard: [],
+              copies: [],
+              saves: [`update:${a}:${aTitle} (failed)!`],
+            },
+            shown: { failure: null, title: `${aTitle} (failed)!` },
+          }
+        );
+
+        // A held Retry: Discard changes stays available, Retry waits for its answer.
+        await s.set("__failSaves", true);
+        await typeInTitle(page, "!");
+        await page.getByTestId("save-failure").waitFor();
+        await s.take();
+
+        const failureBar = page.getByTestId("save-failure");
+        const retryButton = failureBar.getByRole("button", { name: "Retry" });
+
+        const discardButton = failureBar.getByRole("button", {
+          name: "Discard changes",
+        });
+
+        await s.set("__holdSaves", true);
+        await retryButton.click();
+        await page.waitForTimeout(150);
+
+        const whileRetrying = {
+          discard: await discardButton.isEnabled(),
+          retry: await retryButton.isEnabled(),
+        };
+
+        await s.release();
+        await s.set("__holdSaves", false);
+
+        const afterFailedRetry = {
+          discard: await discardButton.isEnabled(),
+          retry: await retryButton.isEnabled(),
+        };
+
+        const { saves: retrySaves } = await s.take();
+
+        expectSame(
+          "while a Retry is on its way, Discard changes stays available and Retry waits; a failed Retry offers both again",
+          { afterFailedRetry, saves: retrySaves, whileRetrying },
+          {
+            afterFailedRetry: { discard: true, retry: true },
+            saves: [`update:${a}:${aTitle} (failed)!!`],
+            whileRetrying: { discard: true, retry: false },
+          }
+        );
+
+        await s.set("__failSaves", false);
+        await retryButton.click();
+        await page.waitForTimeout(300);
+
+        const retried = await s.take();
+        const afterRetry = await s.shown();
+
+        await page.keyboard.press(`${m}+Alt+c`);
+        await page.waitForTimeout(300);
+
+        const copiedAfterRetry = await s.outcome();
+
+        expectSame(
+          "Retry saves A's typing and clears the failure; a copy then carries it",
+          {
+            copy: {
+              clipboard: copiedAfterRetry.clipboard,
+              notice: copiedAfterRetry.notice,
+            },
+            marked: await s.unsavedRow(a),
+            saves: retried.saves,
+            shown: afterRetry,
+          },
+          {
+            copy: {
+              clipboard: [`${aTitle} (failed)!!`],
+              notice: { failed: false, text: "Copied with details" },
+            },
+            marked: false,
+            saves: [`update:${a}:${aTitle} (failed)!!`],
+            shown: { failure: null, title: `${aTitle} (failed)!!` },
+          }
+        );
+
+        await s.set("__failSaves", true);
+        await typeInTitle(page, " (discard me)");
+        await page.getByTestId("save-failure").waitFor();
+        await discardButton.click();
+        await page.waitForTimeout(300);
+        await s.set("__failSaves", false);
+
+        const discarded = await s.shown();
+        const focus = await focusedId(page);
+
+        await s.take();
+        await page.keyboard.press(`${m}+Alt+c`);
+        await page.waitForTimeout(300);
+
+        const copiedAfterDiscard = await s.take();
+
+        expectSame(
+          "Discard changes shows what is saved again, keeps the title focused, and nothing unsaved is left to copy",
+          {
+            clipboard: copiedAfterDiscard.clipboard,
+            discarded,
+            focus,
+            marked: await s.unsavedRow(a),
+          },
+          {
+            clipboard: [`${aTitle} (failed)!!`],
+            discarded: { failure: null, title: `${aTitle} (failed)!!` },
+            focus: "title-field",
+            marked: false,
+          }
+        );
+      } finally {
+        await s.context.close();
+      }
+    }
+  );
+
+  // Round 7 red team: Discard goes back to the last save that landed, though the capture's reload after that save hasn't answered yet.
+  await attempt(
+    "Discard after a save whose reload hasn't answered",
+    async () => {
+      const s = await session();
+      const { page } = s;
+
+      try {
+        const title = page.getByTestId("title-field");
+        const bar = page.getByTestId("save-failure");
+
+        const disk = async () =>
+          await page.evaluate(
+            (id) => globalThis.__storedTitle?.(id) ?? null,
+            a
+          );
+
+        await page.evaluate(() => {
+          globalThis.__holdGets = true;
+        });
+        await title.fill("A newly saved title");
+        await page.getByTestId("more").focus();
+        await page.waitForFunction(
+          (id) => globalThis.__storedTitle?.(id) === "A newly saved title",
+          a
+        );
+        await s.set("__failSaves", true);
+        await title.fill("Discard this second edit");
+        await page.getByTestId("more").focus();
+        await bar.waitFor();
+        await s.set("__failSaves", false);
+        await s.set("__holdSaves", true);
+        await bar.getByRole("button", { name: "Retry" }).click();
+        await bar.getByRole("button", { name: "Discard changes" }).click();
+
+        const { title: atOnce } = await s.shown();
+
+        await s.release();
+        await s.set("__holdSaves", false);
+        await page.evaluate(() => {
+          globalThis.__holdGets = false;
+          globalThis.__releaseGets?.();
+        });
+        await page.waitForTimeout(300);
+
+        expectSame(
+          "Discard shows and writes back the title saved before the discarded one, while the reload after that save is still on its way, and its late answer changes nothing",
+          { atOnce, disk: await disk(), shown: await s.shown() },
+          {
+            atOnce: "A newly saved title",
+            disk: "A newly saved title",
+            shown: { failure: null, title: "A newly saved title" },
+          }
+        );
+      } finally {
+        await s.context.close();
+      }
+    }
+  );
+
+  // Round 7 red team: a Retry beside the error that doesn't finish in 3 s says so, and Retry can wait again.
+  await attempt("a Retry beside the error that doesn't finish", async () => {
     const s = await session();
     const { page } = s;
 
-    await s.set("__failSaves", true);
-    await typeInTitle(page, " (failed)");
-    await page.getByTestId("save-failure").waitFor();
-    await s.open(s.b, s.bTitle);
-    await page.waitForTimeout(1200);
-    await s.take();
-    await s.copyFromRow(a);
-    await page.waitForTimeout(300);
+    try {
+      const bar = page.getByTestId("save-failure");
+      const retry = bar.getByRole("button", { name: "Retry" });
 
-    const copied = await s.outcome();
-    const marked = await s.unsavedRow(a);
+      await s.set("__failSaves", true);
+      await typeInTitle(page, " (slow)");
+      await bar.waitFor();
+      await s.set("__failSaves", false);
+      await s.set("__holdSaves", true);
+      await retry.click();
+      await page.waitForTimeout(2700);
 
-    await s.open(a, aTitle);
+      const early = await s.shown();
+      const before = { failure: early.failure, retry: await retry.isEnabled() };
 
-    expectSame(
-      "after A's failed save has settled and A was left, a copy from A's row tries the save again, refuses, and A keeps its typing",
-      { copied, marked, reopened: await s.shown() },
-      {
-        copied: {
-          asked: [`copyText:${a}`],
-          clipboard: [],
-          copies: [],
-          notice: refused,
-          saves: [`update:${a}:${aTitle} (failed)`],
-        },
-        marked: true,
-        reopened: { failure, title: `${aTitle} (failed)` },
+      await page.waitForTimeout(600);
+
+      const late = await s.shown();
+      const after = { failure: late.failure, retry: await retry.isEnabled() };
+
+      const discard = await bar
+        .getByRole("button", { name: "Discard changes" })
+        .getAttribute("data-variant");
+
+      await s.release();
+      await s.set("__holdSaves", false);
+
+      expectSame(
+        "a Retry still on its way after 3 s says saving didn't finish and lets Retry wait again; Discard changes has the destructive tint; the save landing later clears it",
+        { after, before, discard, landed: await s.shown() },
+        {
+          after: {
+            failure:
+              "Couldn’t save your changes. Saving didn’t finish in time.RetryDiscard changes",
+            retry: true,
+          },
+          before: { failure, retry: false },
+          discard: "destructive",
+          landed: { failure: null, title: `${aTitle} (slow)` },
+        }
+      );
+    } finally {
+      await s.context.close();
+    }
+  });
+
+  // Discard changes puts back every field, from the error and from the prompt before a quit (the window then stays, as when the capture panel cancels that quit).
+  const discardEveryField = async (from: "error" | "prompt") => {
+    const s = await session();
+    const { page } = s;
+
+    try {
+      const before = await s.fields();
+
+      await s.set("__failSaves", true);
+      await typeInTitle(page, " (typed)");
+      await page
+        .getByTestId("description-field")
+        .evaluate((field: HTMLTextAreaElement) => {
+          field.focus();
+          field.setSelectionRange(field.value.length, field.value.length);
+        });
+      await page.keyboard.type(" More.");
+      await page
+        .getByLabel("Next step 2", { exact: true })
+        .evaluate((field: HTMLInputElement) => {
+          field.focus();
+          field.setSelectionRange(field.value.length, field.value.length);
+        });
+      await page.keyboard.type(" today");
+      await page.getByRole("button", { name: "Clear Due" }).click();
+      await page.getByRole("button", { name: "Remove pin 3" }).click();
+      await page.getByRole("button", { name: "Remove pin 2" }).click();
+      await page.getByTestId("save-failure").waitFor();
+      await page.waitForTimeout(800);
+
+      const edited = await s.fields();
+
+      if (from === "error") {
+        await page
+          .getByTestId("save-failure")
+          .getByRole("button", { name: "Discard changes" })
+          .click();
+      } else {
+        await askToLeave(page, "quit");
+        await page.getByTestId("leave-prompt").waitFor();
+        await page.getByRole("button", { name: "Discard and quit" }).click();
       }
-    );
 
-    // Discarding waits while a retry is on its way, since the retry could still write the text.
-    const discard = page.getByRole("button", { name: "Discard changes" });
+      await page.waitForTimeout(300);
 
-    await s.set("__holdSaves", true);
-    await page.getByRole("button", { name: "Retry" }).click();
-    await page.waitForTimeout(150);
+      const after = await s.fields();
+      const shownAfter = await s.shown();
+      const rowTitle = await s.rowTitle(a);
 
-    const whileRetrying = await discard.isDisabled();
+      await s.set("__failSaves", false);
+      await page.getByTestId("more").focus();
+      await s.take();
+      await page.keyboard.press(`${m}+z`);
+      await page.waitForTimeout(300);
 
-    await s.release();
-    await s.set("__holdSaves", false);
+      const undoneFields = await s.fields();
+      const { saves: undoSaves } = await s.take();
+      const undone = { fields: undoneFields, saves: undoSaves };
 
-    expectSame(
-      "Discard changes waits while a retry is on its way, and comes back when it fails",
-      { afterFailedRetry: await discard.isDisabled(), whileRetrying },
-      { afterFailedRetry: false, whileRetrying: true }
-    );
+      await page.keyboard.press(`${m}+Alt+c`);
+      await page.waitForTimeout(300);
 
-    await s.take();
-    await s.set("__failSaves", false);
-    await page.getByRole("button", { name: "Retry" }).click();
-    await page.waitForTimeout(300);
+      const copied = await s.outcome();
 
-    const retried = await s.take();
-    const afterRetry = await s.shown();
-
-    await page.keyboard.press(`${m}+Alt+c`);
-    await page.waitForTimeout(300);
-
-    const copiedAfterRetry = await s.outcome();
-
-    expectSame(
-      "Retry saves A's typing and clears the failure; a copy then carries it",
-      {
-        copy: {
-          clipboard: copiedAfterRetry.clipboard,
-          notice: copiedAfterRetry.notice,
+      expectSame(
+        `Discard ${from === "error" ? "changes beside the error" : "and quit in the prompt"} puts back the title, description, step, Due and pins at once, leaves no pin edit to undo, and a copy carries what is saved`,
+        {
+          after,
+          edited,
+          copied: {
+            clipboard: copied.clipboard,
+            notice: copied.notice,
+            saves: copied.saves,
+          },
+          failure: shownAfter.failure,
+          rowTitle,
+          undone,
         },
-        marked: await s.unsavedRow(a),
-        saves: retried.saves,
-        shown: afterRetry,
-      },
-      {
-        copy: {
-          clipboard: [`${aTitle} (failed)`],
-          notice: { failed: false, text: "Copied with details" },
-        },
-        marked: false,
-        saves: [`update:${a}:${aTitle} (failed)`],
-        shown: { failure: null, title: `${aTitle} (failed)` },
-      }
-    );
+        {
+          after: before,
+          edited: {
+            description: `${before.description ?? ""} More.`,
+            due: null,
+            pins: before.pins.slice(0, 1),
+            steps: before.steps.map((text, index) =>
+              index === 1 ? `${text} today` : text
+            ),
+            title: `${before.title ?? ""} (typed)`,
+          },
+          copied: {
+            clipboard: [aTitle],
+            notice: { failed: false, text: "Copied with details" },
+            saves: [],
+          },
+          failure: null,
+          rowTitle: aTitle,
+          undone: { fields: before, saves: [] },
+        }
+      );
+    } finally {
+      await s.context.close();
+    }
+  };
 
-    await s.set("__failSaves", true);
-    await typeInTitle(page, " (discard me)");
-    await page.getByTestId("save-failure").waitFor();
-    await page.getByRole("button", { name: "Discard changes" }).click();
-    await page.waitForTimeout(300);
-    await s.set("__failSaves", false);
-
-    const discarded = await s.shown();
-
-    const focus = await page.evaluate(
-      () =>
-        (document.activeElement instanceof HTMLElement
-          ? document.activeElement.dataset.testid
-          : null) ?? null
-    );
-
-    await s.take();
-    await page.keyboard.press(`${m}+Alt+c`);
-    await page.waitForTimeout(300);
-
-    const copiedAfterDiscard = await s.take();
-
-    expectSame(
-      "Discard changes shows what is saved again, keeps the title focused, and nothing unsaved is left to copy",
-      {
-        clipboard: copiedAfterDiscard.clipboard,
-        discarded,
-        focus,
-        marked: await s.unsavedRow(a),
-      },
-      {
-        clipboard: [`${aTitle} (failed)`],
-        discarded: { failure: null, title: `${aTitle} (failed)` },
-        focus: "title-field",
-        marked: false,
-      }
-    );
-
-    await s.context.close();
-  }
+  await attempt(
+    "Discard changes beside the error resets every field",
+    async () => {
+      await discardEveryField("error");
+    }
+  );
+  await attempt("Discard and quit resets every field", async () => {
+    await discardEveryField("prompt");
+  });
 
   // A close or a quit while a change can't be saved is held and asks; Escape cancels, Return retries.
-  {
+  await attempt("a held close, Escape, then Return", async () => {
     const s = await session();
     const { page } = s;
-    const nothingTyped = await askToLeave(page, "quit");
 
-    await failTypingInTitle(page);
+    try {
+      const nothingTyped = await askToLeave(page, "quit");
 
-    const answered = await askToLeave(page, "close");
+      await failTypingInTitle(page);
 
-    await page.getByTestId("leave-prompt").waitFor();
-    await page.waitForTimeout(150);
+      const answered = await askToLeave(page, "close");
 
-    const asked = await leavePrompt(page);
+      await page.getByTestId("leave-prompt").waitFor();
+      await page.waitForTimeout(150);
 
-    await page.keyboard.press("Escape");
-    await page.getByTestId("leave-prompt").waitFor({ state: "detached" });
-    await page.waitForTimeout(150);
+      const asked = await leavePrompt(page);
 
-    const cancelled = {
-      ...(await leavePrompt(page)),
-      resumed: await resumes(page),
-      shown: await s.shown(),
-    };
+      await page.keyboard.press("Escape");
+      await page.getByTestId("leave-prompt").waitFor({ state: "detached" });
+      await page.waitForTimeout(150);
 
-    await askToLeave(page, "quit");
-    await page.getByTestId("leave-prompt").waitFor();
-    await page.waitForTimeout(150);
-    await page.keyboard.press("Enter");
-    await page.waitForTimeout(300);
+      const cancelled = {
+        ...(await leavePrompt(page)),
+        resumed: await resumes(page),
+        shown: await s.shown(),
+      };
 
-    const retryFailed = {
-      ...(await leavePrompt(page)),
-      resumed: await resumes(page),
-    };
+      await askToLeave(page, "quit");
+      await page.getByTestId("leave-prompt").waitFor();
+      await page.waitForTimeout(150);
+      await page.keyboard.press("Enter");
+      await page.waitForTimeout(300);
 
-    await s.set("__failSaves", false);
-    await page.keyboard.press("Enter");
-    await page.getByTestId("leave-prompt").waitFor({ state: "detached" });
+      const retryFailed = {
+        ...(await leavePrompt(page)),
+        resumed: await resumes(page),
+      };
 
-    const resumed = await resumes(page);
-    const { saves } = await s.take();
+      await s.set("__failSaves", false);
+      await page.keyboard.press("Enter");
+      await page.getByTestId("leave-prompt").waitFor({ state: "detached" });
 
-    expectSame(
-      "a held close asks with Retry focused; Escape keeps the change and the window, Return retries and goes on once the save works",
-      {
-        answered,
-        asked,
-        cancelled,
-        nothingTyped,
-        retried: { resumed, saves, shown: await s.shown() },
-        retryFailed,
-      },
-      {
-        answered: { message: "The disk is full.", ok: false },
-        asked: {
-          focus: "Retry",
-          prompt: asking("1 change", "The disk is full.", "Discard and close"),
+      const resumed = await resumes(page);
+      const { saves } = await s.take();
+
+      expectSame(
+        "a held close asks with Retry focused; Escape keeps the change and the window, Return retries and goes on once the save works",
+        {
+          answered,
+          asked,
+          cancelled,
+          counts: await page.evaluate(() => globalThis.__unsavedCounts ?? []),
+          nothingTyped,
+          retried: { resumed, saves, shown: await s.shown() },
+          retryFailed,
         },
-        cancelled: {
-          focus: "title-field",
-          prompt: null,
-          resumed: [],
-          shown: { failure, title: `${aTitle} (typed)` },
+        {
+          answered: HELD,
+          asked: {
+            focus: "Retry",
+            prompt: asking(
+              "1 change",
+              "The disk is full.",
+              "Discard and close"
+            ),
+          },
+          cancelled: {
+            focus: "title-field",
+            prompt: null,
+            resumed: [],
+            shown: { failure, title: `${aTitle} (typed)` },
+          },
+          counts: [1, 0],
+          nothingTyped: { fields: null, ok: true },
+          retried: {
+            resumed: ["resumeLeaving"],
+            // The pause in typing, the retry each of the two asks makes, the failed Return and the one that works. The prompt taking the focus from the failed title sends nothing: only Retry does.
+            saves: Array.from(
+              { length: 5 },
+              () => `update:${a}:${aTitle} (typed)`
+            ),
+            shown: { failure: null, title: `${aTitle} (typed)` },
+          },
+          retryFailed: {
+            focus: "Retry",
+            prompt: asking("1 change", "The disk is full.", "Discard and quit"),
+            resumed: [],
+          },
+        }
+      );
+    } finally {
+      await s.context.close();
+    }
+  });
+
+  // Round 7: Return means Retry whichever part of the prompt has the focus.
+  await attempt("Return retries from every button", async () => {
+    const s = await session();
+    const { page } = s;
+    const prompt = page.getByTestId("leave-prompt");
+
+    try {
+      await failTypingInTitle(page);
+      await askToLeave(page, "quit");
+      await prompt.waitFor();
+      await page.waitForTimeout(150);
+
+      const enterOn = async (focus: () => Promise<void>) => {
+        await focus();
+        await page.evaluate(() => {
+          globalThis.__calls = [];
+        });
+        await page.keyboard.press("Enter");
+        await page.waitForTimeout(300);
+
+        return {
+          calls: await page.evaluate(() => globalThis.__calls ?? []),
+          ...(await leavePrompt(page)),
+        };
+      };
+
+      // Each press finds the prompt still there only when the one before retried.
+      const button = (name: string) => async () => {
+        const target = prompt.getByRole("button", { exact: true, name });
+
+        if ((await target.count()) > 0) {
+          await target.focus();
+        }
+      };
+
+      const onCancel = await enterOn(button("Cancel"));
+      const onDiscard = await enterOn(button("Discard and quit"));
+      const onRetry = await enterOn(button("Retry"));
+
+      const onText = await enterOn(async () => {
+        const text = prompt.getByText("The disk is full.");
+
+        if ((await text.count()) > 0) {
+          await text.click();
+        }
+      });
+
+      await s.set("__failSaves", false);
+
+      const working = await enterOn(button("Discard and quit"));
+
+      const retriedHere = (focus: string) => ({
+        calls: [`update:${a}:${aTitle} (typed)`],
+        focus,
+        prompt: asking("1 change", "The disk is full.", "Discard and quit"),
+      });
+
+      expectSame(
+        "Return on Cancel, on Discard and quit, on Retry or on the prompt's text retries and keeps asking while saves fail; Return on Discard and quit retries once they work, and the quit goes on",
+        {
+          onCancel,
+          onDiscard,
+          onRetry,
+          onText,
+          shown: await s.shown(),
+          working,
         },
-        nothingTyped: { fields: null, ok: true },
-        retried: {
-          resumed: ["resumeLeaving"],
-          // The pause in typing, each of the two asks, each prompt taking the focus from the title (leaving a field saves), the failed Return, the one that works.
-          saves: Array.from(
-            { length: 7 },
-            () => `update:${a}:${aTitle} (typed)`
-          ),
+        {
+          onCancel: retriedHere("Cancel"),
+          onDiscard: retriedHere("Discard and quit"),
+          onRetry: retriedHere("Retry"),
+          onText: retriedHere("leave-prompt"),
           shown: { failure: null, title: `${aTitle} (typed)` },
-        },
-        retryFailed: {
-          focus: "Retry",
-          prompt: asking("1 change", "The disk is full.", "Discard and quit"),
-          resumed: [],
-        },
-      }
-    );
+          working: {
+            calls: [`update:${a}:${aTitle} (typed)`, "resumeLeaving"],
+            focus: "title-field",
+            prompt: null,
+          },
+        }
+      );
+    } finally {
+      await s.context.close();
+    }
+  });
 
-    await s.context.close();
-  }
+  // Escape cancels; Space presses the focused button, so Discard stays a deliberate choice.
+  await attempt("Escape and Space in the prompt", async () => {
+    const s = await session();
+    const { page } = s;
+    const prompt = page.getByTestId("leave-prompt");
+
+    try {
+      await failTypingInTitle(page);
+
+      const ask = async () => {
+        await askToLeave(page, "quit");
+        await prompt.waitFor();
+        await page.waitForTimeout(150);
+        await page.evaluate(() => {
+          globalThis.__calls = [];
+        });
+      };
+
+      const after = async (key: string, name?: string) => {
+        if (name !== undefined) {
+          await prompt.getByRole("button", { exact: true, name }).focus();
+        }
+
+        await page.keyboard.press(key);
+        await page.waitForTimeout(300);
+
+        return {
+          calls: await page.evaluate(() => globalThis.__calls ?? []),
+          ...(await leavePrompt(page)),
+          shown: await s.shown(),
+        };
+      };
+
+      await ask();
+
+      const escape = await after("Escape");
+
+      await ask();
+
+      const spaceOnCancel = await after(" ", "Cancel");
+
+      await ask();
+
+      const spaceOnDiscard = await after(" ", "Discard and quit");
+
+      const kept = {
+        calls: [],
+        focus: "title-field",
+        prompt: null,
+        shown: { failure, title: `${aTitle} (typed)` },
+      };
+
+      expectSame(
+        "Escape and Space on Cancel close the prompt and keep the change; Space on Discard and quit drops it and the quit goes on once",
+        {
+          again: await askToLeave(page, "quit"),
+          counts: await page.evaluate(() => globalThis.__unsavedCounts ?? []),
+          escape,
+          spaceOnCancel,
+          spaceOnDiscard,
+        },
+        {
+          again: { fields: null, ok: true },
+          counts: [1, 0],
+          escape: kept,
+          spaceOnCancel: kept,
+          spaceOnDiscard: {
+            calls: ["resumeLeaving"],
+            focus: "title-field",
+            prompt: null,
+            shown: { failure: null, title: aTitle },
+          },
+        }
+      );
+    } finally {
+      await s.context.close();
+    }
+  });
 
   // Discard and quit drops the change and lets the quit go on.
-  {
+  await attempt("Discard and quit", async () => {
     const s = await session();
     const { page } = s;
 
-    await failTypingInTitle(page);
-    await askToLeave(page, "quit");
-    await page.getByRole("button", { name: "Discard and quit" }).click();
-    await page.getByTestId("leave-prompt").waitFor({ state: "detached" });
+    try {
+      await failTypingInTitle(page);
+      await askToLeave(page, "quit");
+      await page.getByRole("button", { name: "Discard and quit" }).click();
+      await page.getByTestId("leave-prompt").waitFor({ state: "detached" });
 
-    const resumed = await resumes(page);
-    const { failure: shownFailure } = await s.shown();
+      const resumed = await resumes(page);
+      const { failure: shownFailure } = await s.shown();
 
-    expectSame(
-      "Discard and quit drops the change, clears the row's marker and lets the quit go on; a quit after it has nothing to ask",
-      {
-        again: await askToLeave(page, "quit"),
-        failure: shownFailure,
-        marked: await s.unsavedRow(a),
-        resumed,
-      },
-      {
-        again: { fields: null, ok: true },
-        failure: null,
-        marked: false,
-        resumed: ["resumeLeaving"],
-      }
-    );
+      expectSame(
+        "Discard and quit drops the change, clears the row's marker and lets the quit go on; a quit after it has nothing to ask",
+        {
+          again: await askToLeave(page, "quit"),
+          failure: shownFailure,
+          marked: await s.unsavedRow(a),
+          resumed,
+        },
+        {
+          again: { fields: null, ok: true },
+          failure: null,
+          marked: false,
+          resumed: ["resumeLeaving"],
+        }
+      );
+    } finally {
+      await s.context.close();
+    }
+  });
 
-    await s.context.close();
-  }
-
-  // A save still on its way after the second holds the close, which goes on by itself once the save lands.
-  {
+  // A save still on its way after the 3 s limit holds the restart, which goes on by itself once the save lands.
+  await attempt("a slow save holds the restart", async () => {
     const s = await session();
     const { page } = s;
 
-    await s.set("__holdSaves", true);
-    await typeInTitle(page, " slow");
+    try {
+      await s.set("__holdSaves", true);
+      await typeInTitle(page, " slow");
 
-    const answered = await askToLeave(page, "restart");
+      const started = Date.now();
+      const answered = await askToLeave(page, "restart");
 
-    await page.getByTestId("leave-prompt").waitFor();
+      await page.getByTestId("leave-prompt").waitFor();
 
-    const { prompt: asked } = await leavePrompt(page);
+      const waited = Date.now() - started;
+      const { prompt: asked } = await leavePrompt(page);
 
-    await s.release();
-    await page.getByTestId("leave-prompt").waitFor({ state: "detached" });
+      await s.release();
+      await page.getByTestId("leave-prompt").waitFor({ state: "detached" });
 
-    expectSame(
-      "a save slower than the wait holds the restart, and it goes on by itself once the save lands",
-      { answered, asked, resumed: await resumes(page) },
-      {
-        answered: { message: "Saving took too long.", ok: false },
-        asked: asking("1 change", "Saving took too long.", "Discard and quit"),
-        resumed: ["resumeLeaving"],
-      }
-    );
+      expectSame(
+        "a save slower than the 3 s limit holds the restart and says so, and the restart goes on by itself once the save lands",
+        {
+          answered,
+          asked,
+          resumed: await resumes(page),
+          waitedTheLimit: waited >= 2900 && waited < 4500,
+        },
+        {
+          answered: HELD,
+          asked: asking("1 change", SLOW, "Discard and quit"),
+          resumed: ["resumeLeaving"],
+          waitedTheLimit: true,
+        }
+      );
+    } finally {
+      await s.context.close();
+    }
+  });
 
-    await s.context.close();
-  }
+  // Round 7: Discard works at once while a save is on its way, and that save landing later revives nothing, on screen or on disk.
+  await attempt("Discard while a save is on its way", async () => {
+    const s = await session();
+    const { page } = s;
+
+    try {
+      await s.set("__holdSaves", true);
+      await typeInTitle(page, " (held)");
+      await page.waitForTimeout(800);
+      await askToLeave(page, "quit");
+      await page.getByTestId("leave-prompt").waitFor();
+
+      const { prompt: asked } = await leavePrompt(page);
+
+      await page.evaluate((id) => {
+        globalThis.__seen = [];
+
+        const look = (): void => {
+          const title =
+            document.querySelector<HTMLTextAreaElement>(
+              "[data-testid='title-field']"
+            )?.value ?? "";
+
+          const row =
+            document.querySelector(
+              `[data-capture-id='${id}'] [data-testid='row-title']`
+            )?.textContent ?? "";
+
+          const seen = `${title} | ${row}`;
+
+          if (globalThis.__seen?.at(-1) !== seen) {
+            globalThis.__seen?.push(seen);
+          }
+
+          if (globalThis.__seen !== undefined) {
+            requestAnimationFrame(look);
+          }
+        };
+
+        look();
+      }, a);
+
+      await page.getByRole("button", { name: "Discard and quit" }).click();
+      await page.waitForTimeout(150);
+
+      const atOnce = { resumed: await resumes(page), shown: await s.shown() };
+
+      await page.evaluate(() => {
+        globalThis.__releaseOldest?.();
+      });
+      await page.waitForTimeout(400);
+      await page.evaluate(() => {
+        globalThis.__releaseOldest?.();
+      });
+      await page.waitForTimeout(400);
+
+      const seen = await page.evaluate(() => {
+        const frames = globalThis.__seen ?? [];
+
+        globalThis.__seen = undefined;
+
+        return frames;
+      });
+
+      const stored = await page.evaluate(
+        (id) => globalThis.__storedTitle?.(id) ?? null,
+        a
+      );
+
+      const { saves: heldSaves } = await s.take();
+
+      expectSame(
+        "Discard and quit works at once while a save is on its way: the quit goes on, the saved title shows, the late save and the saved values written after it never show the discarded title, and the disk ends with the saved title",
+        {
+          asked,
+          atOnce,
+          saves: heldSaves,
+          seenAfterDiscard: seen.slice(seen.indexOf(`${aTitle} | ${aTitle}`)),
+          stored,
+        },
+        {
+          asked: asking("1 change", SLOW, "Discard and quit"),
+          atOnce: {
+            resumed: ["resumeLeaving"],
+            shown: { failure: null, title: aTitle },
+          },
+          saves: [`update:${a}:${aTitle} (held)`, `update:${a}:${aTitle}`],
+          seenAfterDiscard: [`${aTitle} | ${aTitle}`],
+          stored: aTitle,
+        }
+      );
+    } finally {
+      await s.context.close();
+    }
+  });
+
+  // Cancel works at once too, and the save landing later keeps the window open.
+  await attempt("Cancel while a save is on its way", async () => {
+    const s = await session();
+    const { page } = s;
+
+    try {
+      await s.set("__holdSaves", true);
+      await typeInTitle(page, " (held)");
+      await page.waitForTimeout(800);
+      await askToLeave(page, "close");
+      await page.getByTestId("leave-prompt").waitFor();
+      await page.keyboard.press("Escape");
+
+      const closedAtOnce = await settles(
+        page.getByTestId("leave-prompt"),
+        "detached",
+        500
+      );
+
+      await s.release();
+      await s.set("__holdSaves", false);
+
+      expectSame(
+        "Cancel closes the prompt at once while a save is on its way; the save lands later and the close stays cancelled",
+        { closedAtOnce, resumed: await resumes(page), shown: await s.shown() },
+        {
+          closedAtOnce: true,
+          resumed: [],
+          shown: { failure: null, title: `${aTitle} (held)` },
+        }
+      );
+    } finally {
+      await s.context.close();
+    }
+  });
+
+  // Retry shows its focus ring when the prompt opens after a mouse click elsewhere.
+  await attempt("Retry's focus ring", async () => {
+    const s = await session();
+    const { page } = s;
+
+    try {
+      await failTypingInTitle(page);
+      await s.open(s.b, s.bTitle);
+      await askToLeave(page, "quit");
+      await page.getByTestId("leave-prompt").waitFor();
+      await page.waitForTimeout(300);
+
+      const retry = await page
+        .getByTestId("leave-prompt")
+        .getByRole("button", { exact: true, name: "Retry" })
+        .evaluate((element) => ({
+          focused: document.activeElement === element,
+          ring: getComputedStyle(element).boxShadow !== "none",
+        }));
+
+      expectSame(
+        "the prompt opened after a mouse click shows Retry focused, with its ring",
+        retry,
+        { focused: true, ring: true }
+      );
+    } finally {
+      await s.context.close();
+    }
+  });
 
   // A trailing space typed before a pause survives the save and the reload after it.
   {
@@ -2876,20 +3710,220 @@ const checkAddMenu = async (
   return failures;
 };
 
+/**
+ * The capture panel's quit prompt answers keys as the library's prompt does:
+ * Return saves whichever button has the focus, Escape cancels, and Space
+ * presses the focused button. It blurs the panel behind it, and a save that
+ * didn't finish in time still lets Cancel and Discard answer.
+ */
+const checkCaptureQuit = async (
+  browser: Browser,
+  origin: string,
+  desktop: Targets,
+  platform: Platform
+): Promise<string[]> => {
+  const { expectSame, failures } = makeReport(platform);
+
+  const open = async (write: {
+    readonly kind: string;
+    readonly message?: string;
+  }) => {
+    const context = await browser.newContext({
+      userAgent: USER_AGENT[platform],
+      viewport: SIZES.capture,
+    });
+
+    const page = await context.newPage();
+
+    const input: BridgeInput = {
+      page: "capture",
+      view: {
+        ...draftView(desktop, {
+          description: "Keep this thought",
+          title: "Chairs are CHF 280 over the cap",
+        }),
+        quitting: true,
+        write,
+      },
+    };
+
+    await page.addInitScript(installBridge, input);
+    await page.goto(`${origin}/capture.html`);
+    await page.getByTestId("quit-prompt").waitFor();
+    await page.waitForTimeout(200);
+
+    return { context, page };
+  };
+
+  const prompt = await open({ kind: "editing" });
+
+  const looks = await prompt.page.evaluate(() => ({
+    backdrop: getComputedStyle(
+      document.querySelector("[data-slot='alert-dialog-overlay']") ??
+        document.body
+    ).backdropFilter,
+    focus: document.activeElement?.textContent ?? null,
+  }));
+
+  const answers: Record<string, string[]> = {};
+
+  for (const name of ["Cancel", "Discard", "Save"]) {
+    for (const key of ["Enter", "Escape", "Space"]) {
+      // Sequential on purpose: each key press reads back what the page answered.
+      // oxlint-disable-next-line no-await-in-loop
+      await prompt.page.evaluate(() => {
+        globalThis.__calls = [];
+      });
+      // oxlint-disable-next-line no-await-in-loop
+      await prompt.page
+        .getByTestId("quit-prompt")
+        .getByRole("button", { exact: true, name })
+        .focus();
+      // oxlint-disable-next-line no-await-in-loop
+      await prompt.page.keyboard.press(key);
+      // oxlint-disable-next-line no-await-in-loop
+      await prompt.page.waitForTimeout(100);
+      // oxlint-disable-next-line no-await-in-loop
+      answers[`${name} ${key}`] = await prompt.page.evaluate(
+        () => globalThis.__calls ?? []
+      );
+    }
+  }
+
+  await prompt.context.close();
+
+  expectSame(
+    "the capture panel's quit prompt: Return saves from every button, Escape cancels, Space presses the focused button, Save has the focus, and the panel behind blurs",
+    { answers, looks },
+    {
+      answers: {
+        "Cancel Enter": ["answerQuit:save"],
+        "Cancel Escape": ["answerQuit:cancel"],
+        "Cancel Space": ["answerQuit:cancel"],
+        "Discard Enter": ["answerQuit:save"],
+        "Discard Escape": ["answerQuit:cancel"],
+        "Discard Space": ["answerQuit:discard"],
+        "Save Enter": ["answerQuit:save"],
+        "Save Escape": ["answerQuit:cancel"],
+        "Save Space": ["answerQuit:save"],
+      },
+      looks: { backdrop: "blur(4px)", focus: "Save" },
+    }
+  );
+
+  const slow = await open({ kind: "saving" });
+
+  const timedOut = await slow.page.evaluate(() => {
+    const shown = document.querySelector("[data-testid='quit-prompt']");
+
+    return {
+      detail:
+        shown?.querySelector("[data-slot='alert-dialog-description']")
+          ?.textContent ?? null,
+      enabled: [...(shown?.querySelectorAll("button") ?? [])].flatMap(
+        (button) => (button.disabled ? [] : [button.textContent])
+      ),
+    };
+  });
+
+  await slow.page
+    .getByTestId("quit-prompt")
+    .getByRole("button", { exact: true, name: "Discard" })
+    .focus();
+  await slow.page.keyboard.press("Space");
+  await slow.page.waitForTimeout(100);
+
+  const discarded = await slow.page.evaluate(() => globalThis.__calls ?? []);
+
+  await slow.context.close();
+
+  expectSame(
+    "a quit whose save didn't finish in 3 s asks in the panel, and Cancel, Discard and Save all answer while the save is on its way",
+    { discarded, timedOut },
+    {
+      discarded: ["answerQuit:discard"],
+      timedOut: {
+        detail: "Saving didn’t finish in time.",
+        enabled: ["Cancel", "Discard", "Save"],
+      },
+    }
+  );
+
+  // The dialog covers the panel's own error, so it says why the save failed.
+  const failed = await open({ kind: "failed", message: "The disk is full." });
+
+  const failedDetail = await failed.page
+    .locator(
+      "[data-testid='quit-prompt'] [data-slot='alert-dialog-description']"
+    )
+    .textContent();
+
+  await failed.context.close();
+
+  expectSame(
+    "a quit after the capture's save failed says why in the prompt",
+    failedDetail,
+    "This capture isn’t saved yet. The disk is full."
+  );
+
+  return failures;
+};
+
 const runChecks = async (
   browser: Browser,
   origin: string,
   captures: readonly Capture[],
   desktop: Targets
 ): Promise<string[]> => {
-  const onPlatform = async (platform: Platform): Promise<string[]> => [
-    ...(await checkAddMenu(browser, origin, desktop, platform)),
-    ...(await checkRowMenu(browser, origin, captures, platform)),
-    ...(await checkCopyGate(browser, origin, captures, platform)),
-    ...(await checkFloatCopy(browser, origin, captures, platform)),
-    ...(await checkDrafts(browser, origin, captures, platform)),
-    ...(await checkSidebarWidths(browser, origin, captures, platform)),
-  ];
+  const onPlatform = async (platform: Platform): Promise<string[]> => {
+    /** A check that throws, as on a build without the element it waits for, fails alone and the others still run. */
+    const guarded = async (
+      name: string,
+      run: () => Promise<string[]>
+    ): Promise<string[]> => {
+      try {
+        return await run();
+      } catch (error) {
+        const why = String(error).split("\n")[0] ?? "";
+
+        console.log(`FAIL ${platform} ${name}: threw ${why}`);
+
+        return [`${platform} ${name}`];
+      }
+    };
+
+    return [
+      ...(await guarded(
+        "add menu",
+        async () => await checkAddMenu(browser, origin, desktop, platform)
+      )),
+      ...(await guarded(
+        "capture quit prompt",
+        async () => await checkCaptureQuit(browser, origin, desktop, platform)
+      )),
+      ...(await guarded(
+        "row menu",
+        async () => await checkRowMenu(browser, origin, captures, platform)
+      )),
+      ...(await guarded(
+        "copy gate",
+        async () => await checkCopyGate(browser, origin, captures, platform)
+      )),
+      ...(await guarded(
+        "floating copy",
+        async () => await checkFloatCopy(browser, origin, captures, platform)
+      )),
+      ...(await guarded(
+        "drafts",
+        async () => await checkDrafts(browser, origin, captures, platform)
+      )),
+      ...(await guarded(
+        "sidebar widths",
+        async () =>
+          await checkSidebarWidths(browser, origin, captures, platform)
+      )),
+    ];
+  };
 
   const failures: string[] = [];
 

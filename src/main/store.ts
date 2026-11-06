@@ -16,6 +16,8 @@ import type {
 } from "@shared/capture-record";
 import { z } from "zod";
 
+import { saveErrorText } from "./save-error";
+
 /** Every filesystem call the store makes; tests wrap it to inject faults. */
 export interface StoreFs {
   readonly mkdir: (target: string) => Promise<void>;
@@ -136,9 +138,6 @@ const RECORD_FILE = "capture.json";
 const IMAGE_FILE = "crop.png";
 const RETRYABLE_CODES = new Set(["EACCES", "EBUSY", "EPERM"]);
 const ErrorCodeSchema = z.object({ code: z.string() });
-
-const errorMessage = (cause: unknown): string =>
-  cause instanceof Error ? cause.message : "Unknown error";
 
 const isRetryable = (cause: unknown): boolean => {
   const parsed = ErrorCodeSchema.safeParse(cause);
@@ -357,7 +356,7 @@ export const openCaptureStore = async (
       const adopted = await adoptExisting(record);
 
       if (adopted === null) {
-        return failure("writeFailed", errorMessage(error));
+        return failure("writeFailed", saveErrorText(error));
       }
 
       commit({
@@ -415,7 +414,7 @@ export const openCaptureStore = async (
     } catch (error) {
       await removeQuietly(temporary);
 
-      return failure("writeFailed", errorMessage(error));
+      return failure("writeFailed", saveErrorText(error));
     }
 
     commit({ id, kind: "ok", migratedFrom: null, record: parsed.data });
@@ -439,7 +438,7 @@ export const openCaptureStore = async (
     try {
       await renameWithRetry(path.join(root, id), trash);
     } catch (error) {
-      return failure("writeFailed", errorMessage(error));
+      return failure("writeFailed", saveErrorText(error, "delete"));
     }
 
     cache.delete(id);

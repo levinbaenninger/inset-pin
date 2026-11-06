@@ -33,18 +33,36 @@ libraryBridge().on("changed", () => {
 const withoutFields = (result: ActionResult): SavedEdits =>
   result.ok ? { fields: null, ok: true } : result;
 
-// Before a copy, a close or a quit, main waits for what is typed to be saved, and hears how it went.
-const answerFlush = async (request: FlushRequest): Promise<void> => {
-  const result =
-    request.id === null
-      ? withoutFields(await leaveHold.ask(request.leaving))
-      : await drafts.settle(request.id);
+/** Before a copy, a close or a quit, main waits for what is typed to be saved, and hears how it went. */
+const answerFlush = async (request: FlushRequest): Promise<SavedEdits> => {
+  if (request.id === null) {
+    return withoutFields(leaveHold.ask(request.leaving));
+  }
 
-  libraryBridge().flushed({ result, token: request.token });
+  return request.retry
+    ? withoutFields(await drafts.retry(request.id))
+    : await drafts.settle(request.id);
 };
 
+// Main asks a page that may not answer, so it keeps the count it last heard.
+let reported = 0;
+
+drafts.subscribe(() => {
+  const count = drafts.unsaved()?.count ?? 0;
+
+  if (count !== reported) {
+    reported = count;
+    libraryBridge().unsavedCount(count);
+  }
+});
+
 libraryBridge().on("flush", (request) => {
-  void answerFlush(request);
+  void (async () => {
+    libraryBridge().flushed({
+      result: await answerFlush(request),
+      token: request.token,
+    });
+  })();
 });
 
 // A capture chosen from the tray or the Dock menu.

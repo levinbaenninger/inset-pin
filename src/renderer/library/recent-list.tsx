@@ -48,6 +48,7 @@ import { isMac } from "@/shared/platform";
 import { MenuEntries, onMenuKey, useCaptureCommands } from "./capture-commands";
 import type { RowFocus } from "./capture-commands";
 import { useCopyEntry } from "./copy-entry";
+import { snapshotOf } from "./draft-lifecycle";
 import { dayLabel, readOnlyText, timeOfDay } from "./format";
 import { useDraft } from "./library-drafts";
 import { useLibraryState } from "./library-state";
@@ -194,7 +195,12 @@ const CaptureRow = ({
   };
 
   const { commands, dialog, entries } = useCaptureCommands(capture, focus);
-  const unsaved = (useDraft(capture.id)?.error ?? null) !== null;
+  const draft = useDraft(capture.id);
+  const unsaved = (draft?.error ?? null) !== null;
+
+  // The row names the capture as its page shows it: typing, a change that couldn't be saved, or what Discard changes put back while the disk catches up.
+  const title =
+    draft === undefined ? capture.title : snapshotOf(draft).payload.title;
 
   const snippet = matchSnippet(capture, parsed.terms);
   const { chipRef, columnRef, fits } = useChipFits();
@@ -270,8 +276,9 @@ const CaptureRow = ({
                     "line-clamp-2 text-sm leading-snug font-medium wrap-break-word",
                     capture.status.kind === "done" && "text-muted-foreground"
                   )}
+                  data-testid="row-title"
                 >
-                  <Highlighted terms={parsed.terms} text={capture.title} />
+                  <Highlighted terms={parsed.terms} text={title} />
                 </span>
                 {snippet === null ? null : (
                   <span className="text-muted-foreground line-clamp-1 text-xs">

@@ -20,10 +20,26 @@ declare global {
   var __holdSaves: boolean | undefined;
   /** Answers every held save, each failing or not as `__failSaves` says then. */
   var __releaseSaves: (() => void) | undefined;
+  /** Answers only the oldest held save, so a check can look between two saves landing. */
+  var __releaseOldest: (() => void) | undefined;
+  /** While true, reading one capture waits for `__releaseGets`, as a reload main is slow to answer would. */
+  var __holdGets: boolean | undefined;
+  /** Answers every held read, each with the capture as it was when it was asked for. */
+  var __releaseGets: (() => void) | undefined;
   /** The title each copy that was made carries, as the clipboard would get it. */
   var __clipboard: string[] | undefined;
   /** What the page last told main about its menus. */
   var __menuOpen: boolean | undefined;
+  /** The title the fake disk holds for a capture. */
+  var __storedTitle: ((id: string) => string | null) | undefined;
+  /** What a check saw on screen, frame by frame. */
+  var __seen: string[] | undefined;
+  /** Every unsaved count the page sent main, in order. */
+  var __unsavedCounts: number[] | undefined;
+  /** How many times the page said its unsaved-changes prompt is on screen. */
+  var __promptShown: number | undefined;
+  /** The floating window's capture has changes main couldn't save, until a Retry saves them. */
+  var __pinUnsaved: boolean | undefined;
   /** Sends the page an event as main would, such as a command from the app menu. */
   var __emit: ((name: string, payload: Payload) => void) | undefined;
 
@@ -53,7 +69,7 @@ export interface BridgeInput {
 type Payload =
   | string
   | null
-  | { readonly id: string; readonly token: string }
+  | { readonly id: string; readonly retry: boolean; readonly token: string }
   | { readonly id: null; readonly leaving: string; readonly token: string };
 
 type Listener = (payload: Payload) => void;
@@ -76,6 +92,18 @@ export const installBridge = (input: BridgeInput): void => {
   let flushes = 0;
   /** Saves waiting for `__releaseSaves`, oldest first. */
   let held: (() => void)[] = [];
+  /** Reads waiting for `__releaseGets`. */
+  let heldGets: (() => void)[] = [];
+
+  globalThis.__releaseGets = () => {
+    const waiting = heldGets;
+
+    heldGets = [];
+
+    for (const answer of waiting) {
+      answer();
+    }
+  };
 
   globalThis.__releaseSaves = () => {
     const waiting = held;
@@ -85,6 +113,10 @@ export const installBridge = (input: BridgeInput): void => {
     for (const answer of waiting) {
       answer();
     }
+  };
+
+  globalThis.__releaseOldest = () => {
+    held.shift()?.();
   };
 
   const on = (name: string, listener: Listener): (() => void) => {
@@ -120,6 +152,8 @@ export const installBridge = (input: BridgeInput): void => {
   const find = (id: string): FixtureCapture | undefined =>
     captures.find((capture) => capture.id === id);
 
+  globalThis.__storedTitle = (id) => find(id)?.title ?? null;
+
   const fitHeight = (height: number): void => {
     globalThis.__fitted = height;
   };
@@ -136,15 +170,16 @@ export const installBridge = (input: BridgeInput): void => {
       return await respond(OK);
     };
 
-  const refusal = (message: string): Result => ({
+  const refusal = (message: string) => ({
     message: `Couldn’t save your changes, so nothing was copied. ${message}`,
-    ok: false,
+    ok: false as const,
+    retry: true,
   });
 
   /** Asks the page to save, as main does, and waits for its answer. */
   const askPage = async (
     request:
-      | { readonly id: string }
+      | { readonly id: string; readonly retry: boolean }
       | { readonly id: null; readonly leaving: string }
   ): Promise<Saved> => {
     flushes += 1;
@@ -168,29 +203,32 @@ export const installBridge = (input: BridgeInput): void => {
   globalThis.__leave = async (leaving) => await askPage({ id: null, leaving });
 
   /** As main's copy gate: the page saves the capture's typing first, nothing is copied unless that worked, and the copy carries the page's snapshot. */
-  const gated =
-    (name: string) =>
-    async (id: string): Promise<Result> => {
-      globalThis.__asked = [...(globalThis.__asked ?? []), `${name}:${id}`];
+  const gated = (name: string) => async (id: string) => {
+    globalThis.__asked = [...(globalThis.__asked ?? []), `${name}:${id}`];
 
-      const saved = await askPage({ id });
+    const saved = await askPage({ id, retry: false });
 
-      if (!saved.ok) {
-        return refusal(saved.message);
-      }
+    if (!saved.ok) {
+      return refusal(saved.message);
+    }
 
-      record(`${name}:${id}`);
-      globalThis.__clipboard = [
-        ...(globalThis.__clipboard ?? []),
-        saved.fields?.title ?? find(id)?.title ?? "",
-      ];
+    record(`${name}:${id}`);
+    globalThis.__clipboard = [
+      ...(globalThis.__clipboard ?? []),
+      saved.fields?.title ?? find(id)?.title ?? "",
+    ];
 
-      return OK;
-    };
+    return OK;
+  };
+
+  const unsavedPin = (): boolean =>
+    globalThis.__failSaves === true || globalThis.__pinUnsaved === true;
 
   const apis = {
     capture: {
-      answerQuit: nothing,
+      answerQuit: (choice: string) => {
+        record(`answerQuit:${choice}`);
+      },
       discard: nothing,
       dismiss: nothing,
       edit: nothing,
@@ -214,8 +252,22 @@ export const installBridge = (input: BridgeInput): void => {
       flushed: ({ result, token }: { result: Saved; token: string }) => {
         answers.get(token)?.(result);
       },
-      get: async (id: string) => await respond(find(id) ?? null),
+      get: async (id: string) => {
+        const found = structuredClone(find(id) ?? null);
+
+        if (globalThis.__holdGets === true) {
+          // oxlint-disable-next-line promise/avoid-new -- __releaseGets answers the held read through this callback.
+          await new Promise<void>((resolve) => {
+            heldGets.push(resolve);
+          });
+        }
+
+        return await respond(found);
+      },
       list: async () => await respond(captures),
+      leavePromptShown: () => {
+        globalThis.__promptShown = (globalThis.__promptShown ?? 0) + 1;
+      },
       menuOpen: (open: boolean) => {
         globalThis.__menuOpen = open;
       },
@@ -244,6 +296,12 @@ export const installBridge = (input: BridgeInput): void => {
         return await respond(OK);
       },
       startImageDrag: nothing,
+      unsavedCount: (count: number) => {
+        globalThis.__unsavedCounts = [
+          ...(globalThis.__unsavedCounts ?? []),
+          count,
+        ];
+      },
       status: async () =>
         await respond({ iconIn: "dockAndMenuBar", shortcutRegistered: true }),
       update: async ({
@@ -280,9 +338,11 @@ export const installBridge = (input: BridgeInput): void => {
     },
     pin: {
       close: nothing,
-      // The floating window has no typing of its own; its copy fails when main's gate can't save the library's.
-      copyImage: async (): Promise<Result> => {
-        if (globalThis.__failSaves === true) {
+      // The floating window has no typing of its own; its copy fails when main's gate can't save the library's, and keeps failing until a Retry saves it.
+      copyImage: async () => {
+        if (unsavedPin()) {
+          globalThis.__pinUnsaved = true;
+
           return await respond(refusal("The disk is full."));
         }
 
@@ -293,6 +353,18 @@ export const installBridge = (input: BridgeInput): void => {
       get: async () => await respond(input.capture),
       on,
       openInLibrary: nothing,
+      // As main: the library saves the capture's changes again.
+      retrySave: async (): Promise<Result> => {
+        record("retrySave:pin");
+
+        if (globalThis.__failSaves === true) {
+          return await respond({ message: "The disk is full.", ok: false });
+        }
+
+        globalThis.__pinUnsaved = false;
+
+        return await respond(OK);
+      },
     },
     settings: {
       fitHeight,

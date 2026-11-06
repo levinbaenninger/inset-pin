@@ -3,7 +3,11 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import type { CaptureId } from "@shared/capture-record";
-import { LEAVE_SAVE_WAIT_MS, libraryContract } from "@shared/contracts";
+import {
+  LEAVE_SAVE_WAIT_MS,
+  libraryContract,
+  SAVE_TOO_SLOW,
+} from "@shared/contracts";
 import type {
   ActionResult,
   AppStatus,
@@ -11,12 +15,13 @@ import type {
   LibraryCommand,
   SavedEdits,
 } from "@shared/contracts";
-import { app, BrowserWindow, ipcMain, nativeTheme } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme } from "electron";
 
 import type { PinnedImageOf } from "./capture-export";
 import type { CopyGate } from "./copy-gate";
 import { serveContract } from "./ipc-kit";
 import { createLeaveGate } from "./leave-gate";
+import type { Unconfirmed } from "./leave-gate";
 import { toDetail, toSummary } from "./library-view";
 import { trackMenuOpen } from "./menu-open";
 import type { MenuOpen } from "./menu-open";
@@ -55,11 +60,32 @@ const titleBarOverlay = (): Electron.TitleBarOverlayOptions => {
   };
 };
 
-/** The page answers a close or a quit once its own wait for the saves is over; one that hasn't answered by then is gone or hung. */
-const LEAVE_ANSWER_TIMEOUT_MS = LEAVE_SAVE_WAIT_MS + 2000;
+/** Whether `work` finished within the save limit. */
+const withinLimit = async (work: () => Promise<void>): Promise<boolean> => {
+  let timer: NodeJS.Timeout | undefined;
 
-/** A copy waits longer: it copies nothing unless the save is known to have reached the disk. */
-const COPY_FLUSH_TIMEOUT_MS = 5000;
+  // oxlint-disable-next-line promise/avoid-new -- a deadline: it resolves on a timer.
+  const late = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => {
+      resolve(false);
+    }, LEAVE_SAVE_WAIT_MS);
+  });
+
+  const done = await Promise.race([
+    (async () => {
+      await work();
+
+      return true;
+    })(),
+    late,
+  ]);
+
+  clearTimeout(timer);
+
+  return done;
+};
+
+const CHOICES: readonly Unconfirmed[] = ["wait", "leave", "cancel"];
 
 export interface LibraryWindow {
   /** Opens the library, on one capture when an id is given. */
@@ -76,13 +102,17 @@ export interface LibraryWindow {
   /** Runs once the page has loaded; the page keeps a command that arrives before it listens. */
   readonly whenLoaded: (run: () => void) => void;
   /**
-   * Before a quit: the page saves what is typed, then `then` runs. While
-   * changes couldn't be saved, the page holds the quit and asks the user, and
-   * `then` runs only once the user retries or discards them.
+   * Before a quit: the page saves what is typed and the disk writes it, then
+   * `then` runs. While changes couldn't be saved, the page holds the quit and
+   * asks the user, and `then` runs only once the user retries or discards
+   * them. When the page or the disk doesn't answer in time, a native dialog
+   * asks instead.
    */
   readonly leave: (leaving: "quit" | "restart", then: () => void) => void;
   /** Asks the page to save what is typed into one capture, for a copy, and hands back what the copy carries; fails when that save fails or doesn't finish. */
   readonly saveEdits: (id: CaptureId) => Promise<SavedEdits>;
+  /** Retry on a refused copy: the page saves this capture's changes again. */
+  readonly retryEdits: (id: CaptureId) => Promise<ActionResult>;
   /** For a quit that already saved the edits: the window closes without asking again. */
   readonly allowClose: () => void;
   /** Whether a menu is open in the focused library, so the app menu's keys skip. */
@@ -122,12 +152,14 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
   /** The page let this window close: its typing is saved or discarded. */
   let mayClose = false;
   let menu: MenuOpen | null = null;
+  /** How many captures the page last said hold unsaved changes; a page that reloads or crashes holds none. */
+  let unsaved = 0;
   /** The page's answers to `flush`, by token; null while one is awaited. */
   const answers = new Map<string, SavedEdits | null>();
   const flushed = new EventTarget();
   let flushCount = 0;
-  // The page's prompt resumes a close or a quit through this; the gate that held it needs the server first.
-  const held = { resume: (): void => undefined };
+  // The page's prompt reaches the gate that held the close through this; the gate needs the server first.
+  const held = { resume: (): void => undefined, shown: (): void => undefined };
 
   // Dragged copies wait here for the drop; a drop can finish after startDrag returns, so they are cleared on delete and at launch.
   const dragStaging = path.join(app.getPath("temp"), "Inset Context Pin");
@@ -140,6 +172,20 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
   };
 
   clearStaging();
+
+  const surface = (): void => {
+    if (window === null) {
+      return;
+    }
+
+    if (window.isMinimized()) {
+      window.restore();
+    }
+
+    bringToFront();
+    window.show();
+    window.focus();
+  };
 
   const server = serveContract(
     libraryContract,
@@ -159,6 +205,9 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
         const entry = store.get(id);
 
         return entry === undefined ? null : toDetail(entry);
+      },
+      leavePromptShown: () => {
+        held.shown();
       },
       list: () => store.list().map(toSummary),
       menuOpen: (open) => {
@@ -189,6 +238,9 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
         return result.ok ? OK : fail(result.message);
       },
       status: options.status,
+      unsavedCount: (count) => {
+        unsaved = count;
+      },
       startImageDrag: ({ id, pins, title }) => {
         const pinned = options.pinnedImage(id, { pins, title });
 
@@ -228,9 +280,8 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
   /** The page's answer, or null when it doesn't answer in time. A page that is closed or still loading has nothing typed to save. */
   const askToSave = async (
     request:
-      | { readonly id: CaptureId }
-      | { readonly id: null; readonly leaving: Leaving },
-    timeoutMs: number
+      | { readonly id: CaptureId; readonly retry: boolean }
+      | { readonly id: null; readonly leaving: Leaving }
   ): Promise<SavedEdits | null> => {
     if (window === null || window.webContents.isLoading()) {
       return { fields: null, ok: true };
@@ -243,7 +294,7 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
     answers.set(token, null);
 
     const answer = once(flushed, token, {
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: AbortSignal.timeout(LEAVE_SAVE_WAIT_MS),
     });
 
     server.emit("flush", { ...request, token });
@@ -259,34 +310,65 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
     }
   };
 
-  const saveEdits = async (id: CaptureId): Promise<SavedEdits> =>
-    (await askToSave({ id }, COPY_FLUSH_TIMEOUT_MS)) ?? {
-      message: "Saving took too long.",
-      ok: false,
-    };
+  const TOO_SLOW: SavedEdits = { message: SAVE_TOO_SLOW, ok: false };
 
-  const surface = (): void => {
-    if (window === null) {
-      return;
-    }
-
-    if (window.isMinimized()) {
-      window.restore();
-    }
-
-    bringToFront();
-    window.show();
-    window.focus();
+  /** A page that reloads or crashes has lost its drafts, so it holds nothing unsaved. */
+  const forgetUnsaved = (): void => {
+    unsaved = 0;
   };
 
-  // A page that doesn't answer in time keeps what its pagehide save manages.
+  const saveEdits = async (id: CaptureId): Promise<SavedEdits> =>
+    (await askToSave({ id, retry: false })) ?? TOO_SLOW;
+
+  const retryEdits = async (id: CaptureId): Promise<ActionResult> => {
+    const saved = (await askToSave({ id, retry: true })) ?? TOO_SLOW;
+
+    return saved.ok ? OK : fail(saved.message);
+  };
+
+  /** Asked when the page can't be: it doesn't answer, or the disk is slow to write what it sent. */
+  const confirmUnsaved = async (
+    leaving: Leaving,
+    count: number | null
+  ): Promise<Unconfirmed> => {
+    const changes = count === 1 ? "1 change" : `${String(count)} changes`;
+
+    const box: Electron.MessageBoxOptions = {
+      buttons: [
+        "Wait",
+        leaving === "close" ? "Close anyway" : "Quit anyway",
+        "Cancel",
+      ],
+      cancelId: 2,
+      defaultId: 0,
+      detail:
+        count === null
+          ? "Saving is taking longer than it should. Wait gives it more time."
+          : `${changes} may not be saved yet. Wait gives the library more time to answer.`,
+      message: "Inset Context Pin couldn’t confirm your changes were saved",
+      type: "warning",
+    };
+
+    const { response } =
+      window === null || window.isDestroyed()
+        ? await dialog.showMessageBox(box)
+        : await dialog.showMessageBox(window, box);
+
+    return CHOICES[response] ?? "cancel";
+  };
+
   const leaveGate = createLeaveGate({
-    ask: async (leaving) =>
-      await askToSave({ id: null, leaving }, LEAVE_ANSWER_TIMEOUT_MS),
+    ask: async (leaving) => await askToSave({ id: null, leaving }),
+    confirm: confirmUnsaved,
+    // The page's own wait comes first, then as long again to show its prompt.
+    promptWithinMs: LEAVE_SAVE_WAIT_MS * 2,
     surface,
+    unsaved: () => unsaved,
+    written: async () => await withinLimit(store.settled),
   });
 
   held.resume = leaveGate.resume;
+  held.shown = leaveGate.shown;
 
   const open = (id?: CaptureId): void => {
     if (window !== null) {
@@ -317,6 +399,9 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
 
     window = created;
     menu = trackMenuOpen({ contents: created.webContents, window: created });
+
+    created.webContents.on("did-navigate", forgetUnsaved);
+    created.webContents.on("render-process-gone", forgetUnsaved);
 
     if (floatOnTop) {
       created.setAlwaysOnTop(true, "floating");
@@ -366,6 +451,7 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
       nativeTheme.off("updated", followTheme);
       window = null;
       menu = null;
+      unsaved = 0;
       mayClose = false;
       shownDone = null;
       options.onClosed();
@@ -400,6 +486,7 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
     leave: (leaving, then) => {
       void leaveGate.leave(leaving, then);
     },
+    retryEdits,
     saveEdits,
     shownDone: () => shownDone,
     whenLoaded: (run) => {

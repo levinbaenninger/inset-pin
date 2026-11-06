@@ -76,6 +76,8 @@ type FailWhen = (op: Op, target: string) => boolean;
 
 interface FaultControl {
   failWhen: FailWhen | null;
+  /** The Node error code the injected failure carries. */
+  code?: string;
 }
 
 let root = "";
@@ -95,7 +97,9 @@ const createFaultFs = () => {
     log.push(`${op} ${relative(target)}`);
 
     if (control.failWhen?.(op, target) === true) {
-      throw Object.assign(new Error(`Injected ${op} failure`), { code: "EIO" });
+      throw Object.assign(new Error(`Injected ${op} failure`), {
+        code: control.code ?? "EIO",
+      });
     }
 
     return await run();
@@ -222,17 +226,17 @@ describe(openCaptureStore, () => {
     [
       "writing crop.png",
       (op, target) => op === "write" && target.endsWith("crop.png"),
-      "Injected write failure",
+      "Couldn’t save (EIO).",
     ],
     [
       "writing capture.json",
       (op, target) => op === "write" && target.endsWith("capture.json"),
-      "Injected write failure",
+      "Couldn’t save (EIO).",
     ],
     [
       "renaming staging into place",
       (op, target) => op === "rename" && target.endsWith(ID),
-      "Injected rename failure",
+      "Couldn’t save (EIO).",
     ],
   ])(
     "leaves no partial entry when %s fails",
@@ -461,7 +465,7 @@ describe(openCaptureStore, () => {
     });
   });
 
-  it("keeps the old record on disk and in the cache when an edit cannot be committed", async () => {
+  it("keeps the old record on disk and in the cache when an edit cannot be committed, and says why in plain words", async () => {
     const fault = createFaultFs();
     const store = await open(fault.fs);
 
@@ -469,10 +473,14 @@ describe(openCaptureStore, () => {
     fault.control.failWhen = (op, target) =>
       op === "rename" && target.endsWith("capture.json");
 
+    fault.control.code = "ENOSPC";
+
     await expect(
       store.update(ID, fields({ title: "Lost?" }))
-    ).resolves.toMatchObject({
+    ).resolves.toStrictEqual({
       error: "writeFailed",
+      message: "The disk is full.",
+      ok: false,
     });
     expect(store.get(ID)).toStrictEqual({
       id: ID,
@@ -603,7 +611,7 @@ describe(openCaptureStore, () => {
 
     await expect(store.publish(record, PNG)).resolves.toStrictEqual({
       error: "writeFailed",
-      message: "Simulated write failure (INSET_FAIL_NEXT_WRITE)",
+      message: "Couldn’t save.",
       ok: false,
     });
     await expect(store.publish(record, PNG)).resolves.toStrictEqual({

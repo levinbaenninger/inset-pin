@@ -27,7 +27,9 @@ const titleOf = (count: number): string =>
 
 /**
  * Asked in the library before it closes, or before the app quits, while
- * changes couldn't be saved. Return retries and Escape cancels.
+ * changes couldn't be saved. Return retries whichever button has the focus,
+ * Escape cancels, and Space presses the focused button, so Discard stays a
+ * deliberate choice.
  */
 export const LeavePrompt = () => {
   const prompt = useLeavePrompt();
@@ -57,6 +59,14 @@ export const LeavePrompt = () => {
             event.preventDefault();
             returnRef.current?.focus();
           }}
+          // Before the focused button sees it, so Return on Discard or Cancel still retries.
+          onKeyDownCapture={(event) => {
+            if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              event.stopPropagation();
+              leaveHold.retry();
+            }
+          }}
           onOpenAutoFocus={(event) => {
             event.preventDefault();
             returnRef.current =
@@ -81,6 +91,7 @@ export const LeavePrompt = () => {
               {DISCARD[shown.leaving]}
             </Button>
             <Button
+              data-default-action=""
               onClick={() => {
                 leaveHold.retry();
               }}

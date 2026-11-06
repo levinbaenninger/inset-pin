@@ -9,7 +9,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { CaptureId } from "@shared/capture-record";
-import type { ActionResult, SavedCapture } from "@shared/contracts";
+import type { ActionResult, CopyResult, SavedCapture } from "@shared/contracts";
 import { keyLabels, menuKeyAction } from "@shared/shortcuts";
 import type { MenuKeyAction } from "@shared/shortcuts";
 import {
@@ -68,6 +68,8 @@ export type MenuEntry =
   | MenuItem
   | { readonly kind: "separator"; readonly id: string };
 
+const UNREACHABLE = "Inset couldn’t reach the app. Try again.";
+
 /** Never rejects, so a closed channel reads as a failure the notice can show. */
 const settle = async (
   call: () => Promise<ActionResult>
@@ -75,7 +77,17 @@ const settle = async (
   try {
     return await call();
   } catch {
-    return { message: "Inset couldn’t reach the app. Try again.", ok: false };
+    return { message: UNREACHABLE, ok: false };
+  }
+};
+
+const settleCopy = async (
+  call: () => Promise<CopyResult>
+): Promise<CopyResult> => {
+  try {
+    return await call();
+  } catch {
+    return { message: UNREACHABLE, ok: false, retry: false };
   }
 };
 
@@ -110,7 +122,37 @@ export const useCaptureCommands = (capture: SavedCapture, focus?: RowFocus) => {
     text: string,
     undo?: () => void
   ): void => {
-    say(result.ok ? { text, undo } : { failed: true, text: result.message });
+    if (!result.ok) {
+      say({ failed: true, text: result.message });
+    } else if (undo === undefined) {
+      say({ text });
+    } else {
+      say({ action: { label: "Undo", run: undo }, text });
+    }
+  };
+
+  /** A refusal for unsaved changes: Retry saves them, and the user then copies again. */
+  const refuseWithRetry = (text: string): void => {
+    const retrySave = async (): Promise<void> => {
+      const saved = await drafts.retry(capture.id);
+
+      if (saved.ok) {
+        say({ text: "Saved. You can copy it now." });
+      } else {
+        refuseWithRetry(`Couldn’t save your changes. ${saved.message}`);
+      }
+    };
+
+    say({
+      action: {
+        label: "Retry",
+        run: () => {
+          void retrySave();
+        },
+      },
+      failed: true,
+      text,
+    });
   };
 
   const setDone = async (id: CaptureId, value: boolean): Promise<void> => {
@@ -123,11 +165,20 @@ export const useCaptureCommands = (capture: SavedCapture, focus?: RowFocus) => {
     });
   };
 
+  /** A copy refused because the capture's changes aren't saved offers Retry, while they still aren't. */
   const copy = async (
-    call: () => Promise<ActionResult>,
+    call: () => Promise<CopyResult>,
     text: string
   ): Promise<void> => {
-    report(await settle(call), text);
+    const result = await settleCopy(call);
+
+    if (result.ok) {
+      say({ text });
+    } else if (result.retry && drafts.get(capture.id) !== undefined) {
+      refuseWithRetry(result.message);
+    } else {
+      say({ failed: true, text: result.message });
+    }
   };
 
   const remove = async (): Promise<void> => {

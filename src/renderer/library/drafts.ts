@@ -1,4 +1,5 @@
 import type { CaptureId, EditableFields } from "@shared/capture-record";
+import { LEAVE_SAVE_WAIT_MS, SAVE_TOO_SLOW } from "@shared/contracts";
 import type { ActionResult, SavedEdits } from "@shared/contracts";
 
 import { reduceDraft, snapshotOf } from "./draft-lifecycle";
@@ -19,8 +20,8 @@ const settle = async (
 ): Promise<ActionResult> => {
   try {
     return await call();
-  } catch (error) {
-    return { message: String(error), ok: false };
+  } catch {
+    return { message: "Inset couldn’t reach the app.", ok: false };
   }
 };
 
@@ -32,26 +33,68 @@ interface Waiter {
 
 const SAVED: ActionResult = { ok: true };
 
-/** For a save still on its way when the wait before a close is over. */
-const TOO_LONG = "Saving took too long.";
+/** A copy that waited for typing the user then discarded copies nothing. */
+const DISCARDED: ActionResult = {
+  message: "The changes were discarded.",
+  ok: false,
+};
 
-/** Captures whose typing isn't on disk, and the first error saving it gave. */
+/** Captures whose typing isn't on disk. */
 export interface Unsaved {
   readonly count: number;
-  readonly message: string;
+  /** The first error saving gave; null while no save has failed. */
+  readonly error: string | null;
+  /** Whether any of it is still being saved, rather than waiting for Retry. */
+  readonly pending: boolean;
 }
+
+/** How the wait before a close or a quit ended. */
+export type Settled = "settled" | "overdue";
+
+const TOO_SLOW: ActionResult = { message: SAVE_TOO_SLOW, ok: false };
+
+/** The answer, or TOO_SLOW once `withinMs` is over. */
+const withinLimit = async (
+  answer: Promise<ActionResult>,
+  withinMs: number
+): Promise<ActionResult> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  // oxlint-disable-next-line promise/avoid-new -- a deadline: it resolves on a timer.
+  const late = new Promise<ActionResult>((resolve) => {
+    timer = setTimeout(() => {
+      resolve(TOO_SLOW);
+    }, withinMs);
+  });
+
+  const result = await Promise.race([answer, late]);
+
+  clearTimeout(timer);
+
+  return result;
+};
+
+const nothing = (): void => undefined;
+
+/** What is left once no save is on its way: only failed drafts, which wait for Retry. */
+const quiet = (drafts: Iterable<Draft>): boolean =>
+  [...drafts].every((draft) => draft.kind === "failed");
 
 /**
  * Every capture's unsaved edits, kept above the pages, so a draft outlives
  * leaving its capture, closing the detail pane and coming back. Typing saves
  * a while after the last change; other changes and leaving save at once.
- * Saves of one capture reach main one at a time, in order.
+ * Saves of one capture reach main one at a time, in order, except the one
+ * Discard changes writes over a save already on its way.
  */
 export class DraftStore {
   readonly #store: FieldStore;
   readonly #drafts = new Map<CaptureId, Draft>();
   readonly #timers = new Map<CaptureId, ReturnType<typeof setTimeout>>();
   readonly #waiters = new Map<CaptureId, Waiter[]>();
+  readonly #discards = new Map<CaptureId, number>();
+  /** What the last save that landed wrote. Saves land in order, so this is what the disk holds. */
+  readonly #saved = new Map<CaptureId, EditableFields>();
   readonly #listeners = new Set<() => void>();
 
   constructor(store: FieldStore) {
@@ -61,6 +104,17 @@ export class DraftStore {
   /** For useSyncExternalStore: the same object until this capture's draft changes. */
   readonly get = (id: CaptureId): Draft | undefined => this.#drafts.get(id);
 
+  /**
+   * What the disk holds since this library last saved the capture, in
+   * stored form; undefined before its first save. The capture a page loaded
+   * can be older until its reload answers.
+   */
+  readonly saved = (id: CaptureId): EditableFields | undefined =>
+    this.#saved.get(id);
+
+  /** How many times this capture's changes were discarded, so its page knows to show what is saved again. */
+  readonly discards = (id: CaptureId): number => this.#discards.get(id) ?? 0;
+
   readonly subscribe = (listener: () => void): (() => void) => {
     this.#listeners.add(listener);
 
@@ -69,14 +123,22 @@ export class DraftStore {
     };
   };
 
-  /** Typing: saved a while after the last change, or at once for a ticked step or a moved pin. */
+  /**
+   * Typing: saved a while after the last change, or at once for a ticked
+   * step or a moved pin. A new draft starts from the last save that landed
+   * when there is one, rather than `stored`, which may predate it.
+   */
   edit(
     id: CaptureId,
     values: EditableFields,
     stored: EditableFields,
     { now = false }: { readonly now?: boolean } = {}
   ): void {
-    this.#apply(id, { kind: "edit", stored, values });
+    this.#apply(id, {
+      kind: "edit",
+      stored: this.#saved.get(id) ?? stored,
+      values,
+    });
     this.#stopTimer(id);
 
     if (now) {
@@ -92,38 +154,76 @@ export class DraftStore {
     }
   }
 
-  /** Saves the latest edit now; for a failed draft this is Retry. */
+  /** Saves the latest edit now. A draft whose save failed stays as it is: only Retry sends it again. */
   flush(id: CaptureId): void {
+    this.#send(id, "send");
+  }
+
+  /** Retry: saves the capture's changes again, and answers how that went within `withinMs`. */
+  async retry(
+    id: CaptureId,
+    withinMs = LEAVE_SAVE_WAIT_MS
+  ): Promise<ActionResult> {
+    const draft = this.#drafts.get(id);
+
+    if (draft === undefined) {
+      return SAVED;
+    }
+
+    const saved = this.#waitFor(id, draft.rev);
+
+    this.#send(id, "retry");
+
+    const result = await withinLimit(saved, withinMs);
+
+    if (result === TOO_SLOW) {
+      this.#apply(id, { kind: "overdue" });
+    }
+
+    return result;
+  }
+
+  /**
+   * Discard changes: the capture shows what is on disk again, at once. A
+   * save already on its way is answered by writing the saved values after it.
+   */
+  discard(id: CaptureId): void {
+    if (!this.#drafts.has(id)) {
+      return;
+    }
+
     this.#stopTimer(id);
+    this.#discards.set(id, this.discards(id) + 1);
+    this.#resolve(id, () => true, DISCARDED);
 
     const before = this.#drafts.get(id);
 
-    this.#apply(id, { kind: "send" });
+    this.#apply(id, { kind: "discard" });
 
     const after = this.#drafts.get(id);
 
-    if (after?.kind === "saving" && before?.kind !== "saving") {
+    if (after !== undefined && after !== before && after.kind === "saving") {
       void this.#write(id, after.inFlight);
     }
-  }
-
-  /** Discard changes: the capture shows what is on disk again. */
-  discard(id: CaptureId): void {
-    this.#stopTimer(id);
-    this.#apply(id, { kind: "discard" });
   }
 
   /**
    * For a copy: takes what the capture shows now, saves it and waits for the
    * disk. The copy carries this snapshot, never the fields as they are once
-   * the save is done, and nothing when that save fails. A failed draft is
-   * tried again. Null fields: nothing is typed, so the stored copy is current.
+   * the save is done, and nothing when that save fails. While the capture
+   * says its changes couldn't be saved, even with typing since, the copy is
+   * refused at once and nothing is saved again; Retry does that. Null fields:
+   * nothing is typed, so the stored copy is current.
    */
   async settle(id: CaptureId): Promise<SavedEdits> {
     const draft = this.#drafts.get(id);
 
     if (draft === undefined) {
       return { fields: null, ok: true };
+    }
+
+    if (draft.error !== null) {
+      return { message: draft.error, ok: false };
     }
 
     const snapshot = snapshotOf(draft);
@@ -138,22 +238,36 @@ export class DraftStore {
       : { message: result.message, ok: false };
   }
 
-  /** Before the window closes or the app quits: saves every draft, and waits at most `withinMs` for the disk. */
-  async settleAll(withinMs: number): Promise<void> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
+  /**
+   * Before the window closes or the app quits: saves every draft, a failed
+   * one too, and waits at most `withinMs` until no save is on its way.
+   */
+  async settleAll(withinMs: number): Promise<Settled> {
+    this.retryAll();
 
-    // oxlint-disable-next-line promise/avoid-new -- a deadline: it resolves on a timer.
-    const deadline = new Promise<void>((resolve) => {
-      timer = setTimeout(resolve, withinMs);
+    if (quiet(this.#drafts.values())) {
+      return "settled";
+    }
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let stop = nothing;
+
+    // oxlint-disable-next-line promise/avoid-new -- resolved by a timer or by the store's listener.
+    const outcome = await new Promise<Settled>((resolve) => {
+      timer = setTimeout(() => {
+        resolve("overdue");
+      }, withinMs);
+      stop = this.subscribe(() => {
+        if (quiet(this.#drafts.values())) {
+          resolve("settled");
+        }
+      });
     });
 
-    await Promise.race([
-      Promise.all(
-        [...this.#drafts.keys()].map(async (id) => await this.settle(id))
-      ),
-      deadline,
-    ]);
     clearTimeout(timer);
+    stop();
+
+    return outcome;
   }
 
   /** What closing or quitting now would lose: how many captures, and why; null when everything is saved. */
@@ -164,19 +278,19 @@ export class DraftStore {
       ? null
       : {
           count: left.length,
-          message:
-            left.find((draft) => draft.error !== null)?.error ?? TOO_LONG,
+          error: left.find((draft) => draft.error !== null)?.error ?? null,
+          pending: !quiet(left),
         };
   };
 
-  /** Retry for every capture that couldn't be saved. */
+  /** Retry for every capture that holds changes. */
   retryAll(): void {
     for (const id of this.#drafts.keys()) {
-      this.flush(id);
+      this.#send(id, "retry");
     }
   }
 
-  /** Discard changes in every capture, except where a save is already on its way. */
+  /** Discard changes in every capture. */
   discardAll(): void {
     for (const id of this.#drafts.keys()) {
       this.discard(id);
@@ -186,13 +300,33 @@ export class DraftStore {
   /** The capture was deleted, so there is nothing left to save its typing into. */
   forget(id: CaptureId): void {
     this.#stopTimer(id);
+    this.#saved.delete(id);
     this.#apply(id, { kind: "removed" });
+  }
+
+  #send(id: CaptureId, kind: "send" | "retry"): void {
+    this.#stopTimer(id);
+
+    const before = this.#drafts.get(id);
+
+    this.#apply(id, { kind });
+
+    const after = this.#drafts.get(id);
+
+    if (after?.kind === "saving" && before?.kind !== "saving") {
+      void this.#write(id, after.inFlight);
+    }
   }
 
   async #write(id: CaptureId, inFlight: InFlight): Promise<void> {
     const result = await settle(
       async () => await this.#store.update({ fields: inFlight.payload, id })
     );
+
+    // A deleted capture has no draft left, and nothing saved to remember.
+    if (result.ok && this.#drafts.has(id)) {
+      this.#saved.set(id, inFlight.payload);
+    }
 
     this.#apply(id, { kind: "answered", result, rev: inFlight.rev });
     this.#resolve(id, (waiter) => waiter.rev <= inFlight.rev, result);
@@ -254,7 +388,7 @@ export class DraftStore {
 
     if (after === null) {
       this.#drafts.delete(id);
-      // Gone without a save of its own: nothing was left to write, or the capture was deleted and main refuses its copy. A discard never drops a draft with a save on its way.
+      // Gone without a failed save: nothing was left to write, the capture was deleted and main refuses its copy, or a discard already answered its copies.
       this.#resolve(id, () => true, SAVED);
     } else {
       this.#drafts.set(id, after);

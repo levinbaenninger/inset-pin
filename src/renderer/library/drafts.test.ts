@@ -116,7 +116,7 @@ describe(DraftStore, () => {
     expect(drafts.get(A)?.error).toBe("The disk is full.");
   });
 
-  it("keeps a failed draft with nothing watching it, refuses copies while it fails, and copies it once a retry works", async () => {
+  it("keeps a failed draft with nothing watching it, refuses its copy at once without saving it again, and copies it once Retry works", async () => {
     const { answer, drafts, sent } = heldDisk();
 
     drafts.edit(A, titled("Typed while full"), STORED, { now: true });
@@ -131,55 +131,99 @@ describe(DraftStore, () => {
       values: titled("Typed while full"),
     });
 
-    const refused = drafts.settle(A);
-
-    await answer(FULL);
-
-    await expect(refused).resolves.toStrictEqual({
+    // The disk has recovered, but nothing sends A's typing again until Retry.
+    await expect(drafts.settle(A)).resolves.toStrictEqual({
       message: "The disk is full.",
       ok: false,
     });
+    drafts.flush(A);
 
-    const copied = drafts.settle(A);
+    const sentBeforeRetry = sent.map(({ title }) => title);
+    const retried = drafts.retry(A);
 
     await answer();
 
-    await expect(copied).resolves.toStrictEqual({
-      fields: titled("Typed while full"),
+    await expect(retried).resolves.toStrictEqual({ ok: true });
+    await expect(drafts.settle(A)).resolves.toStrictEqual({
+      fields: null,
       ok: true,
     });
-    expect(sent.map(({ title }) => title)).toStrictEqual([
-      "Typed while full",
-      "Other",
-      "Typed while full",
-      "Typed while full",
+    expect([sentBeforeRetry, sent.length, drafts.get(A)]).toStrictEqual([
+      ["Typed while full", "Other"],
+      3,
+      undefined,
     ]);
-    expect(drafts.get(A)).toBeUndefined();
   });
 
-  it("drops a draft only when the user discards it, and not while a retry is on its way", async () => {
+  it("refuses a copy at once while the capture still says it couldn't be saved, though more was typed since", async () => {
+    const { answer, drafts, sent } = heldDisk();
+
+    drafts.edit(A, titled("Typed while full"), STORED, { now: true });
+    await answer(FULL);
+    drafts.edit(A, titled("Typed while full, and more"), STORED);
+
+    await expect(drafts.settle(A)).resolves.toStrictEqual({
+      message: "The disk is full.",
+      ok: false,
+    });
+    expect([sent.length, drafts.get(A)?.kind]).toStrictEqual([1, "dirty"]);
+  });
+
+  it("answers a Retry that doesn't land within its limit as not finished in time", async () => {
+    const { answer, drafts } = heldDisk();
+
+    drafts.edit(A, titled("Typed"), STORED, { now: true });
+    await answer(FULL);
+
+    const retried = drafts.retry(A, 3000);
+
+    await vi.advanceTimersByTimeAsync(3000);
+
+    await expect(retried).resolves.toStrictEqual({
+      message: "Saving didn’t finish in time.",
+      ok: false,
+    });
+  });
+
+  it("discards at once while a retry is on its way: shows what is saved, writes it after the retry, and the retry answers that it was discarded", async () => {
     const { answer, drafts, sent } = heldDisk();
 
     drafts.edit(A, titled("Typed"), STORED, { now: true });
     await answer(FULL);
 
-    // Retry, then Discard changes before the retry answers: the retry could still write the text.
-    const retry = drafts.settle(A);
+    const retry = drafts.retry(A);
+    const copy = drafts.settle(A);
 
     drafts.discard(A);
 
-    expect(drafts.get(A)?.kind).toBe("saving");
+    const shown = drafts.get(A)?.values.title;
 
-    await answer(FULL);
+    await expect(Promise.all([retry, copy])).resolves.toStrictEqual([
+      { message: "The changes were discarded.", ok: false },
+      // The error still showed while the retry was on its way, so the copy was refused at once.
+      { message: "The disk is full.", ok: false },
+    ]);
 
-    await expect(retry).resolves.toStrictEqual({
-      message: "The disk is full.",
-      ok: false,
+    // The retry lands after all; the saved values written after it win.
+    await answer();
+
+    const afterRetry = drafts.get(A)?.values.title;
+
+    await answer();
+
+    expect({
+      afterRetry,
+      discards: drafts.discards(A),
+      end: drafts.get(A),
+      sent: sent.map(({ title }) => title),
+      shown,
+    }).toStrictEqual({
+      afterRetry: "Total is off",
+      discards: 1,
+      end: undefined,
+      sent: ["Typed", "Typed", "Total is off"],
+      shown: "Total is off",
     });
-
-    drafts.discard(A);
-
-    expect([drafts.get(A), sent.length]).toStrictEqual([undefined, 2]);
   });
 
   it("sends nothing when only a trailing space was typed, and copies the stored capture", async () => {
@@ -210,20 +254,37 @@ describe(DraftStore, () => {
     await answer();
     await answer(FULL);
     await vi.advanceTimersByTimeAsync(1000);
-    await settled;
 
+    await expect(settled).resolves.toBe("overdue");
     expect([
       drafts.unsaved(),
       drafts.get(B)?.kind,
       drafts.get(C)?.kind,
     ]).toStrictEqual([
-      { count: 2, message: "The disk is full." },
+      { count: 2, error: "The disk is full.", pending: true },
       "failed",
       "saving",
     ]);
   });
 
-  it("says saving took too long while only a slow save is left, and nothing once it lands", async () => {
+  it("ends the wait before a close as soon as only failed drafts are left, after sending a failed one again", async () => {
+    const { answer, drafts, sent } = heldDisk();
+
+    drafts.edit(A, titled("A typed"), STORED, { now: true });
+    await answer(FULL);
+
+    const settled = drafts.settleAll(3000);
+
+    await answer(FULL);
+
+    await expect(settled).resolves.toBe("settled");
+    expect([drafts.unsaved(), sent.length]).toStrictEqual([
+      { count: 1, error: "The disk is full.", pending: false },
+      2,
+    ]);
+  });
+
+  it("counts a slow save as unsaved with no error, and nothing once it lands", async () => {
     const { answer, drafts } = heldDisk();
 
     drafts.edit(A, titled("A typed"), STORED);
@@ -238,9 +299,87 @@ describe(DraftStore, () => {
     await answer();
 
     expect([slow, drafts.unsaved()]).toStrictEqual([
-      { count: 1, message: "Saving took too long." },
+      { count: 1, error: null, pending: true },
       null,
     ]);
+  });
+
+  it("discards back to the last save that landed, though the page still passes what it loaded before that save", async () => {
+    const { answer, drafts, sent } = heldDisk();
+
+    drafts.edit(A, titled("Saved first"), STORED, { now: true });
+    await answer();
+    // The page's reload after that save hasn't answered, so it still passes STORED.
+    drafts.edit(A, titled("Discard me"), STORED, { now: true });
+    await answer(FULL);
+
+    void drafts.retry(A);
+    drafts.discard(A);
+
+    const shown = drafts.get(A)?.values.title;
+
+    await answer();
+    await answer();
+
+    expect({
+      after: drafts.saved(A)?.title,
+      draft: drafts.get(A),
+      sent: sent.map(({ title }) => title),
+      shown,
+    }).toStrictEqual({
+      after: "Saved first",
+      draft: undefined,
+      sent: ["Saved first", "Discard me", "Discard me", "Saved first"],
+      shown: "Saved first",
+    });
+  });
+
+  it("starts a new edit from the last save that landed, so Discard with nothing on its way shows that save", async () => {
+    const { answer, drafts } = heldDisk();
+
+    drafts.edit(A, titled("Saved first"), STORED, { now: true });
+    await answer();
+    drafts.edit(A, titled("Discard me"), STORED, { now: true });
+    await answer(FULL);
+    drafts.discard(A);
+
+    expect([drafts.get(A), drafts.saved(A)?.title]).toStrictEqual([
+      undefined,
+      "Saved first",
+    ]);
+  });
+
+  it("says a Retry didn't finish once its 3 s are over, and lets it land later", async () => {
+    const { answer, drafts } = heldDisk();
+
+    drafts.edit(A, titled("A typed"), STORED, { now: true });
+    await answer(FULL);
+
+    let result: ActionResult | null = null;
+
+    void drafts.retry(A).then((answered) => {
+      result = answered;
+
+      return answered;
+    });
+    await vi.advanceTimersByTimeAsync(2999);
+
+    const before = { error: drafts.get(A)?.error, result };
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    const after = { error: drafts.get(A)?.error, result };
+
+    await answer();
+
+    expect({ after, before, landed: drafts.get(A) }).toStrictEqual({
+      after: {
+        error: "Saving didn’t finish in time.",
+        result: { message: "Saving didn’t finish in time.", ok: false },
+      },
+      before: { error: "The disk is full.", result: null },
+      landed: undefined,
+    });
   });
 
   it("forgets a deleted capture's draft, though its save is on its way and then fails", async () => {

@@ -21,21 +21,38 @@ const titled = (title: string): EditableFields => ({ ...STORED, title });
 
 const FULL: ActionResult = { message: "The disk is full.", ok: false };
 
+const HELD = {
+  message: "The library holds this to save or ask first.",
+  ok: false,
+};
+
+const TOO_SLOW = "Saving didn’t finish in time.";
+
 /** The library's drafts on a disk the test answers, and the hold main asks before a close or a quit. */
 const setup = () => {
   const pending: ((result: ActionResult) => void)[] = [];
-  let resumed = 0;
+  /** What reached main, in order: each save's title, each resume and each time the prompt showed. */
+  const log: string[] = [];
 
   const drafts = new DraftStore({
-    update: async () =>
+    update: async ({ fields }) => {
+      log.push(`save:${fields.title}`);
+
       // oxlint-disable-next-line promise/avoid-new -- the test answers the save later, through this callback.
-      await new Promise<ActionResult>((resolve) => {
+      return await new Promise<ActionResult>((resolve) => {
         pending.push(resolve);
-      }),
+      });
+    },
   });
 
-  const hold = createLeaveHold(drafts, () => {
-    resumed += 1;
+  const hold = createLeaveHold({
+    drafts,
+    resume: () => {
+      log.push("resume");
+    },
+    shown: () => {
+      log.push("shown");
+    },
   });
 
   /** Answers the oldest save on its way, then lets the store react. */
@@ -51,24 +68,16 @@ const setup = () => {
   };
 
   /** Main asks before a quit while A can't be saved; the retry the wait makes fails too. */
-  const heldQuit = async (): Promise<ActionResult> => {
+  const heldQuit = async (): Promise<void> => {
     await failA();
-
-    const asked = hold.ask("quit");
-
+    hold.ask("quit");
     await answer(FULL);
-
-    return await asked;
   };
 
-  return {
-    answer,
-    drafts,
-    failA,
-    heldQuit,
-    hold,
-    resumed: () => resumed,
-  };
+  /** What main heard since the last look. */
+  const take = (): string[] => log.splice(0);
+
+  return { answer, drafts, failA, heldQuit, hold, take };
 };
 
 describe(createLeaveHold, () => {
@@ -80,123 +89,213 @@ describe(createLeaveHold, () => {
     vi.useRealTimers();
   });
 
-  it("lets a close go on as soon as every save lands, without waiting out the second", async () => {
-    const { answer, drafts, hold, resumed } = setup();
+  it("lets a close go on at once when nothing is unsaved", () => {
+    const { hold, take } = setup();
+
+    expect([hold.ask("close"), hold.get(), take()]).toStrictEqual([
+      { ok: true },
+      null,
+      [],
+    ]);
+  });
+
+  it("lets a quit go on at once, holding nothing, when the only change was typed back to what is saved", () => {
+    const { drafts, hold, take } = setup();
+
+    drafts.edit(A, titled("Total is off by 40"), STORED);
+    drafts.edit(A, STORED, STORED);
+
+    expect([hold.ask("quit"), hold.get(), take()]).toStrictEqual([
+      { ok: true },
+      null,
+      [],
+    ]);
+  });
+
+  it("answers main at once, and lets the close go on as soon as every save lands, without showing anything", async () => {
+    const { answer, drafts, hold, take } = setup();
 
     drafts.edit(A, titled("A typed"), STORED);
     drafts.edit(B, titled("B typed"), STORED);
 
-    const asked = hold.ask("close");
+    expect(hold.ask("close")).toStrictEqual(HELD);
 
     await answer();
     await answer();
 
-    await expect(asked).resolves.toStrictEqual({ ok: true });
-    expect([hold.get(), resumed()]).toStrictEqual([null, 0]);
+    expect([hold.get(), take()]).toStrictEqual([
+      null,
+      ["save:A typed", "save:B typed", "resume"],
+    ]);
   });
 
-  it("holds a quit while a save fails, and says how many changes and why", async () => {
-    const { answer, drafts, failA, hold } = setup();
+  it("holds a quit while a save fails, retries a failed one once, and says how many changes and why", async () => {
+    const { answer, drafts, failA, hold, take } = setup();
 
     await failA();
     drafts.edit(B, titled("B typed"), STORED);
-
-    const asked = hold.ask("quit");
-
+    take();
+    hold.ask("quit");
     await answer(FULL);
     await answer();
 
-    await expect(asked).resolves.toStrictEqual({
-      message: "The disk is full.",
-      ok: false,
-    });
-    expect(hold.get()).toStrictEqual({
-      count: 1,
-      leaving: "quit",
-      message: "The disk is full.",
-    });
+    expect([hold.get(), take()]).toStrictEqual([
+      { count: 1, leaving: "quit", message: "The disk is full." },
+      ["save:Typed while full", "save:B typed", "shown"],
+    ]);
   });
 
-  it("holds a close while a save is still on its way after the second, and lets it go on by itself once it lands", async () => {
-    const { answer, drafts, hold, resumed } = setup();
+  it("asks once the wait runs out, saying saving didn't finish in time, and goes on by itself once the save lands", async () => {
+    const { answer, drafts, hold, take } = setup();
 
     drafts.edit(A, titled("A typed"), STORED);
+    hold.ask("restart");
+    await vi.advanceTimersByTimeAsync(2999);
 
-    const asked = hold.ask("restart");
+    const before = hold.get();
 
-    await vi.advanceTimersByTimeAsync(1000);
-
-    await expect(asked).resolves.toStrictEqual({
-      message: "Saving took too long.",
-      ok: false,
-    });
+    await vi.advanceTimersByTimeAsync(1);
 
     const held = hold.get();
 
     await answer();
 
-    expect([held, hold.get(), resumed()]).toStrictEqual([
-      { count: 1, leaving: "restart", message: "Saving took too long." },
+    expect([before, held, hold.get(), take()]).toStrictEqual([
       null,
-      1,
+      { count: 1, leaving: "restart", message: TOO_SLOW },
+      null,
+      ["save:A typed", "shown", "resume"],
     ]);
   });
 
   it("keeps asking after a Retry that fails, and goes on after one that works", async () => {
-    const { answer, heldQuit, hold, resumed } = setup();
+    const { answer, heldQuit, hold, take } = setup();
 
     await heldQuit();
     hold.retry();
     await answer(FULL);
 
-    const stillHeld = [hold.get(), resumed()];
+    const stillHeld = [hold.get(), take()];
 
     hold.retry();
     await answer();
 
-    expect([stillHeld, [hold.get(), resumed()]]).toStrictEqual([
-      [{ count: 1, leaving: "quit", message: "The disk is full." }, 0],
-      [null, 1],
+    expect([stillHeld, [hold.get(), take()]]).toStrictEqual([
+      [
+        { count: 1, leaving: "quit", message: "The disk is full." },
+        [
+          "save:Typed while full",
+          "save:Typed while full",
+          "shown",
+          "save:Typed while full",
+        ],
+      ],
+      [null, ["save:Typed while full", "resume"]],
     ]);
   });
 
-  it("drops every change on Discard and goes on once", async () => {
-    const { drafts, heldQuit, hold, resumed } = setup();
+  it("says saving didn't finish in time once a Retry has been on its way for the limit", async () => {
+    const { answer, heldQuit, hold } = setup();
 
     await heldQuit();
+    hold.retry();
+    await vi.advanceTimersByTimeAsync(2999);
+
+    const before = hold.get()?.message;
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    const after = hold.get()?.message;
+
+    await answer(FULL);
+
+    expect([before, after, hold.get()?.message]).toStrictEqual([
+      "The disk is full.",
+      TOO_SLOW,
+      "The disk is full.",
+    ]);
+  });
+
+  it("discards at once while a save is on its way, writes the saved values after it before going on, and the late save revives nothing", async () => {
+    const { answer, drafts, hold, take } = setup();
+
+    drafts.edit(A, titled("Typed, then discarded"), STORED);
+    hold.ask("quit");
+    await vi.advanceTimersByTimeAsync(3000);
     hold.discard();
 
-    expect([drafts.get(A), hold.get(), resumed()]).toStrictEqual([
+    const atDiscard = {
+      log: take(),
+      prompt: hold.get(),
+      shown: drafts.get(A)?.values.title,
+    };
+
+    await answer();
+
+    const afterLateSave = drafts.get(A)?.values.title;
+
+    await answer();
+
+    expect({
+      afterLateSave,
+      atDiscard,
+      end: [drafts.get(A), hold.get(), take()],
+    }).toStrictEqual({
+      afterLateSave: "Total is off",
+      atDiscard: {
+        log: [
+          "save:Typed, then discarded",
+          "shown",
+          "save:Total is off",
+          "resume",
+        ],
+        prompt: null,
+        shown: "Total is off",
+      },
+      end: [undefined, null, []],
+    });
+  });
+
+  it("drops a failed change on Discard and goes on once", async () => {
+    const { drafts, heldQuit, hold, take } = setup();
+
+    await heldQuit();
+    take();
+    hold.discard();
+
+    expect([drafts.get(A), hold.get(), take()]).toStrictEqual([
       undefined,
       null,
-      1,
+      ["resume"],
     ]);
   });
 
-  it("keeps the changes and the window on Cancel, and a later save doesn't go on", async () => {
-    const { answer, drafts, heldQuit, hold, resumed } = setup();
+  it("cancels at once while a save is on its way, keeps the change, and the save landing later doesn't go on", async () => {
+    const { answer, drafts, hold, take } = setup();
 
-    await heldQuit();
+    drafts.edit(A, titled("Typed"), STORED);
+    hold.ask("close");
+    await vi.advanceTimersByTimeAsync(3000);
     hold.cancel();
 
-    const kept = drafts.get(A)?.kind;
+    const kept = drafts.get(A)?.values.title;
 
-    drafts.flush(A);
-    await answer();
+    await answer(FULL);
 
-    expect([kept, hold.get(), resumed()]).toStrictEqual(["failed", null, 0]);
+    expect([kept, drafts.get(A)?.kind, hold.get(), take()]).toStrictEqual([
+      "Typed",
+      "failed",
+      null,
+      ["save:Typed", "shown"],
+    ]);
   });
 
   it("doesn't hold a close for a deleted capture's typing", async () => {
-    const { answer, drafts, failA, hold } = setup();
+    const { drafts, failA, hold } = setup();
 
     await failA();
     drafts.forget(A);
 
-    const asked = hold.ask("close");
-
-    await answer(FULL);
-
-    await expect(asked).resolves.toStrictEqual({ ok: true });
+    expect(hold.ask("close")).toStrictEqual({ ok: true });
   });
 });

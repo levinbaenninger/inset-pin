@@ -22,6 +22,10 @@ const edit = (title: string): DraftEvent => ({
 
 const SEND: DraftEvent = { kind: "send" };
 
+const RETRY: DraftEvent = { kind: "retry" };
+
+const DISCARD: DraftEvent = { kind: "discard" };
+
 const ok = (rev: number): DraftEvent => ({
   kind: "answered",
   result: { ok: true },
@@ -66,6 +70,7 @@ describe(reduceDraft, () => {
 
     expect(saving).toStrictEqual({
       confirmed: STORED,
+      discarded: null,
       error: null,
       inFlight: { payload: titled("Total is wrong"), rev: 2 },
       kind: "saving",
@@ -143,11 +148,13 @@ describe(reduceDraft, () => {
     });
   });
 
-  it("retries a failed draft, types on from it, or discards it", () => {
+  it("sends a failed draft again only on Retry, types on from it, or discards it", () => {
     const fail = run(edit("Typed"), SEND, failed(1));
 
-    expect(reduceDraft(fail, SEND)).toStrictEqual({
+    expect(reduceDraft(fail, SEND)).toBe(fail);
+    expect(reduceDraft(fail, RETRY)).toStrictEqual({
       confirmed: STORED,
+      discarded: null,
       error: "The disk is full.",
       inFlight: { payload: titled("Typed"), rev: 1 },
       kind: "saving",
@@ -162,20 +169,52 @@ describe(reduceDraft, () => {
       rev: 2,
       values: titled("Typed more"),
     });
-    expect(reduceDraft(fail, { kind: "discard" })).toBeNull();
-    expect(run(edit("Typed"), SEND, failed(1), SEND, ok(1))).toBeNull();
+    expect(reduceDraft(fail, DISCARD)).toBeNull();
+    expect(run(edit("Typed"), SEND, failed(1), RETRY, ok(1))).toBeNull();
   });
 
-  it("doesn't discard while a save is on its way, which would still write it, and discards once it is answered", () => {
-    const retrying = run(edit("Typed"), SEND, failed(1), SEND);
+  it("discards at once while a save is on its way: shows what is saved, and writes it after that save", () => {
+    const reverting: Draft = {
+      confirmed: STORED,
+      discarded: { landed: null, payload: titled("Typed"), rev: 1 },
+      error: null,
+      inFlight: { payload: STORED, rev: 2 },
+      kind: "saving",
+      rev: 2,
+      values: STORED,
+    };
 
-    expect(reduceDraft(retrying, { kind: "discard" })).toBe(retrying);
-    expect(
-      run(edit("Typed"), SEND, edit("More"), { kind: "discard" })
-    ).toMatchObject({ inFlight: { rev: 1 }, kind: "dirty", rev: 2 });
-    expect(
-      run(edit("Typed"), SEND, failed(1), SEND, failed(1), { kind: "discard" })
-    ).toBeNull();
+    expect(run(edit("Typed"), SEND, failed(1), RETRY, DISCARD)).toStrictEqual(
+      reverting
+    );
+    expect(run(edit("Typed"), SEND, edit("More"), DISCARD)).toStrictEqual({
+      ...reverting,
+      inFlight: { payload: STORED, rev: 3 },
+      rev: 3,
+    });
+    expect(run(edit("Typed"), SEND, DISCARD, DISCARD)).toStrictEqual(reverting);
+    expect([
+      run(edit("Typed"), SEND, DISCARD, ok(1), ok(2)),
+      run(edit("Typed"), SEND, DISCARD, failed(1), ok(2)),
+      run(edit("Typed"), SEND, failed(1), DISCARD),
+    ]).toStrictEqual([null, null, null]);
+  });
+
+  it("knows what the disk holds once the discarded save is answered, and only a write-back that was needed can fail", () => {
+    expect(run(edit("Typed"), SEND, DISCARD, ok(1))).toMatchObject({
+      confirmed: titled("Typed"),
+      discarded: { landed: true },
+      kind: "saving",
+      values: STORED,
+    });
+    expect(run(edit("Typed"), SEND, DISCARD, failed(1), failed(2))).toBeNull();
+    expect(run(edit("Typed"), SEND, DISCARD, ok(1), failed(2))).toStrictEqual({
+      confirmed: titled("Typed"),
+      error: "The disk is full.",
+      kind: "failed",
+      rev: 2,
+      values: STORED,
+    });
   });
 
   it("goes clean without a save when the edits end where the disk is", () => {
