@@ -1,12 +1,14 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 import { CaptureIdSchema } from "@shared/capture-record";
 import type { CaptureRecord, EditableFields } from "@shared/capture-record";
+import type { ActionResult } from "@shared/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { InlineSaver } from "../renderer/library/inline-saver";
+import { DraftStore } from "../renderer/library/drafts";
 import { createCopyGate } from "./copy-gate";
 import type { ClipboardWriter, CopyGate } from "./copy-gate";
 import { nodeStoreFs, openCaptureStore } from "./store";
@@ -30,8 +32,6 @@ const RECORD = {
   updatedAt: "2026-10-21T18:40:31.002Z",
 };
 
-const PNG = Buffer.from("PNG with pin 1");
-
 const fieldsOf = (record: CaptureRecord): EditableFields => ({
   description: record.description,
   due: record.due,
@@ -40,13 +40,35 @@ const fieldsOf = (record: CaptureRecord): EditableFields => ({
   title: record.title,
 });
 
+/** Lets every save and copy started so far run as far as it can. */
+const settleDown = async (): Promise<void> => {
+  await delay(50);
+};
+
 describe(createCopyGate, () => {
   let root = "";
   let store: CaptureStore;
-  let saver: InlineSaver;
+  let drafts: DraftStore;
   let copy: CopyGate;
   /** While true the disk is full, so every save fails. */
   let full = false;
+  /** Saves wait here while held, as on a slow disk, until the test lets them go. */
+  let held: (() => void)[] | null = null;
+
+  const hold = (): void => {
+    held = [];
+  };
+
+  const release = (): void => {
+    const waiting = held ?? [];
+
+    held = null;
+
+    for (const go of waiting) {
+      go();
+    }
+  };
+
   /** What reached the clipboard, as the receiving app would read it. */
   let pasted: Record<string, string>[] = [];
 
@@ -86,9 +108,11 @@ describe(createCopyGate, () => {
     return entry.record;
   };
 
-  /** Types into the open capture's title, as the library does, without waiting for the save. */
+  /** Types into the capture's title, as the library does, without waiting for the save. */
   const typeTitle = (title: string): void => {
-    saver.edit({ ...fieldsOf(stored()), title });
+    const shown = drafts.get(ID)?.values ?? fieldsOf(stored());
+
+    drafts.edit(ID, { ...shown, title }, fieldsOf(stored()));
   };
 
   beforeEach(async () => {
@@ -102,9 +126,20 @@ describe(createCopyGate, () => {
     );
     store = await openCaptureStore(root, { fs: fullDisk });
 
-    // The library's saver, talking to the real store as main does over IPC.
-    saver = new InlineSaver(ID, {
-      update: async ({ fields, id }) => {
+    held = null;
+
+    // The library's draft store, talking to the real store as main does over IPC.
+    drafts = new DraftStore({
+      update: async ({ fields, id }): Promise<ActionResult> => {
+        if (held !== null) {
+          const waiting = held;
+
+          // oxlint-disable-next-line promise/avoid-new -- release() lets the held save go through this callback.
+          await new Promise<void>((resolve) => {
+            waiting.push(resolve);
+          });
+        }
+
         const result = await store.update(id, fields);
 
         return result.ok
@@ -112,12 +147,14 @@ describe(createCopyGate, () => {
           : { message: result.message, ok: false };
       },
     });
-    saver.adopt(fieldsOf(stored()));
 
     copy = createCopyGate({
       clipboard: recording,
-      pinnedImage: (id) => (id === ID ? { png: PNG } : null),
-      saveEdits: async () => await saver.settle(),
+      pinnedImage: (id, { pins }) =>
+        id === ID
+          ? { png: Buffer.from(`PNG with pins at ${JSON.stringify(pins)}`) }
+          : null,
+      saveEdits: async (id) => await drafts.settle(id),
       store,
     });
   });
@@ -149,9 +186,9 @@ describe(createCopyGate, () => {
         "text/plain":
           "Total skips the discount\n\nRow 12 drops it\n\n1 · Total",
       },
-      { "image/png": "PNG with pin 1" },
+      { "image/png": 'PNG with pins at [{"label":"Total","x":240,"y":100}]' },
       {
-        "image/png": "PNG with pin 1",
+        "image/png": 'PNG with pins at [{"label":"Total","x":240,"y":100}]',
         "text/plain":
           "Total skips the discount\n\nRow 12 drops it\n\n1 · Total",
       },
@@ -190,6 +227,48 @@ describe(createCopyGate, () => {
     expect(pasted).toStrictEqual([
       { "text/plain": "Typed while the disk is full\n\nRow 12 drops it" },
     ]);
+  });
+
+  it("copies the snapshot taken when the copy started, though a second edit reaches the disk during the wait", async () => {
+    hold();
+    typeTitle("First");
+
+    const copying = copy(ID, "details");
+
+    typeTitle("First, then more");
+    drafts.flush(ID);
+    release();
+
+    await expect(copying).resolves.toStrictEqual({ ok: true });
+    await settleDown();
+
+    expect(pasted).toStrictEqual([
+      { "text/plain": "First\n\nRow 12 drops it\n\n1 · Total" },
+    ]);
+    expect(stored().title).toBe("First, then more");
+  });
+
+  it("refuses a copy started while the capture's save was on its way, once that save fails, and keeps the typing", async () => {
+    hold();
+    typeTitle("Typed, then the capture was left");
+    // Leaving the capture sends its save at once; the page that showed it is gone.
+    drafts.flush(ID);
+
+    const copying = copy(ID, "text");
+
+    full = true;
+    release();
+
+    await expect(copying).resolves.toStrictEqual({
+      message:
+        "Couldn’t save your changes, so nothing was copied. ENOSPC: no space left on device",
+      ok: false,
+    });
+    expect(pasted).toStrictEqual([]);
+    expect(drafts.get(ID)).toMatchObject({
+      kind: "failed",
+      values: { title: "Typed, then the capture was left" },
+    });
   });
 
   it("refuses a capture that no longer exists without touching the clipboard", async () => {

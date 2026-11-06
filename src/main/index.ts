@@ -9,7 +9,7 @@ import {
   pinContract,
   settingsContract,
 } from "@shared/contracts";
-import type { ActionResult } from "@shared/contracts";
+import type { SavedEdits } from "@shared/contracts";
 import type { IconPlace, SettingsView } from "@shared/settings";
 import {
   CAPTURE_ACCELERATOR,
@@ -156,8 +156,8 @@ const start = async (): Promise<void> => {
 
   // The library saves its typing before every copy; it is created further down, and has nothing typed until then.
   const libraryEdits = {
-    save: async (_id: CaptureId): Promise<ActionResult> =>
-      await Promise.resolve({ ok: true as const }),
+    save: async (_id: CaptureId): Promise<SavedEdits> =>
+      await Promise.resolve({ fields: null, ok: true as const }),
   };
 
   const copy = createCopyGate({
@@ -425,6 +425,9 @@ const start = async (): Promise<void> => {
     version: app.getVersion(),
   });
 
+  /** Set once the library's typing is saved for this quit; a quit the draft holds clears it. */
+  let editsSaved = false;
+
   const quitGate = createQuitGate({
     holdIfNeeded: draft.holdQuitIfNeeded,
     quit: () => {
@@ -436,30 +439,32 @@ const start = async (): Promise<void> => {
       settingsWindow.allowClose();
       library.allowClose();
     },
+    // Set only as the install starts, so a restart the draft holds still saves the library's typing on the next quit.
     restartToUpdate: () => {
+      editsSaved = true;
       updater?.install();
     },
   });
 
   resumeQuit = quitGate.resume;
 
-  /** Set once the library's typing is saved for this quit; a quit the draft holds clears it. */
-  let editsSaved = false;
-
-  const saveEdits = async (): Promise<void> => {
-    await library.flushEdits();
+  /** Once the library let the quit go on, what it sent is written first. */
+  const quitOnceWritten = async (): Promise<void> => {
     await store.settled();
     editsSaved = true;
+    app.quit();
   };
 
-  const restartAfterSaving = async (): Promise<void> => {
-    await saveEdits();
+  const restartOnceWritten = async (): Promise<void> => {
+    await store.settled();
     quitGate.restartToUpdate();
   };
 
   const installUpdate = (): void => {
     if (updater?.state().kind === "ready") {
-      void restartAfterSaving();
+      library.leave("restart", () => {
+        void restartOnceWritten();
+      });
     }
   };
 
@@ -519,6 +524,7 @@ const start = async (): Promise<void> => {
       library.open();
     },
     openSettings: settingsWindow.open,
+    pageMenuOpen: library.menuOpen,
     showShortcuts: () => {
       showShortcuts();
     },
@@ -688,15 +694,12 @@ const start = async (): Promise<void> => {
     library.open();
   });
 
-  const quitAfterSaving = async (): Promise<void> => {
-    await saveEdits();
-    app.quit();
-  };
-
   app.on("before-quit", (event) => {
     if (!editsSaved) {
       event.preventDefault();
-      void quitAfterSaving();
+      library.leave("quit", () => {
+        void quitOnceWritten();
+      });
 
       return;
     }

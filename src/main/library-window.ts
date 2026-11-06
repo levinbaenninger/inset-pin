@@ -3,18 +3,23 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import type { CaptureId } from "@shared/capture-record";
-import { libraryContract } from "@shared/contracts";
+import { LEAVE_SAVE_WAIT_MS, libraryContract } from "@shared/contracts";
 import type {
   ActionResult,
   AppStatus,
+  Leaving,
   LibraryCommand,
+  SavedEdits,
 } from "@shared/contracts";
 import { app, BrowserWindow, ipcMain, nativeTheme } from "electron";
 
 import type { PinnedImageOf } from "./capture-export";
 import type { CopyGate } from "./copy-gate";
 import { serveContract } from "./ipc-kit";
+import { createLeaveGate } from "./leave-gate";
 import { toDetail, toSummary } from "./library-view";
+import { trackMenuOpen } from "./menu-open";
+import type { MenuOpen } from "./menu-open";
 import type { CaptureStore } from "./store";
 import { appOrigin, harden, secureWebPreferences } from "./window-security";
 
@@ -50,8 +55,8 @@ const titleBarOverlay = (): Electron.TitleBarOverlayOptions => {
   };
 };
 
-/** How long a close or a quit waits for the page to save what is typed. */
-const FLUSH_TIMEOUT_MS = 1000;
+/** The page answers a close or a quit once its own wait for the saves is over; one that hasn't answered by then is gone or hung. */
+const LEAVE_ANSWER_TIMEOUT_MS = LEAVE_SAVE_WAIT_MS + 2000;
 
 /** A copy waits longer: it copies nothing unless the save is known to have reached the disk. */
 const COPY_FLUSH_TIMEOUT_MS = 5000;
@@ -70,12 +75,18 @@ export interface LibraryWindow {
   readonly shownDone: () => boolean | null;
   /** Runs once the page has loaded; the page keeps a command that arrives before it listens. */
   readonly whenLoaded: (run: () => void) => void;
-  /** Asks the page to save what is typed, and waits for it, at most a second. */
-  readonly flushEdits: () => Promise<void>;
-  /** Asks the page to save what is typed into one capture, for a copy; fails when that save fails or doesn't finish. */
-  readonly saveEdits: (id: CaptureId) => Promise<ActionResult>;
+  /**
+   * Before a quit: the page saves what is typed, then `then` runs. While
+   * changes couldn't be saved, the page holds the quit and asks the user, and
+   * `then` runs only once the user retries or discards them.
+   */
+  readonly leave: (leaving: "quit" | "restart", then: () => void) => void;
+  /** Asks the page to save what is typed into one capture, for a copy, and hands back what the copy carries; fails when that save fails or doesn't finish. */
+  readonly saveEdits: (id: CaptureId) => Promise<SavedEdits>;
   /** For a quit that already saved the edits: the window closes without asking again. */
   readonly allowClose: () => void;
+  /** Whether a menu is open in the focused library, so the app menu's keys skip. */
+  readonly menuOpen: () => boolean;
 }
 
 export interface LibraryOptions {
@@ -108,10 +119,15 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
   let floatOnTop = false;
   let shownDone: boolean | null = null;
   let quitting = false;
+  /** The page let this window close: its typing is saved or discarded. */
+  let mayClose = false;
+  let menu: MenuOpen | null = null;
   /** The page's answers to `flush`, by token; null while one is awaited. */
-  const answers = new Map<string, ActionResult | null>();
+  const answers = new Map<string, SavedEdits | null>();
   const flushed = new EventTarget();
   let flushCount = 0;
+  // The page's prompt resumes a close or a quit through this; the gate that held it needs the server first.
+  const held = { resume: (): void => undefined };
 
   // Dragged copies wait here for the drop; a drop can finish after startDrag returns, so they are cleared on delete and at launch.
   const dragStaging = path.join(app.getPath("temp"), "Inset Context Pin");
@@ -145,10 +161,16 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
         return entry === undefined ? null : toDetail(entry);
       },
       list: () => store.list().map(toSummary),
+      menuOpen: (open) => {
+        menu?.set(open);
+      },
       openSettings: options.openSettings,
       reportShown: (shown) => {
         shownDone = shown?.done ?? null;
         options.onFocusChange();
+      },
+      resumeLeaving: () => {
+        held.resume();
       },
       remove: async (id) => {
         const result = await store.remove(id);
@@ -203,19 +225,20 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
     server.emit("changed", null);
   });
 
-  /** A page that is closed or still loading has nothing typed to save. */
+  /** The page's answer, or null when it doesn't answer in time. A page that is closed or still loading has nothing typed to save. */
   const askToSave = async (
-    id: CaptureId | null,
+    request:
+      | { readonly id: CaptureId }
+      | { readonly id: null; readonly leaving: Leaving },
     timeoutMs: number
-  ): Promise<ActionResult> => {
+  ): Promise<SavedEdits | null> => {
     if (window === null || window.webContents.isLoading()) {
-      return OK;
+      return { fields: null, ok: true };
     }
 
     flushCount += 1;
 
     const token = String(flushCount);
-    const tooLong = fail("Saving took too long.");
 
     answers.set(token, null);
 
@@ -223,37 +246,55 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
       signal: AbortSignal.timeout(timeoutMs),
     });
 
-    server.emit("flush", { id, token });
+    server.emit("flush", { ...request, token });
 
     try {
       await answer;
 
-      return answers.get(token) ?? tooLong;
+      return answers.get(token) ?? null;
     } catch {
-      return tooLong;
+      return null;
     } finally {
       answers.delete(token);
     }
   };
 
-  // A page that doesn't answer in time keeps what its pagehide save manages.
-  const flushEdits = async (): Promise<void> => {
-    await askToSave(null, FLUSH_TIMEOUT_MS);
+  const saveEdits = async (id: CaptureId): Promise<SavedEdits> =>
+    (await askToSave({ id }, COPY_FLUSH_TIMEOUT_MS)) ?? {
+      message: "Saving took too long.",
+      ok: false,
+    };
+
+  const surface = (): void => {
+    if (window === null) {
+      return;
+    }
+
+    if (window.isMinimized()) {
+      window.restore();
+    }
+
+    bringToFront();
+    window.show();
+    window.focus();
   };
+
+  // A page that doesn't answer in time keeps what its pagehide save manages.
+  const leaveGate = createLeaveGate({
+    ask: async (leaving) =>
+      await askToSave({ id: null, leaving }, LEAVE_ANSWER_TIMEOUT_MS),
+    surface,
+  });
+
+  held.resume = leaveGate.resume;
 
   const open = (id?: CaptureId): void => {
     if (window !== null) {
-      if (window.isMinimized()) {
-        window.restore();
-      }
-
       if (id !== undefined) {
         server.emit("show", id);
       }
 
-      bringToFront();
-      window.show();
-      window.focus();
+      surface();
 
       return;
     }
@@ -275,6 +316,7 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
     });
 
     window = created;
+    menu = trackMenuOpen({ contents: created.webContents, window: created });
 
     if (floatOnTop) {
       created.setAlwaysOnTop(true, "floating");
@@ -300,31 +342,31 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
 
       options.onOpened();
     });
-    // The page saves what is typed first; its own pagehide save can't reach main from a closed window.
-    let saved = false;
 
-    const closeAfterSaving = async (): Promise<void> => {
-      await flushEdits();
-      saved = true;
+    const closeNow = (): void => {
+      mayClose = true;
 
       if (!created.isDestroyed()) {
         created.close();
       }
     };
 
+    // The page saves what is typed first; its own pagehide save can't reach main from a closed window.
     created.on("close", (event) => {
-      if (saved || quitting) {
+      if (mayClose || quitting) {
         return;
       }
 
       event.preventDefault();
-      void closeAfterSaving();
+      void leaveGate.leave("close", closeNow);
     });
     created.on("focus", options.onFocusChange);
     created.on("blur", options.onFocusChange);
     created.on("closed", () => {
       nativeTheme.off("updated", followTheme);
       window = null;
+      menu = null;
+      mayClose = false;
       shownDone = null;
       options.onClosed();
     });
@@ -354,9 +396,11 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
         server.emit("command", command);
       }
     },
-    flushEdits,
     isFloating: () => floatOnTop,
-    saveEdits: async (id) => await askToSave(id, COPY_FLUSH_TIMEOUT_MS),
+    leave: (leaving, then) => {
+      void leaveGate.leave(leaving, then);
+    },
+    saveEdits,
     shownDone: () => shownDone,
     whenLoaded: (run) => {
       if (window === null) {
@@ -372,6 +416,7 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
     isFocused: () => window?.isFocused() ?? false,
     isOpen: () => window !== null,
     isVisible: () => window?.isVisible() ?? false,
+    menuOpen: () => menu?.holdsKeys() ?? false,
     open,
     setFloating: (on) => {
       floatOnTop = on;

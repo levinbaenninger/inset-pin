@@ -12,6 +12,7 @@ import {
 import type {
   CaptureId,
   CaptureStatus,
+  EditableFields,
   PointVia,
   SavedPin,
   Step,
@@ -169,16 +170,35 @@ export type ActionResult =
   | { readonly ok: true }
   | { readonly ok: false; readonly message: string };
 
-const ActionResultSchema = z.union([
-  z.object({ ok: z.literal(true) }),
-  z.object({ message: z.string().max(2000), ok: z.literal(false) }),
+const FailureSchema = z.object({
+  message: z.string().max(2000),
+  ok: z.literal(false),
+});
+
+/**
+ * How saving a capture's typing went, for a copy: the fields a copy carries,
+ * as saved when the copy started, or null when nothing was typed and the
+ * stored capture is current.
+ */
+export type SavedEdits =
+  | { readonly ok: true; readonly fields: EditableFields | null }
+  | { readonly ok: false; readonly message: string };
+
+const SavedEditsSchema = z.union([
+  z.object({ fields: EditableFieldsSchema.nullable(), ok: z.literal(true) }),
+  FailureSchema,
 ]);
 
-/** Main asks the library to save what is typed: into one capture before copying it, or into every one (null) before the window closes. */
-export interface FlushRequest {
-  readonly token: string;
-  readonly id: CaptureId | null;
-}
+/** What main is about to do once the library's typing is saved: close the window, quit, or quit to install an update. */
+export type Leaving = "close" | "quit" | "restart";
+
+/** How long the library waits for its saves before a close or a quit, before it asks the user about what is still unsaved. */
+export const LEAVE_SAVE_WAIT_MS = 1000;
+
+/** Main asks the library to save what is typed: into one capture before copying it, or into every one before the window closes or the app quits. */
+export type FlushRequest =
+  | { readonly token: string; readonly id: CaptureId }
+  | { readonly token: string; readonly id: null; readonly leaving: Leaving };
 
 export const captureContract = defineContract({
   events: { view: event<CaptureView>() },
@@ -206,7 +226,7 @@ export const libraryContract = defineContract({
   events: {
     changed: event<null>(),
     command: event<LibraryCommand>(),
-    /** Asked before a copy, a close or a quit: save what is typed, then answer `flushed` with the same token and how the save went. */
+    /** Asked before a copy, a close or a quit: save what is typed, then answer `flushed` with the same token and how the save went. Before a close or a quit, a failure means the page holds it and asks the user. */
     flush: event<FlushRequest>(),
     /** Asked from the tray or the Dock menu to show one capture. */
     show: event<CaptureId>(),
@@ -218,19 +238,23 @@ export const libraryContract = defineContract({
     copyDetails: invoke(CaptureIdSchema, out<ActionResult>()),
     copyImage: invoke(CaptureIdSchema, out<ActionResult>()),
     copyText: invoke(CaptureIdSchema, out<ActionResult>()),
-    /** The answer to a `flush` event: the edits reached the disk, or why not. */
+    /** The answer to a `flush` event: the edits reached the disk, with what a copy carries, or why not. */
     flushed: send(
-      z.object({ result: ActionResultSchema, token: z.string().max(100) })
+      z.object({ result: SavedEditsSchema, token: z.string().max(100) })
     ),
     /** Keeps the capture in a small window above every other app. */
     floatOnTop: send(CaptureIdSchema),
     get: invoke(CaptureIdSchema, out<CaptureDetail | null>()),
     list: invoke(z.void(), out<CaptureSummary[]>()),
+    /** One of the page's menus opened or closed; while one is open, the app menu's keys stand aside. */
+    menuOpen: send(z.boolean()),
     /** Ctrl+, on Windows, where no app menu offers Settings. */
     openSettings: send(z.void()),
     remove: invoke(CaptureIdSchema, out<ActionResult>()),
     /** Whether the capture on screen is done, so the menu can name Mark as Done; null for none. */
     reportShown: send(z.object({ done: z.boolean() }).nullable()),
+    /** The close or quit the page held goes on: Retry saved everything, or the user discarded it. */
+    resumeLeaving: send(z.void()),
     setDone: invoke(
       z.object({ done: z.boolean(), id: CaptureIdSchema }),
       out<ActionResult>()

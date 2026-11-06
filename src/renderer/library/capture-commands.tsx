@@ -45,10 +45,10 @@ import type { Icon } from "@/shared/icon-button";
 import { pickShownItem } from "@/shared/menu-keys";
 import { isMac } from "@/shared/platform";
 
+import { drafts } from "./library-drafts";
 import { useLibraryState } from "./library-state";
 import { isShown, listOrder, selectionAfterRemoval } from "./list-model";
 import { useNotice } from "./notice";
-import { settleEdits } from "./pending-edits";
 
 const api = libraryBridge();
 const rootRoute = getRouteApi("__root__");
@@ -144,6 +144,8 @@ export const useCaptureCommands = (capture: SavedCapture, focus?: RowFocus) => {
       return;
     }
 
+    // Its typing can't be saved any more, so it must not hold a close.
+    drafts.forget(capture.id);
     say({ text: "Capture deleted" });
 
     if (openId === capture.id) {
@@ -158,7 +160,7 @@ export const useCaptureCommands = (capture: SavedCapture, focus?: RowFocus) => {
 
   // The floating window reads the saved capture, so it opens once the typing is saved.
   const floatAfterSaving = async (): Promise<void> => {
-    const saved = await settleEdits(capture.id);
+    const saved = await drafts.settle(capture.id);
 
     if (!saved.ok) {
       say({

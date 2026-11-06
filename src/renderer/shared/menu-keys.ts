@@ -1,4 +1,46 @@
+import { useEffect } from "react";
 import type { KeyboardEvent } from "react";
+
+let openMenus = 0;
+
+let report: (open: boolean) => void = () => {
+  // A page that doesn't tell main about its menus.
+};
+
+/**
+ * Tells main whenever the page's first menu opens and its last one closes,
+ * so main's own keys stand aside meanwhile (src/main/menu-open.ts). Main
+ * forgets on a blur, so the page says so again when the window comes back.
+ */
+export const reportMenusTo = (send: (open: boolean) => void): void => {
+  report = send;
+  window.addEventListener("focus", () => {
+    if (openMenus > 0) {
+      send(true);
+    }
+  });
+};
+
+/** Rendered inside a menu's content, which exists only while the menu is open. */
+export const MenuOpenReport = (): null => {
+  useEffect(() => {
+    openMenus += 1;
+
+    if (openMenus === 1) {
+      report(true);
+    }
+
+    return () => {
+      openMenus -= 1;
+
+      if (openMenus === 0) {
+        report(false);
+      }
+    };
+  }, []);
+
+  return null;
+};
 
 /**
  * A key an open menu shows picks that item, as a click would, whatever is

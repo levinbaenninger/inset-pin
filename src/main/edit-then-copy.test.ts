@@ -8,7 +8,7 @@ import { DueDateSchema } from "@shared/due";
 import { entryText } from "@shared/entry-text";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { InlineSaver } from "../renderer/library/inline-saver";
+import { DraftStore } from "../renderer/library/drafts";
 import { openCaptureStore } from "./store";
 import type { CaptureStore } from "./store";
 
@@ -50,20 +50,15 @@ const fieldsOf = (record: CaptureRecord): EditableFields => ({
   title: record.title,
 });
 
-/** The library's saver, talking to the real store as main does over IPC. */
-const openSaver = (): InlineSaver => {
-  const saver = new InlineSaver(ID, {
+/** The library's draft store, talking to the real store as main does over IPC. */
+const openDrafts = (): DraftStore =>
+  new DraftStore({
     update: async ({ fields, id }) => {
       const result = await store.update(id, fields);
 
       return result.ok ? { ok: true } : { message: result.message, ok: false };
     },
   });
-
-  saver.adopt(fieldsOf(stored()));
-
-  return saver;
-};
 
 const openStore = async (): Promise<void> => {
   root = await mkdtemp(path.join(tmpdir(), "inset-edit-copy-"));
@@ -81,19 +76,30 @@ describe("copying right after an edit", () => {
   afterEach(removeStore);
 
   it("copies what was just typed, not what was stored before", async () => {
-    const saver = openSaver();
+    const drafts = openDrafts();
 
-    saver.edit({ ...fieldsOf(stored()), description: "NEW DESCRIPTION" });
+    drafts.edit(
+      ID,
+      { ...fieldsOf(stored()), description: "NEW DESCRIPTION" },
+      fieldsOf(stored())
+    );
 
-    await expect(saver.settle()).resolves.toStrictEqual({ ok: true });
-    expect(entryText(stored())).toContain("NEW DESCRIPTION");
+    await expect(drafts.settle(ID)).resolves.toMatchObject({ ok: true });
+    expect(entryText(stored())).toBe(
+      "Total ignores the discount\n\nNEW DESCRIPTION"
+    );
   });
 
   it("copies a pin moved a moment ago", async () => {
-    const saver = openSaver();
+    const drafts = openDrafts();
 
-    saver.editNow({ ...fieldsOf(stored()), pins: [{ x: 300, y: 200 }] });
-    await saver.settle();
+    drafts.edit(
+      ID,
+      { ...fieldsOf(stored()), pins: [{ x: 300, y: 200 }] },
+      fieldsOf(stored()),
+      { now: true }
+    );
+    await drafts.settle(ID);
 
     expect(stored().pins).toStrictEqual([{ x: 300, y: 200 }]);
   });
@@ -104,11 +110,13 @@ describe("a migrated v1 thought", () => {
   afterEach(removeStore);
 
   it("keeps every character when another field is edited and written as v2", async () => {
-    const saver = openSaver();
+    const drafts = openDrafts();
     const due = DueDateSchema.parse("2026-11-07");
 
-    saver.editNow({ ...fieldsOf(stored()), due });
-    await saver.settle();
+    drafts.edit(ID, { ...fieldsOf(stored()), due }, fieldsOf(stored()), {
+      now: true,
+    });
+    await drafts.settle(ID);
 
     const written = CaptureRecordSchema.parse(
       JSON.parse(await readFile(path.join(root, ID, "capture.json"), "utf-8"))

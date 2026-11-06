@@ -49,6 +49,7 @@ import { MenuEntries, onMenuKey, useCaptureCommands } from "./capture-commands";
 import type { RowFocus } from "./capture-commands";
 import { useCopyEntry } from "./copy-entry";
 import { dayLabel, readOnlyText, timeOfDay } from "./format";
+import { useDraft } from "./library-drafts";
 import { useLibraryState } from "./library-state";
 import type { CaptureGroup, ListKind } from "./list-model";
 import { matchSnippet, stepProgress } from "./list-model";
@@ -87,15 +88,27 @@ const Highlighted = ({
 const RowMeta = ({
   capture,
   chip,
+  unsaved,
 }: {
   readonly capture: SavedCapture;
   readonly chip: ReactNode;
+  readonly unsaved: boolean;
 }) => {
   const progress = stepProgress(capture.steps);
 
   return (
     <span className="text-muted-foreground flex h-4.5 min-w-0 flex-row-reverse flex-wrap items-center justify-end gap-x-2 overflow-hidden text-xs tabular-nums">
       {chip}
+      {unsaved ? (
+        <span
+          className="text-destructive flex shrink-0 items-center gap-1"
+          data-meta="unsaved"
+          title="Its last changes couldn’t be saved. Open it to retry or discard them."
+        >
+          <HugeiconsIcon icon={Alert02Icon} size={12} />
+          Not saved
+        </span>
+      ) : null}
       {progress === null ? null : (
         <span
           aria-label={`${progress.done} of ${progress.total} next steps done`}
@@ -181,6 +194,7 @@ const CaptureRow = ({
   };
 
   const { commands, dialog, entries } = useCaptureCommands(capture, focus);
+  const unsaved = (useDraft(capture.id)?.error ?? null) !== null;
 
   const snippet = matchSnippet(capture, parsed.terms);
   const { chipRef, columnRef, fits } = useChipFits();
@@ -264,7 +278,11 @@ const CaptureRow = ({
                     <Highlighted terms={parsed.terms} text={snippet} />
                   </span>
                 )}
-                <RowMeta capture={capture} chip={fits ? chip : null} />
+                <RowMeta
+                  capture={capture}
+                  chip={fits ? chip : null}
+                  unsaved={unsaved}
+                />
               </span>
             </span>
             {fits ? null : <span className="mt-1 flex">{chip}</span>}

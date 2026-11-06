@@ -14,6 +14,7 @@ const actions = (): AppMenuActions => ({
   openHelp: vi.fn<() => void>(),
   openLibrary: vi.fn<() => void>(),
   openSettings: vi.fn<() => void>(),
+  pageMenuOpen: () => false,
   setFloatOnTop: vi.fn<(on: boolean) => void>(),
   showShortcuts: vi.fn<() => void>(),
 });
@@ -43,6 +44,12 @@ const item = (
   label: string
 ): MenuItemConstructorOptions | undefined =>
   items.find((entry) => entry.label === label);
+
+/** The item's key pressed, as the menu bar runs it. */
+const press = (entry: MenuItemConstructorOptions | undefined): void => {
+  // @ts-expect-error the click handler reads only the event
+  entry?.click?.(undefined, undefined, { triggeredByAccelerator: true });
+};
 
 describe(appMenuTemplate, () => {
   it("has the menus of a Mac app", () => {
@@ -95,6 +102,38 @@ describe(appMenuTemplate, () => {
     float?.click?.();
 
     expect(run.libraryCommand).toHaveBeenCalledWith("float");
+  });
+
+  it("lets a menu open in the library page keep the menu bar's own keys, while a click still runs", () => {
+    const ran: string[] = [];
+    let pageMenuOpen = true;
+
+    const run: AppMenuActions = {
+      ...actions(),
+      openLibrary: () => {
+        ran.push(`library, menu open: ${String(pageMenuOpen)}`);
+      },
+      openSettings: () => {
+        ran.push(`settings, menu open: ${String(pageMenuOpen)}`);
+      },
+      pageMenuOpen: () => pageMenuOpen,
+    };
+
+    const template = appMenuTemplate(state, run);
+    const library = item(submenu(template, "File"), "Show Library");
+    const settings = item(submenu(template, "Inset Context Pin"), "Settings…");
+
+    press(library);
+    press(settings);
+    // @ts-expect-error the click handler reads only the event
+    library?.click?.(undefined, undefined, { triggeredByAccelerator: false });
+    pageMenuOpen = false;
+    press(settings);
+
+    expect(ran).toStrictEqual([
+      "library, menu open: true",
+      "settings, menu open: false",
+    ]);
   });
 
   it("calls the pin marker a pin and floating Float on Top, never Pin", () => {

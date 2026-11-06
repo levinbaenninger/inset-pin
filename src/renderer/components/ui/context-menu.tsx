@@ -4,7 +4,7 @@ import { cn } from "cn";
 import { ContextMenu as ContextMenuPrimitive } from "radix-ui";
 import * as React from "react";
 
-import { keepKeysInMenu } from "@/shared/menu-keys";
+import { keepKeysInMenu, MenuOpenReport } from "@/shared/menu-keys";
 
 function ContextMenu({
   ...props
@@ -61,6 +61,7 @@ function ContextMenuRadioGroup({
 function ContextMenuContent({
   className,
   onKeyDownCapture,
+  children,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Content> & {
   side?: "top" | "right" | "bottom" | "left";
@@ -78,7 +79,10 @@ function ContextMenuContent({
           className
         )}
         {...props}
-      />
+      >
+        <MenuOpenReport />
+        {children}
+      </ContextMenuPrimitive.Content>
     </ContextMenuPrimitive.Portal>
   );
 }

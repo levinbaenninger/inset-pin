@@ -1,9 +1,9 @@
-import type { CaptureId } from "@shared/capture-record";
-import type { ActionResult } from "@shared/contracts";
+import type { CaptureId, EditableFields } from "@shared/capture-record";
+import type { ActionResult, SavedEdits } from "@shared/contracts";
 import { entryPlainText, entryText } from "@shared/entry-text";
 import { clipboard, ClipboardItem } from "electron";
 
-import type { PinnedImage } from "./capture-export";
+import type { PinnedImage, ShownPins } from "./capture-export";
 import type { CaptureStore } from "./store";
 
 /**
@@ -47,21 +47,37 @@ export const electronClipboard: ClipboardWriter = {
 
 export interface CopyGateOptions {
   readonly clipboard: ClipboardWriter;
-  readonly store: Pick<CaptureStore, "get" | "settled">;
-  /** Saves what the library has typed into this capture and says whether it reached the disk. */
-  readonly saveEdits: (id: CaptureId) => Promise<ActionResult>;
-  readonly pinnedImage: (id: CaptureId) => Pick<PinnedImage, "png"> | null;
+  readonly store: Pick<CaptureStore, "get">;
+  /**
+   * Saves what the library has typed into this capture, waits for the disk,
+   * and hands back the fields as they were when the copy started.
+   */
+  readonly saveEdits: (id: CaptureId) => Promise<SavedEdits>;
+  /** The saved crop with these pins drawn on it. */
+  readonly pinnedImage: (
+    id: CaptureId,
+    shown: ShownPins
+  ) => Pick<PinnedImage, "png"> | null;
 }
 
 const OK: ActionResult = { ok: true };
 
 const fail = (message: string): ActionResult => ({ message, ok: false });
 
+const fieldsOf = (record: EditableFields): EditableFields => ({
+  description: record.description,
+  due: record.due,
+  pins: record.pins,
+  steps: record.steps,
+  title: record.title,
+});
+
 /**
  * The one way anything reaches the clipboard (clipboard-writers.test.ts holds
- * every other file to that). It saves what is typed into the capture first and
- * waits for the disk, then copies the saved capture, so the copy is what the
- * page shows. When the save fails it copies nothing and says why.
+ * every other file to that). It has the library save what is typed into the
+ * capture and wait for the disk, then copies the snapshot the library took
+ * when the copy started, never the capture as it is once the wait is over.
+ * When that save fails it copies nothing and says why.
  */
 export const createCopyGate =
   ({
@@ -72,8 +88,6 @@ export const createCopyGate =
   }: CopyGateOptions): CopyGate =>
   async (id, format) => {
     const saved = await saveEdits(id);
-
-    await store.settled();
 
     if (!saved.ok) {
       return fail(
@@ -87,12 +101,13 @@ export const createCopyGate =
       return fail("This capture can’t be copied.");
     }
 
+    // Nothing typed: the stored capture is what the library shows.
+    const copied = saved.fields ?? fieldsOf(entry.record);
+
     if (format === "text" || format === "details") {
       try {
         await board.writeText(
-          format === "text"
-            ? entryPlainText(entry.record)
-            : entryText(entry.record)
+          format === "text" ? entryPlainText(copied) : entryText(copied)
         );
 
         return OK;
@@ -101,7 +116,7 @@ export const createCopyGate =
       }
     }
 
-    const pinned = pinnedImage(id);
+    const pinned = pinnedImage(id, { pins: copied.pins, title: copied.title });
 
     if (pinned === null) {
       return fail("This capture has no readable image.");
@@ -110,7 +125,7 @@ export const createCopyGate =
     try {
       await board.writeImage(
         pinned.png,
-        format === "imageAndDetails" ? entryText(entry.record) : null
+        format === "imageAndDetails" ? entryText(copied) : null
       );
 
       return OK;

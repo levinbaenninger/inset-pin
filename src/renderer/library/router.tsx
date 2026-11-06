@@ -9,6 +9,7 @@ import {
 import { libraryBridge } from "@/shared/bridge";
 
 import { CapturePage } from "./capture-page";
+import { LeavePrompt } from "./leave-prompt";
 import { LibraryStateProvider } from "./library-state";
 import { NoticeProvider } from "./notice";
 import { Shell } from "./shell";
@@ -22,6 +23,7 @@ const RootLayout = () => (
     <SidebarProvider>
       <NoticeProvider>
         <Shell />
+        <LeavePrompt />
       </NoticeProvider>
     </SidebarProvider>
   </LibraryStateProvider>

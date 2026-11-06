@@ -16,14 +16,28 @@ declare global {
   var __asked: string[] | undefined;
   /** While true, saving a capture's typing fails, as a full disk would. */
   var __failSaves: boolean | undefined;
+  /** While true, saves wait for `__releaseSaves`, as a slow disk would. */
+  var __holdSaves: boolean | undefined;
+  /** Answers every held save, each failing or not as `__failSaves` says then. */
+  var __releaseSaves: (() => void) | undefined;
+  /** The title each copy that was made carries, as the clipboard would get it. */
+  var __clipboard: string[] | undefined;
+  /** What the page last told main about its menus. */
+  var __menuOpen: boolean | undefined;
   /** Sends the page an event as main would, such as a command from the app menu. */
   var __emit: ((name: string, payload: Payload) => void) | undefined;
+
+  /** Asks the page, as main does before the window closes or the app quits, and hands back its answer. */
+  var __leave:
+    | ((leaving: "close" | "quit" | "restart") => Promise<Saved>)
+    | undefined;
 }
 
 /** A capture as the fake bridge keeps it; a read-only entry has no status. */
 interface FixtureCapture {
   readonly id: string;
   status?: { readonly kind: string; readonly at?: string };
+  title?: string;
 }
 
 export interface BridgeInput {
@@ -36,7 +50,11 @@ export interface BridgeInput {
 }
 
 /** What the page's events carry here: nothing for "changed", a command name, or a flush request. */
-type Payload = string | null | { readonly id: string; readonly token: string };
+type Payload =
+  | string
+  | null
+  | { readonly id: string; readonly token: string }
+  | { readonly id: null; readonly leaving: string; readonly token: string };
 
 type Listener = (payload: Payload) => void;
 
@@ -44,13 +62,30 @@ type Result =
   | { readonly ok: true }
   | { readonly ok: false; readonly message: string };
 
+/** The page's answer to a flush: the fields a copy carries, or null when nothing is typed. */
+type Saved =
+  | { readonly ok: true; readonly fields: { readonly title: string } | null }
+  | { readonly ok: false; readonly message: string };
+
 export const installBridge = (input: BridgeInput): void => {
   const OK = { ok: true } as const;
   const listeners = new Map<string, Listener[]>();
   const captures = [...(input.captures ?? [])];
   /** The page's answers to a flush, by token, as main waits for them. */
-  const answers = new Map<string, (result: Result) => void>();
+  const answers = new Map<string, (result: Saved) => void>();
   let flushes = 0;
+  /** Saves waiting for `__releaseSaves`, oldest first. */
+  let held: (() => void)[] = [];
+
+  globalThis.__releaseSaves = () => {
+    const waiting = held;
+
+    held = [];
+
+    for (const answer of waiting) {
+      answer();
+    }
+  };
 
   const on = (name: string, listener: Listener): (() => void) => {
     listeners.set(name, [...(listeners.get(name) ?? []), listener]);
@@ -106,31 +141,49 @@ export const installBridge = (input: BridgeInput): void => {
     ok: false,
   });
 
-  /** As main's copy gate: the page saves the capture's typing first, and nothing is copied unless that worked. */
+  /** Asks the page to save, as main does, and waits for its answer. */
+  const askPage = async (
+    request:
+      | { readonly id: string }
+      | { readonly id: null; readonly leaving: string }
+  ): Promise<Saved> => {
+    flushes += 1;
+
+    const token = `flush-${flushes}`;
+
+    // oxlint-disable-next-line promise/avoid-new -- the page answers on another channel, so this waits on its callback.
+    const answer = new Promise<Saved>((resolve) => {
+      answers.set(token, resolve);
+    });
+
+    emit("flush", { ...request, token });
+
+    const saved = await answer;
+
+    answers.delete(token);
+
+    return saved;
+  };
+
+  globalThis.__leave = async (leaving) => await askPage({ id: null, leaving });
+
+  /** As main's copy gate: the page saves the capture's typing first, nothing is copied unless that worked, and the copy carries the page's snapshot. */
   const gated =
     (name: string) =>
     async (id: string): Promise<Result> => {
       globalThis.__asked = [...(globalThis.__asked ?? []), `${name}:${id}`];
-      flushes += 1;
 
-      const token = `flush-${flushes}`;
-
-      // oxlint-disable-next-line promise/avoid-new -- the page answers on another channel, so this waits on its callback.
-      const answer = new Promise<Result>((resolve) => {
-        answers.set(token, resolve);
-      });
-
-      emit("flush", { id, token });
-
-      const saved = await answer;
-
-      answers.delete(token);
+      const saved = await askPage({ id });
 
       if (!saved.ok) {
         return refusal(saved.message);
       }
 
       record(`${name}:${id}`);
+      globalThis.__clipboard = [
+        ...(globalThis.__clipboard ?? []),
+        saved.fields?.title ?? find(id)?.title ?? "",
+      ];
 
       return OK;
     };
@@ -158,17 +211,23 @@ export const installBridge = (input: BridgeInput): void => {
       floatOnTop: (id: string) => {
         record(`floatOnTop:${id}`);
       },
-      flushed: ({ result, token }: { result: Result; token: string }) => {
+      flushed: ({ result, token }: { result: Saved; token: string }) => {
         answers.get(token)?.(result);
       },
       get: async (id: string) => await respond(find(id) ?? null),
       list: async () => await respond(captures),
+      menuOpen: (open: boolean) => {
+        globalThis.__menuOpen = open;
+      },
       on,
       openSettings: () => {
         record("openSettings");
       },
       remove: recorded("remove"),
       reportShown: nothing,
+      resumeLeaving: () => {
+        record("resumeLeaving");
+      },
       setDone: async ({ done, id }: { done: boolean; id: string }) => {
         const found = find(id);
 
@@ -198,13 +257,23 @@ export const installBridge = (input: BridgeInput): void => {
 
         record(`update:${id}:${fields.title ?? ""}`);
 
+        if (globalThis.__holdSaves === true) {
+          // oxlint-disable-next-line promise/avoid-new -- __releaseSaves answers the held save through this callback.
+          await new Promise<void>((resolve) => {
+            held.push(resolve);
+          });
+        }
+
         if (globalThis.__failSaves === true) {
           return await respond({ message: "The disk is full.", ok: false });
         }
 
         if (found !== undefined) {
-          Object.assign(found, fields);
+          Object.assign(found, structuredClone(fields));
         }
+
+        // As main: the store tells every page once the capture is written.
+        emit("changed", null);
 
         return await respond(OK);
       },

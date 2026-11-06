@@ -446,6 +446,8 @@ export const libraryShortcuts = (isMac: boolean): readonly ShortcutGroup[] => {
           label: "Previous or next capture",
         },
         { keys: keys.sidebar, label: "Show or hide the sidebar" },
+        // Inside an open menu these pick the highlighted entry, as in Shelf and Window Links.
+        { keys: `${keys.edit} / Space`, label: "Choose a menu entry" },
         { keys: keys.settings, label: "Settings" },
         { keys: keys.shortcuts, label: "Keyboard Shortcuts" },
         // The app menu's Show Library; Windows has no app menu, so it opens from the tray.

@@ -6,6 +6,7 @@ import {
   Undo02Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { canSaveTitle } from "@shared/capture-record";
 import type { EditableFields, SavedPin } from "@shared/capture-record";
 import type { LibraryCommand, SavedCapture } from "@shared/contracts";
 import {
@@ -20,14 +21,7 @@ import { applyPinKey } from "@shared/pins";
 import { captureKeyAction, fieldKeyAction, keyLabels } from "@shared/shortcuts";
 import type { PinKeyAction } from "@shared/shortcuts";
 import { getRouteApi, Link } from "@tanstack/react-router";
-import {
-  useEffect,
-  useEffectEvent,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -46,13 +40,14 @@ import { usePinKeys } from "@/shared/use-pin-keys";
 import { MenuEntries, onMenuKey, useCaptureCommands } from "./capture-commands";
 import { onCommand } from "./command-bus";
 import { useCopyEntry } from "./copy-entry";
+import { isWriting, writesNothing } from "./draft-lifecycle";
 import { formatCaptureTime, readOnlyText, sourceText } from "./format";
 import { ImageEditor } from "./image-editor";
 import type { PinChange } from "./image-editor";
-import { InlineSaver } from "./inline-saver";
+import { drafts, useDraft } from "./library-drafts";
 import { useLibraryState } from "./library-state";
 import { PaneHeader } from "./pane-header";
-import { shownFields, trackEdits } from "./pending-edits";
+import { SaveFailure } from "./save-failure";
 
 const api = libraryBridge();
 const route = getRouteApi("/captures/$captureId");
@@ -110,18 +105,21 @@ const Unavailable = ({
   </>
 );
 
-/** The capture on screen, edited in place: every field saves itself. */
+/**
+ * The capture on screen, edited in place: every field saves itself through
+ * the library's draft store, which keeps unsaved edits after the capture is
+ * left. The fields show the draft when there is one, then what is typed.
+ */
 const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
+  const { id } = capture;
   const { now } = useLibraryState();
   const { commands, dialog, entries } = useCaptureCommands(capture);
-  const saver = useMemo(() => new InlineSaver(capture.id, api), [capture.id]);
+  const draft = useDraft(id);
 
-  const { failure, fields } = useSyncExternalStore(
-    saver.subscribe,
-    saver.state
+  const [value, setValue] = useState(
+    () => drafts.get(id)?.values ?? fieldsOf(capture)
   );
 
-  const value = fields ?? fieldsOf(capture);
   const fieldsUi = useFieldsUi();
   const [selected, setSelected] = useState<number | null>(null);
   const [pinMode, setPinMode] = useState(false);
@@ -137,27 +135,30 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
     y: 0,
   };
 
-  // The first copy is taken once; later ones only when they cannot overwrite typing.
-  useEffect(() => {
-    saver.adopt(fieldsOf(capture));
-  }, [saver, capture]);
+  // A newer stored copy shows only while nothing here is unsaved, so it never overwrites typing.
+  const [shownStored, setShownStored] = useState(capture);
 
-  // Copies, exports and quitting wait for this capture's typing to be saved.
-  useEffect(() => trackEdits(capture.id, saver), [saver, capture.id]);
+  if (shownStored !== capture) {
+    setShownStored(capture);
 
-  // Leaving the capture saves what is left; closing the window runs no cleanup, so pagehide does.
+    if (draft === undefined && !writesNothing(value, fieldsOf(capture))) {
+      setValue(fieldsOf(capture));
+    }
+  }
+
+  // Leaving the capture saves what is left, and the draft outlives the page; closing the window runs no cleanup, so pagehide does.
   useEffect(() => {
     const flush = (): void => {
-      saver.flush({ leaving: true });
+      drafts.flush(id);
     };
 
     window.addEventListener("pagehide", flush);
 
     return () => {
       window.removeEventListener("pagehide", flush);
-      saver.flush();
+      flush();
     };
-  }, [saver]);
+  }, [id]);
 
   // The app menu names Mark as Done after the capture on screen.
   useEffect(() => {
@@ -171,35 +172,41 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
     []
   );
 
+  /** Typing saves after a pause; a ticked step, a moved pin or an undo saves at once. */
+  const change = (next: EditableFields, immediately = false): void => {
+    setValue(next);
+    drafts.edit(id, next, fieldsOf(capture), { now: immediately });
+  };
+
   const setFields = (next: FieldsValue, immediately = false): void => {
-    if (immediately) {
-      saver.editNow({ ...value, ...next });
-    } else {
-      saver.edit({ ...value, ...next });
+    change({ ...value, ...next }, immediately);
+  };
+
+  /** A title left blank goes back to the one on disk. */
+  const restoreBlankTitle = (): void => {
+    if (!canSaveTitle(value.title)) {
+      change({
+        ...value,
+        title: drafts.get(id)?.confirmed.title ?? capture.title,
+      });
     }
   };
 
   /** Every pin edit goes through here, so it can be undone with ⌘Z, a gesture at a time. */
-  const editPins = (pins: readonly SavedPin[], change: PinChange): void => {
+  const editPins = (pins: readonly SavedPin[], pinChange: PinChange): void => {
     const before = value.pins;
 
     // Updaters, since an edit and the selection change after it land in the same render.
-    setHistory((current) => recordPins(current, before, gestureOf(change)));
+    setHistory((current) => recordPins(current, before, gestureOf(pinChange)));
 
-    const next = { ...value, pins: [...pins] };
-
-    if (savesNow(change)) {
-      saver.editNow(next);
-    } else {
-      saver.edit(next);
-    }
+    change({ ...value, pins: [...pins] }, savesNow(pinChange));
   };
 
   const restore = (step: HistoryStep<SavedPin> | null): void => {
     if (step !== null) {
       setHistory(step.history);
       setSelected(null);
-      saver.editNow({ ...value, pins: [...step.pins] });
+      change({ ...value, pins: [...step.pins] }, true);
     }
   };
 
@@ -425,20 +432,28 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
               now={now}
               onChange={setFields}
               onLeave={() => {
-                saver.flush();
+                drafts.flush(id);
               }}
-              onTitleBlur={() => {
-                saver.restoreBlankTitle();
-              }}
+              onTitleBlur={restoreBlankTitle}
               titlePlaceholder="Title"
               ui={fieldsUi}
               value={value}
               variant="page"
             />
-            {failure === null ? null : (
-              <p className="text-destructive text-xs" role="alert">
-                Couldn’t save. {failure}
-              </p>
+            {draft === undefined || draft.error === null ? null : (
+              <SaveFailure
+                error={draft.error}
+                onDiscard={() => {
+                  drafts.discard(id);
+                  setValue(fieldsOf(capture));
+                  focusTitle();
+                }}
+                onRetry={() => {
+                  drafts.flush(id);
+                  focusTitle();
+                }}
+                writing={isWriting(draft)}
+              />
             )}
           </div>
           <ImageEditor
@@ -450,18 +465,16 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
             }}
             onDragOut={() => {
               // The drag can't wait for a save, so it carries the pins on screen.
-              const shown = shownFields(capture.id) ?? value;
-
-              saver.flush();
+              drafts.flush(id);
               api.startImageDrag({
-                id: capture.id,
-                pins: shown.pins,
-                title: shown.title.trim() === "" ? capture.title : shown.title,
+                id,
+                pins: value.pins,
+                title: canSaveTitle(value.title) ? value.title : capture.title,
               });
             }}
             onLeaveLabel={() => {
               setHistory(endGesture);
-              saver.flush();
+              drafts.flush(id);
             }}
             onPinMode={setPinMode}
             onSelect={select}

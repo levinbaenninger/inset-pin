@@ -30,9 +30,28 @@ export interface AppMenuActions {
   readonly showShortcuts: () => void;
   readonly checkForUpdates: () => void;
   readonly installUpdate: () => void;
+  /** A menu is open in the library page in front, so the keys are the page menu's. */
+  readonly pageMenuOpen: () => boolean;
 }
 
 const SEPARATOR: MenuItemConstructorOptions = { type: "separator" };
+
+/**
+ * A key the menu bar runs itself does nothing while a menu is open in the
+ * library page: the open menu has the keys. A click in the menu bar still runs.
+ */
+const unlessPageMenu =
+  (
+    actions: AppMenuActions,
+    run: () => void
+  ): MenuItemConstructorOptions["click"] =>
+  (_item, _window, event) => {
+    if (event.triggeredByAccelerator === true && actions.pageMenuOpen()) {
+      return;
+    }
+
+    run();
+  };
 
 const updateItems = (
   update: UpdateState | null,
@@ -132,7 +151,7 @@ export const appMenuTemplate = (
       SEPARATOR,
       {
         accelerator: "CommandOrControl+,",
-        click: actions.openSettings,
+        click: unlessPageMenu(actions, actions.openSettings),
         label: "Settings…",
       },
       SEPARATOR,
@@ -155,7 +174,7 @@ export const appMenuTemplate = (
       },
       {
         accelerator: "CommandOrControl+L",
-        click: actions.openLibrary,
+        click: unlessPageMenu(actions, actions.openLibrary),
         label: "Show Library",
       },
       SEPARATOR,
