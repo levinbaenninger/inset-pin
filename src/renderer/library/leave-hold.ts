@@ -1,15 +1,26 @@
-import { LEAVE_SAVE_WAIT_MS, SAVE_TOO_SLOW } from "@shared/contracts";
+import {
+  DISCARD_PENDING,
+  LEAVE_SAVE_WAIT_MS,
+  SAVE_TOO_SLOW,
+} from "@shared/contracts";
 import type { ActionResult, Leaving } from "@shared/contracts";
 
-import type { DraftStore } from "./drafts";
+import type { Discarding, DraftStore } from "./drafts";
+
+/**
+ * What the prompt asks, and so its buttons:
+ * - retry: changes couldn't be saved, or not in time. Retry, or Discard and close.
+ * - keep: main couldn't discard them (SPEC round 9). Keep changes, or Discard again.
+ * - wait: only Discards main hasn't answered within the limit (SPEC round 10). Wait, or Close (Quit) anyway.
+ */
+export type LeaveAsks = "retry" | "keep" | "wait";
 
 /** A close or a quit held while changes couldn't be saved: what the prompt says. */
 export interface LeavePrompt {
   readonly count: number;
   readonly message: string;
   readonly leaving: Leaving;
-  /** Every change it asks about is one main couldn't discard. */
-  readonly undiscarded: boolean;
+  readonly asks: LeaveAsks;
 }
 
 export interface LeaveHold {
@@ -21,7 +32,9 @@ export interface LeaveHold {
   readonly ask: (leaving: Leaving) => ActionResult;
   readonly get: () => LeavePrompt | null;
   readonly subscribe: (listener: () => void) => () => void;
+  /** The prompt's default action: Retry, Keep changes, or Wait. */
   readonly retry: () => void;
+  /** The prompt's other action: Discard and close, Discard again, or Close (Quit) anyway. */
   readonly discard: () => void;
   readonly cancel: () => void;
 }
@@ -36,7 +49,7 @@ export interface LeaveHoldDeps {
 
 /**
  * - waiting: main holds the close while the saves get up to the wait limit; nothing shows yet.
- * - asking: the prompt shows. `overdue` once the latest wait (the first, or a Retry's) ran out.
+ * - asking: the prompt shows. `overdue` once the latest wait (the first, a Retry's, a Discard again's or Wait's) ran out.
  */
 type State =
   | { readonly kind: "idle" }
@@ -63,7 +76,25 @@ const same = (a: LeavePrompt | null, b: LeavePrompt | null): boolean =>
     a.count === b.count &&
     a.message === b.message &&
     a.leaving === b.leaving &&
-    a.undiscarded === b.undiscarded);
+    a.asks === b.asks);
+
+/** Why the close waits on main, what leaving now does about it, and what it loses. */
+const discardingMessage = (
+  leaving: Leaving,
+  { typed }: Discarding,
+  overdue: boolean
+): string =>
+  [
+    overdue
+      ? DISCARD_PENDING
+      : "Waiting for Inset to put the earlier version back…",
+    leaving === "close"
+      ? "Close anyway lets it finish on its own."
+      : "Quit anyway finishes it the next time Inset starts.",
+    typed ? "What you typed since won’t be kept." : null,
+  ]
+    .filter((part) => part !== null)
+    .join(" ");
 
 /**
  * Before the window closes or the app quits, every draft is saved, waiting
@@ -73,6 +104,11 @@ const same = (a: LeavePrompt | null, b: LeavePrompt | null): boolean =>
  * or by itself), or when the user discards the changes: at once, or, for a
  * Discard again, once main has put back what is saved. Cancel keeps both the
  * drafts and the window.
+ *
+ * A Discard main hasn't answered within the limit never traps the close
+ * (SPEC round 10): the prompt offers Wait, which waits for main again, and
+ * Close (Quit) anyway, which goes on at once. Main's marker finishes that
+ * Discard at the next start, and a library opened before then shows it.
  */
 export const createLeaveHold = ({
   drafts,
@@ -86,40 +122,64 @@ export const createLeaveHold = ({
   let discarding = false;
   const listeners = new Set<() => void>();
 
-  const publish = (): void => {
+  /** What the prompt shows now: null when nothing, undefined to leave it as it is. */
+  const promptNow = (): LeavePrompt | null | undefined => {
     const unsaved = drafts.unsaved();
 
-    const next: LeavePrompt | null =
-      state.kind !== "asking" || unsaved === null
-        ? null
-        : {
-            count: unsaved.count,
-            leaving: state.leaving,
-            message:
-              unsaved.error === null || (state.overdue && unsaved.pending)
-                ? SAVE_TOO_SLOW
-                : unsaved.error,
-            undiscarded: unsaved.undiscarded,
-          };
+    if (state.kind !== "asking" || unsaved === null) {
+      return null;
+    }
 
-    if (same(prompt, next)) {
+    const owed = drafts.discarding();
+    const { count } = unsaved;
+    const { leaving, overdue } = state;
+
+    if (owed !== null && owed.count === count) {
+      // Main usually answers a Discard again at once, so the prompt that sent it stays until the limit runs out.
+      if (!overdue && prompt !== null && prompt.asks !== "wait") {
+        return undefined;
+      }
+
+      return {
+        asks: "wait",
+        count,
+        leaving,
+        message: discardingMessage(leaving, owed, overdue),
+      };
+    }
+
+    return {
+      asks: unsaved.undiscarded ? "keep" : "retry",
+      count,
+      leaving,
+      message:
+        unsaved.error === null || (overdue && unsaved.pending)
+          ? SAVE_TOO_SLOW
+          : unsaved.error,
+    };
+  };
+
+  const publish = (): void => {
+    const shows = promptNow();
+
+    if (shows === undefined || same(prompt, shows)) {
       return;
     }
 
-    prompt = next;
+    prompt = shows;
 
     for (const listener of listeners) {
       listener();
     }
   };
 
-  const become = (next: State): void => {
+  const become = (following: State): void => {
     clearTimeout(timer);
-    state = next;
+    state = following;
     publish();
   };
 
-  /** The prompt's message turns to "didn't finish in time" if saves are still on their way once the limit is over. */
+  /** The prompt changes once the limit is over and saves or Discards are still on their way. */
   const startLimit = (): void => {
     timer = setTimeout(() => {
       if (state.kind === "asking") {
@@ -129,14 +189,26 @@ export const createLeaveHold = ({
     }, LEAVE_SAVE_WAIT_MS);
   };
 
+  /** Asks again, giving what was just sent to main up to the limit. */
+  const waitAgain = (): void => {
+    if (state.kind === "asking") {
+      become({ ...state, overdue: false });
+      startLimit();
+    }
+  };
+
+  const leave = (): void => {
+    become(IDLE);
+    resume();
+  };
+
   drafts.subscribe(() => {
     if (state.kind === "idle" || discarding) {
       return;
     }
 
     if (drafts.unsaved() === null) {
-      become(IDLE);
-      resume();
+      leave();
     } else {
       publish();
     }
@@ -185,9 +257,15 @@ export const createLeaveHold = ({
     cancel: () => {
       become(IDLE);
     },
-    // A Discard again main hasn't answered still holds the close: it goes on once main puts back what is saved, and asks again if it can't.
+    // Close (Quit) anyway leaves the Discards on their way to main. Discard again holds the close until main puts back what is saved, and asks again if it can't or doesn't answer in time.
     discard: () => {
       if (state.kind === "idle") {
+        return;
+      }
+
+      if (prompt?.asks === "wait") {
+        leave();
+
         return;
       }
 
@@ -196,10 +274,9 @@ export const createLeaveHold = ({
       discarding = false;
 
       if (drafts.unsaved() === null) {
-        become(IDLE);
-        resume();
+        leave();
       } else {
-        publish();
+        waitAgain();
       }
     },
     get: () => prompt,
@@ -208,9 +285,13 @@ export const createLeaveHold = ({
         return;
       }
 
-      become({ ...state, overdue: false });
-      startLimit();
-      drafts.retryAll();
+      const asks = prompt?.asks;
+
+      waitAgain();
+
+      if (asks !== "wait") {
+        drafts.retryAll();
+      }
     },
     subscribe: (listener) => {
       listeners.add(listener);

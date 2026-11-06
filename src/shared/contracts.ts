@@ -236,6 +236,10 @@ export const LEAVE_SAVE_WAIT_MS = 3000;
 /** What a wait that ran out says, wherever it shows. */
 export const SAVE_TOO_SLOW = "Saving didn’t finish in time.";
 
+/** Why a copy or a close waits on a Discard main hasn't answered. It never says "save" (SPEC round 10). */
+export const DISCARD_PENDING =
+  "Inset is still putting the earlier version back.";
+
 /**
  * Main asks the library to save what is typed: into one capture before
  * copying it (or again, for Retry on a refused copy), or into every one

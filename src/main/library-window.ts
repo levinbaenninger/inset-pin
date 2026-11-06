@@ -327,7 +327,8 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
     surface,
     waitMs: LEAVE_SAVE_WAIT_MS,
     windowOpen: () => window !== null && !window.webContents.isDestroyed(),
-    written: async () => await withinLimit(store.settled),
+    // A Discard whose marker is down needn't hold a quit: the next start finishes it (SPEC round 10, Quit anyway).
+    written: async () => await withinLimit(store.durable),
   });
 
   page.answered = link.answered;

@@ -1,5 +1,5 @@
 import type { Leaving } from "@shared/contracts";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   AlertDialog,
@@ -21,28 +21,47 @@ const DISCARD: Record<Leaving, string> = {
   restart: "Discard and quit",
 };
 
-const buttonsOf = ({
-  leaving,
-  undiscarded,
-}: Prompt): { readonly retry: string; readonly discard: string } =>
-  undiscarded
-    ? { discard: "Discard again", retry: "Keep changes" }
-    : { discard: DISCARD[leaving], retry: "Retry" };
+const ANYWAY: Record<Leaving, string> = {
+  close: "Close anyway",
+  quit: "Quit anyway",
+  restart: "Quit anyway",
+};
 
-const titleOf = ({ count, undiscarded }: Prompt): string => {
-  const failed = undiscarded ? "discarded" : "saved";
+/** The title and the two answers: the default one (Return) and the other. */
+const wordsOf = ({ asks, count, leaving }: Prompt) => {
+  const changes = count === 1 ? "1 change" : `${String(count)} changes`;
 
-  return count === 1
-    ? `1 change couldn’t be ${failed}`
-    : `${String(count)} changes couldn’t be ${failed}`;
+  if (asks === "keep") {
+    return {
+      discard: "Discard again",
+      retry: "Keep changes",
+      title: `${changes} couldn’t be discarded`,
+    };
+  }
+
+  if (asks === "wait") {
+    return {
+      discard: ANYWAY[leaving],
+      retry: "Wait",
+      title: `${changes} ${count === 1 ? "isn’t" : "aren’t"} discarded yet`,
+    };
+  }
+
+  return {
+    discard: DISCARD[leaving],
+    retry: "Retry",
+    title: `${changes} couldn’t be saved`,
+  };
 };
 
 /**
  * Asked in the library before it closes, or before the app quits, while
- * changes couldn't be saved, or couldn't be discarded (Keep changes and
- * Discard again, SPEC round 9). Return retries (keeps) whichever button has
- * the focus, Escape cancels, and Space presses the focused button, so
- * Discard stays a deliberate choice.
+ * changes couldn't be saved, couldn't be discarded (Keep changes and Discard
+ * again, SPEC round 9), or main hasn't answered their Discard in time (Wait
+ * and Close or Quit anyway, SPEC round 10). Return takes the default answer
+ * (Retry, Keep changes or Wait) whichever button has the focus, Escape
+ * cancels, and Space presses the focused button, so the other answer stays a
+ * deliberate choice.
  */
 export const LeavePrompt = () => {
   const prompt = useLeavePrompt();
@@ -55,6 +74,18 @@ export const LeavePrompt = () => {
     setShown(prompt);
   }
 
+  const asks = prompt?.asks;
+
+  // A prompt that turns into another while open, such as a Discard again main doesn't answer in time, puts the focus back on its default answer.
+  useEffect(() => {
+    if (asks !== undefined) {
+      retryRef.current?.focus();
+    }
+  }, [asks]);
+
+  const words =
+    shown === null ? null : { ...wordsOf(shown), message: shown.message };
+
   return (
     <AlertDialog
       onOpenChange={(open) => {
@@ -64,7 +95,7 @@ export const LeavePrompt = () => {
       }}
       open={prompt !== null}
     >
-      {shown === null ? null : (
+      {words === null ? null : (
         <AlertDialogContent
           data-testid="leave-prompt"
           // No trigger opened it, so on Cancel the focus goes back to where it was, such as the title being typed.
@@ -72,7 +103,7 @@ export const LeavePrompt = () => {
             event.preventDefault();
             returnRef.current?.focus();
           }}
-          // Before the focused button sees it, so Return on Discard or Cancel still retries.
+          // Before the focused button sees it, so Return on the other answer or Cancel still takes the default one.
           onKeyDownCapture={(event) => {
             if (event.key === "Enter" && !event.nativeEvent.isComposing) {
               event.preventDefault();
@@ -90,8 +121,8 @@ export const LeavePrompt = () => {
           }}
         >
           <AlertDialogHeader>
-            <AlertDialogTitle>{titleOf(shown)}</AlertDialogTitle>
-            <AlertDialogDescription>{shown.message}</AlertDialogDescription>
+            <AlertDialogTitle>{words.title}</AlertDialogTitle>
+            <AlertDialogDescription>{words.message}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
@@ -101,7 +132,7 @@ export const LeavePrompt = () => {
               }}
               variant="destructive"
             >
-              {buttonsOf(shown).discard}
+              {words.discard}
             </Button>
             <Button
               data-default-action=""
@@ -110,7 +141,7 @@ export const LeavePrompt = () => {
               }}
               ref={retryRef}
             >
-              {buttonsOf(shown).retry}
+              {words.retry}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>

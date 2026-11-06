@@ -179,6 +179,54 @@ const landed = async () => {
   return { answers, drafts };
 };
 
+/** A save that failed, then the banner's Retry, which main wrote but hasn't answered. */
+const retriedAndLanded = async () => {
+  const answers = holdAnswers();
+
+  const drafts = new DraftStore({
+    discard: async ({ id, tag }) => toAction(await store.discard(id, tag)),
+    update: async ({ fields, id, tag }) => {
+      const result = toAction(await store.update(id, fields, tag));
+
+      if (result.ok) {
+        await answers.held;
+      }
+
+      return result;
+    },
+  });
+
+  disk.full = true;
+  drafts.edit(ID, DISCARDED, BASE, { now: true });
+  await vi.waitFor(() => {
+    expect(drafts.get(ID)?.kind).toBe("failed");
+  });
+  disk.full = false;
+  void drafts.retry(ID);
+  await vi.waitFor(async () => {
+    const written = await onDisk();
+
+    expect(written.title).toBe(DISCARDED.title);
+  });
+
+  return { answers, drafts };
+};
+
+/** Whether the wait ends within a moment. */
+const within = async (wait: Promise<void>): Promise<boolean> =>
+  await Promise.race([
+    (async () => {
+      await wait;
+
+      return true;
+    })(),
+    (async () => {
+      await delay(200);
+
+      return false;
+    })(),
+  ]);
+
 /** A save main wrote but hasn't answered, and a Discard of it that can't rename capture.json.prev back. */
 const stranded = async () => {
   const { answers, drafts } = await landed();
@@ -788,7 +836,7 @@ describe("Discard changes never writes content to undo a save (SPEC round 8)", (
             count: 1,
             leaving: "quit",
             message: "Inset can’t write to its data folder.",
-            undiscarded: true,
+            asks: "keep",
           },
           restart: BASE.title,
           writes: [],
@@ -865,7 +913,7 @@ describe("Discard changes never writes content to undo a save (SPEC round 8)", (
           count: 1,
           leaving: "close",
           message: "Inset can’t write to its data folder.",
-          undiscarded: true,
+          asks: "keep",
         },
         restart: BASE.title,
         shown: DISCARDED.title,
@@ -922,7 +970,7 @@ describe("Discard changes never writes content to undo a save (SPEC round 8)", (
                 values: draft.values,
               },
         pending,
-        prompt: hold.get()?.undiscarded,
+        prompt: hold.get()?.asks,
         restart: await restarted(),
         writes: contentOf(disk.writes.slice(writes)),
       }).toStrictEqual({
@@ -953,7 +1001,7 @@ describe("Discard changes never writes content to undo a save (SPEC round 8)", (
             undiscarded: true,
           },
         },
-        prompt: true,
+        prompt: "keep",
         restart: BASE.title,
         writes: [],
       });
@@ -1174,7 +1222,7 @@ describe("Discard changes never writes content to undo a save (SPEC round 8)", (
 
         const refusal = {
           message:
-            "Couldn’t discard your changes, so nothing was copied. Saving didn’t finish in time.",
+            "Couldn’t discard your changes, so nothing was copied. Inset is still putting the earlier version back.",
           ok: false,
           retry: false,
         };
@@ -1244,7 +1292,7 @@ describe("Discard changes never writes content to undo a save (SPEC round 8)", (
 
       hold.ask("quit");
       await vi.waitFor(() => {
-        expect(hold.get()?.undiscarded).toBeTruthy();
+        expect(hold.get()?.asks).toBe("keep");
       });
       hold.discard();
       await settle();
@@ -1252,7 +1300,7 @@ describe("Discard changes never writes content to undo a save (SPEC round 8)", (
       const stillLocked = {
         draft: drafts.get(ID)?.error,
         heard: [...heard],
-        prompt: hold.get()?.undiscarded,
+        prompt: hold.get()?.asks,
         restart: await restarted(),
       };
 
@@ -1276,10 +1324,250 @@ describe("Discard changes never writes content to undo a save (SPEC round 8)", (
             message: "Inset can’t write to its data folder.",
           },
           heard: ["shown"],
-          prompt: true,
+          prompt: "keep",
           restart: BASE.title,
         },
         unsaved: null,
+      });
+    });
+  });
+
+  describe("when main doesn't answer a Discard within the limit (SPEC round 10)", () => {
+    it("offers Wait and Close anyway for a first Discard whose restore is held, leaves on Close anyway, and the next start puts the saved version back", async () => {
+      const { answers, drafts } = await retriedAndLanded();
+      const heard: string[] = [];
+
+      const hold = createLeaveHold({
+        drafts,
+        resume: () => {
+          heard.push("resume");
+        },
+        shown: () => {
+          heard.push("shown");
+        },
+      });
+
+      disk.hold = "rename";
+      drafts.discard(ID);
+      await vi.waitFor(() => {
+        expect(disk.held).toBeTruthy();
+      });
+
+      const asked = hold.ask("close");
+
+      await vi.waitFor(
+        () => {
+          expect(heard).toStrictEqual(["shown"]);
+        },
+        { timeout: 4000 }
+      );
+
+      const prompt = hold.get();
+
+      hold.discard();
+
+      const left = {
+        heard: [...heard],
+        owed: store.owed().map(({ id, message }) => ({ id, message })),
+        restart: await restarted(),
+      };
+
+      disk.release();
+      answers.release();
+      await settle();
+
+      expect({
+        asked,
+        later: { disk: fieldsOf(await onDisk()), owed: store.owed() },
+        left,
+        prompt,
+      }).toStrictEqual({
+        asked: {
+          message: "The library holds this to save or ask first.",
+          ok: false,
+        },
+        later: { disk: BASE, owed: [] },
+        left: {
+          heard: ["shown", "resume"],
+          owed: [{ id: ID, message: null }],
+          restart: BASE.title,
+        },
+        prompt: {
+          asks: "wait",
+          count: 1,
+          leaving: "close",
+          message:
+            "Inset is still putting the earlier version back. Close anyway lets it finish on its own.",
+        },
+      });
+    }, 10_000);
+
+    it("lets a quit go on once the Discard's marker is down, while its restore is still held, but not while the marker is being written", async () => {
+      const { answers, drafts } = await landed();
+
+      disk.hold = "write";
+      drafts.discard(ID);
+      await vi.waitFor(() => {
+        expect(disk.held).toBeTruthy();
+      });
+
+      const markerHeld = await within(store.durable());
+
+      disk.held = false;
+      disk.hold = "rename";
+      disk.release();
+      await vi.waitFor(() => {
+        expect(disk.held).toBeTruthy();
+      });
+
+      const restoreHeld = {
+        durable: await within(store.durable()),
+        restart: await restarted(),
+        settled: await within(store.settled()),
+      };
+
+      disk.release();
+      answers.release();
+      await settle();
+
+      expect({
+        later: await within(store.durable()),
+        markerHeld,
+        restoreHeld,
+      }).toStrictEqual({
+        later: true,
+        markerHeld: false,
+        restoreHeld: { durable: true, restart: BASE.title, settled: false },
+      });
+    });
+
+    it("lets a quit go on when a reopened library asks again for a Discard whose marker is down and whose restore is held", async () => {
+      const { answers, drafts } = await landed();
+      const askedAgain: string[] = [];
+
+      disk.hold = "rename";
+      drafts.discard(ID);
+      await vi.waitFor(() => {
+        expect(disk.held).toBeTruthy();
+      });
+
+      const reopened = new DraftStore({
+        discard: async ({ id, tag }) => {
+          askedAgain.push(id);
+
+          return toAction(await store.discard(id, tag));
+        },
+        update: async ({ fields, id, tag }) =>
+          toAction(await store.update(id, fields, tag)),
+      });
+
+      reopened.owe(store.owed());
+      await vi.waitFor(() => {
+        expect(askedAgain).toStrictEqual([ID]);
+      });
+
+      const restoreHeld = {
+        durable: await within(store.durable()),
+        restart: await restarted(),
+        settled: await within(store.settled()),
+      };
+
+      disk.release();
+      answers.release();
+      await settle();
+
+      expect({
+        later: { disk: fieldsOf(await onDisk()), owed: store.owed() },
+        restoreHeld,
+      }).toStrictEqual({
+        later: { disk: BASE, owed: [] },
+        restoreHeld: { durable: true, restart: BASE.title, settled: false },
+      });
+    });
+
+    it("lets a quit go on once a Discard's marker is down while the save it discards is held going into capture.json, but not before the Discard", async () => {
+      const tag = { epoch: "page.1", seq: 1 };
+
+      disk.hold = "rename";
+
+      const saving = store.update(ID, DISCARDED, tag);
+
+      await vi.waitFor(() => {
+        expect(disk.held).toBeTruthy();
+      });
+
+      const beforeDiscard = await within(store.durable());
+      const discarding = store.discard(ID, tag);
+
+      await vi.waitFor(async () => {
+        await expect(
+          readFile(path.join(root, ID, "capture.json.discard"), "utf-8")
+        ).resolves.toBe("");
+      });
+
+      const installHeld = {
+        durable: await within(store.durable()),
+        restart: await restarted(),
+        settled: await within(store.settled()),
+      };
+
+      disk.release();
+
+      const discarded = await discarding;
+      const saved = await saving;
+      const answered = { discard: discarded.ok, save: saved.ok };
+
+      await settle();
+
+      expect({
+        answered,
+        beforeDiscard,
+        installHeld,
+        later: { disk: fieldsOf(await onDisk()), owed: store.owed() },
+      }).toStrictEqual({
+        answered: { discard: true, save: false },
+        beforeDiscard: false,
+        installHeld: { durable: true, restart: BASE.title, settled: false },
+        later: { disk: BASE, owed: [] },
+      });
+    });
+
+    it("refuses a library copy main stopped waiting for while the Discard is on its way, saying the Discard isn't finished", async () => {
+      const { answers, drafts } = await landed();
+      const pasted: string[] = [];
+
+      disk.hold = "rename";
+      drafts.discard(ID);
+      await vi.waitFor(() => {
+        expect(disk.held).toBeTruthy();
+      });
+
+      const copy = createCopyGate({
+        clipboard: recording(pasted),
+        pinnedImage: () => ({ png: Buffer.from(PNG) }),
+        // As main's link answers when the library page doesn't within the limit.
+        saveEdits: async () =>
+          await Promise.resolve({
+            message: "Saving didn’t finish in time.",
+            ok: false,
+          }),
+        store,
+      });
+
+      const refused = await copy(ID, "text");
+
+      disk.release();
+      answers.release();
+      await settle();
+
+      expect({ pasted, refused }).toStrictEqual({
+        pasted: [],
+        refused: {
+          message:
+            "Couldn’t discard your changes, so nothing was copied. Inset is still putting the earlier version back.",
+          ok: false,
+          retry: false,
+        },
       });
     });
   });

@@ -485,6 +485,38 @@ const failDiscard = async (page: Page): Promise<void> => {
   });
 };
 
+/**
+ * The same landed save after one that failed, then a Discard of it that main
+ * doesn't answer, as a rename a lock holds would. `__releaseDiscards` lets it
+ * go on.
+ */
+const holdDiscard = async (page: Page): Promise<void> => {
+  await failTypingInTitle(page);
+  await page.evaluate(() => {
+    globalThis.__failSaves = false;
+    globalThis.__holdAnswers = true;
+  });
+  await typeInTitle(page, " more");
+  await page.getByTestId("more").focus();
+  await page.waitForFunction(() =>
+    globalThis
+      .__storedTitle?.(location.hash.split("/").at(-1) ?? "")
+      ?.endsWith(" (typed) more")
+  );
+  await page.evaluate(() => {
+    globalThis.__holdDiscards = true;
+  });
+  await page
+    .getByTestId("save-failure")
+    .getByRole("button", { name: "Discard changes" })
+    .click();
+  await page.getByTestId("save-failure").waitFor({ state: "detached" });
+  await page.evaluate(() => {
+    globalThis.__holdAnswers = false;
+    globalThis.__releaseSaves?.();
+  });
+};
+
 /** Asks the page as main does before the window closes or the app quits, and hands back its answer. */
 const askToLeave = async (page: Page, leaving: "close" | "quit" | "restart") =>
   await page.evaluate(
@@ -929,6 +961,31 @@ const makeScenes = (
       name: "library-25-discard-failed-quit",
       page: "library",
       platforms: ["macos"],
+    },
+    {
+      // Round 10: a Discard main doesn't answer within 3 s holds the quit with Wait and Quit anyway, never with buttons that can't act.
+      act: async (page) => {
+        await holdDiscard(page);
+        await askToLeave(page, "quit");
+        await page.getByTestId("leave-prompt").waitFor();
+      },
+      data: library(),
+      hash: `/captures/${uuid(1)}`,
+      name: "library-26-discard-pending-quit",
+      page: "library",
+      platforms: ["macos"],
+    },
+    {
+      act: async (page) => {
+        await holdDiscard(page);
+        await askToLeave(page, "close");
+        await page.getByTestId("leave-prompt").waitFor();
+      },
+      data: library(),
+      hash: `/captures/${uuid(1)}`,
+      name: "library-27-discard-pending-close",
+      page: "library",
+      platforms: ["windows"],
     },
     {
       data: { view: SETTINGS_VIEW },
@@ -3414,6 +3471,104 @@ const checkDrafts = async (
           disk: aTitle,
           saves: [`discard:${a}:${aTitle} (typed) more`],
           shown: { failure: null, title: aTitle },
+        }
+      );
+    } finally {
+      await s.context.close();
+    }
+  });
+
+  // Round 11: a Discard main doesn't answer within 3 s never traps a close. The prompt offers Wait and Close anyway, Return waits whichever button has the focus, Escape cancels, and Space on Close anyway leaves; the row shows the saved title meanwhile.
+  await attempt("a close while main doesn't answer a Discard", async () => {
+    const s = await session();
+    const { page } = s;
+    const prompt = page.getByTestId("leave-prompt");
+
+    /** Return with this button focused, then what the prompt shows and whether the close went on. */
+    const returnOn = async (name: string) => {
+      await prompt.getByRole("button", { name }).focus();
+      await page.keyboard.press("Enter");
+      await page.waitForTimeout(150);
+
+      return { ...(await leavePrompt(page)), resumed: await resumes(page) };
+    };
+
+    try {
+      await holdDiscard(page);
+      await s.take();
+
+      const pending = { row: await s.rowTitle(a), shown: await s.shown() };
+      const answered = await askToLeave(page, "close");
+
+      await prompt.waitFor();
+      await page.waitForTimeout(150);
+
+      const asked = await leavePrompt(page);
+      const onCancel = await returnOn("Cancel");
+      const onAnyway = await returnOn("Close anyway");
+      const onWait = await returnOn("Wait");
+
+      await page.keyboard.press("Escape");
+
+      const cancelled = {
+        gone: await settles(prompt, "detached", 2000),
+        resumed: await resumes(page),
+      };
+
+      await askToLeave(page, "close");
+      await prompt.waitFor();
+      await prompt.getByRole("button", { name: "Close anyway" }).focus();
+      await page.keyboard.press("Space");
+
+      const left = {
+        gone: await settles(prompt, "detached", 2000),
+        resumed: await resumes(page),
+      };
+
+      await page.evaluate(() => {
+        globalThis.__holdDiscards = false;
+        globalThis.__releaseDiscards?.();
+      });
+      await page.waitForTimeout(300);
+
+      const { saves } = await s.take();
+      const waiting = `1 change isn’t discarded yetWaiting for Inset to put the earlier version back… Close anyway lets it finish on its own.CancelClose anywayWait`;
+
+      expectSame(
+        "the close prompt offers Wait and Close anyway with Wait focused; Return waits on every button; Escape cancels; Space on Close anyway leaves; the row and the capture show the saved title meanwhile, and main puts it back later",
+        {
+          answered,
+          asked,
+          cancelled,
+          disk: await page.evaluate(
+            (id) => globalThis.__storedTitle?.(id) ?? null,
+            a
+          ),
+          left,
+          onAnyway,
+          onCancel,
+          onWait,
+          pending,
+          saves,
+        },
+        {
+          answered: HELD,
+          asked: {
+            focus: "Wait",
+            prompt:
+              "1 change isn’t discarded yetInset is still putting the earlier version back. Close anyway lets it finish on its own.CancelClose anywayWait",
+          },
+          cancelled: { gone: true, resumed: [] },
+          disk: aTitle,
+          left: { gone: true, resumed: ["resumeLeaving"] },
+          onAnyway: { focus: "Close anyway", prompt: waiting, resumed: [] },
+          onCancel: { focus: "Cancel", prompt: waiting, resumed: [] },
+          onWait: { focus: "Wait", prompt: waiting, resumed: [] },
+          pending: {
+            row: aTitle,
+            shown: { failure: null, title: aTitle },
+          },
+          saves: [],
         }
       );
     } finally {

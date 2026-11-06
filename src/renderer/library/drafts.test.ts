@@ -510,7 +510,7 @@ describe(DraftStore, () => {
             count: 1,
             error: null,
             pending: true,
-            undiscarded: false,
+            undiscarded: true,
           },
         },
       });
@@ -542,7 +542,11 @@ describe(DraftStore, () => {
         late: await late,
       }).toStrictEqual({
         copied: { fields: STORED, ok: true },
-        late: { message: "Saving didn’t finish in time.", ok: false },
+        late: {
+          during: "discard",
+          message: "Inset is still putting the earlier version back.",
+          ok: false,
+        },
       });
     });
 

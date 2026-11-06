@@ -19,6 +19,8 @@ const STORED: EditableFields = {
 
 const titled = (title: string): EditableFields => ({ ...STORED, title });
 
+const nothing = (): void => undefined;
+
 const FULL: ActionResult = { message: "The disk is full.", ok: false };
 
 const HELD = {
@@ -85,6 +87,56 @@ const setup = () => {
   return { answer, drafts, failA, heldQuit, hold, take };
 };
 
+const LOCKED: ActionResult = {
+  message: "Inset can’t write to its data folder.",
+  ok: false,
+};
+
+/** A save main wrote and never answers, then a Discard of it that main answers only when the test says. */
+const discarding = () => {
+  const log: string[] = [];
+  const discards: ((result: ActionResult) => void)[] = [];
+
+  const drafts = new DraftStore({
+    discard: async ({ tag }) => {
+      log.push(`discard:${String(tag.seq)}`);
+
+      // oxlint-disable-next-line promise/avoid-new -- the test answers the Discard later, through this callback.
+      return await new Promise<ActionResult>((resolve) => {
+        discards.push(resolve);
+      });
+    },
+    update: async ({ fields }) => {
+      log.push(`save:${fields.title}`);
+
+      // oxlint-disable-next-line promise/avoid-new -- the save landed, and its answer never comes.
+      return await new Promise<ActionResult>(nothing);
+    },
+  });
+
+  const hold = createLeaveHold({
+    drafts,
+    resume: () => {
+      log.push("resume");
+    },
+    shown: () => {
+      log.push("shown");
+    },
+  });
+
+  drafts.edit(A, titled("Discard me"), STORED, { now: true });
+  drafts.discard(A);
+  log.splice(0);
+
+  /** Main answers the oldest Discard on its way, then the store reacts. */
+  const answer = async (result: ActionResult): Promise<void> => {
+    discards.shift()?.(result);
+    await vi.advanceTimersByTimeAsync(0);
+  };
+
+  return { answer, drafts, hold, take: () => log.splice(0) };
+};
+
 describe(createLeaveHold, () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -149,7 +201,7 @@ describe(createLeaveHold, () => {
         count: 1,
         leaving: "quit",
         message: "The disk is full.",
-        undiscarded: false,
+        asks: "retry",
       },
       ["save:Typed while full", "save:B typed", "shown"],
     ]);
@@ -172,7 +224,7 @@ describe(createLeaveHold, () => {
 
     expect([before, held, hold.get(), take()]).toStrictEqual([
       null,
-      { count: 1, leaving: "restart", message: TOO_SLOW, undiscarded: false },
+      { count: 1, leaving: "restart", message: TOO_SLOW, asks: "retry" },
       null,
       ["save:A typed", "shown", "resume"],
     ]);
@@ -196,7 +248,7 @@ describe(createLeaveHold, () => {
           count: 1,
           leaving: "quit",
           message: "The disk is full.",
-          undiscarded: false,
+          asks: "retry",
         },
         [
           "save:Typed while full",
@@ -359,7 +411,7 @@ describe(createLeaveHold, () => {
           count: 1,
           leaving: "quit",
           message: "Inset can’t write to its data folder.",
-          undiscarded: true,
+          asks: "keep",
         },
       },
       kept: ["save:Discard me", "resume"],
@@ -369,11 +421,6 @@ describe(createLeaveHold, () => {
   it("holds the close on Discard again until main answers, asks again when it fails, and goes on once it works", async () => {
     const log: string[] = [];
     const answers: ActionResult[] = [];
-
-    const LOCKED = {
-      message: "Inset can’t write to its data folder.",
-      ok: false,
-    } as const;
 
     const drafts = new DraftStore({
       discard: async ({ tag }) => {
@@ -408,7 +455,7 @@ describe(createLeaveHold, () => {
 
     hold.discard();
 
-    const sent = { heard: [...log], prompt: hold.get()?.undiscarded };
+    const sent = { heard: [...log], prompt: hold.get()?.asks };
 
     await vi.advanceTimersByTimeAsync(0);
 
@@ -425,11 +472,167 @@ describe(createLeaveHold, () => {
           count: 1,
           leaving: "close",
           message: "Inset can’t write to its data folder.",
-          undiscarded: true,
+          asks: "keep",
         },
       },
-      sent: { heard: ["discard:1"], prompt: true },
+      sent: { heard: ["discard:1"], prompt: "keep" },
       worked: ["discard:1", "resume"],
+    });
+  });
+
+  describe("while main hasn't answered a Discard (SPEC round 10)", () => {
+    it("offers Wait and Close anyway once the limit runs out, and Close anyway goes on at once", async () => {
+      const { hold, take } = discarding();
+      const asked = hold.ask("close");
+
+      await vi.advanceTimersByTimeAsync(2999);
+
+      const before = hold.get();
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      const stalled = { heard: take(), prompt: hold.get() };
+
+      hold.discard();
+
+      expect({
+        after: { heard: take(), prompt: hold.get() },
+        asked,
+        before,
+        stalled,
+      }).toStrictEqual({
+        after: { heard: ["resume"], prompt: null },
+        asked: HELD,
+        before: null,
+        stalled: {
+          heard: ["shown"],
+          prompt: {
+            asks: "wait",
+            count: 1,
+            leaving: "close",
+            message:
+              "Inset is still putting the earlier version back. Close anyway lets it finish on its own.",
+          },
+        },
+      });
+    });
+
+    it("keeps waiting on Wait and says so, asks again once the limit runs out, and goes on once main has put the saved version back", async () => {
+      const { answer, hold, take } = discarding();
+
+      hold.ask("quit");
+      await vi.advanceTimersByTimeAsync(3000);
+      hold.retry();
+
+      const waiting = hold.get()?.message;
+
+      await vi.advanceTimersByTimeAsync(3000);
+
+      const again = hold.get();
+
+      hold.retry();
+      await answer({ ok: true });
+
+      expect({
+        again,
+        heard: take(),
+        prompt: hold.get(),
+        waiting,
+      }).toStrictEqual({
+        again: {
+          asks: "wait",
+          count: 1,
+          leaving: "quit",
+          message:
+            "Inset is still putting the earlier version back. Quit anyway finishes it the next time Inset starts.",
+        },
+        heard: ["shown", "resume"],
+        prompt: null,
+        waiting:
+          "Waiting for Inset to put the earlier version back… Quit anyway finishes it the next time Inset starts.",
+      });
+    });
+
+    it("asks to keep the changes or discard them again once main answers that it couldn't put the saved version back", async () => {
+      const { answer, hold } = discarding();
+
+      hold.ask("close");
+      await vi.advanceTimersByTimeAsync(3000);
+      hold.retry();
+      await answer(LOCKED);
+
+      expect(hold.get()).toStrictEqual({
+        asks: "keep",
+        count: 1,
+        leaving: "close",
+        message: "Inset can’t write to its data folder.",
+      });
+    });
+
+    it("says what was typed since the Discard won't be kept, and sends none of it", async () => {
+      const { drafts, hold, take } = discarding();
+
+      drafts.edit(A, titled("Typed since"), STORED, { now: true });
+      hold.ask("restart");
+      await vi.advanceTimersByTimeAsync(3000);
+
+      expect({ heard: take(), prompt: hold.get() }).toStrictEqual({
+        heard: ["shown"],
+        prompt: {
+          asks: "wait",
+          count: 1,
+          leaving: "restart",
+          message:
+            "Inset is still putting the earlier version back. Quit anyway finishes it the next time Inset starts. What you typed since won’t be kept.",
+        },
+      });
+    });
+
+    it("keeps the prompt as it is while main answers Discard again, then offers Wait and Quit anyway once the limit runs out", async () => {
+      const { answer, hold, take } = discarding();
+
+      await answer(LOCKED);
+      hold.ask("quit");
+      await vi.advanceTimersByTimeAsync(0);
+
+      const asked = hold.get();
+
+      hold.discard();
+      await vi.advanceTimersByTimeAsync(2999);
+
+      const meanwhile = hold.get();
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      const stalled = { heard: take(), prompt: hold.get() };
+
+      hold.discard();
+
+      expect({
+        asked,
+        left: take(),
+        meanwhile: meanwhile === asked,
+        stalled,
+      }).toStrictEqual({
+        asked: {
+          asks: "keep",
+          count: 1,
+          leaving: "quit",
+          message: "Inset can’t write to its data folder.",
+        },
+        left: ["resume"],
+        meanwhile: true,
+        stalled: {
+          heard: ["shown", "discard:1"],
+          prompt: {
+            asks: "wait",
+            count: 1,
+            leaving: "quit",
+            message:
+              "Inset is still putting the earlier version back. Quit anyway finishes it the next time Inset starts.",
+          },
+        },
+      });
     });
   });
 });

@@ -157,6 +157,13 @@ export interface CaptureStore {
    * will be dropped doesn't count; a marker or tombstone on its way does.
    */
   readonly settled: () => Promise<void>;
+  /**
+   * Resolves once quitting loses nothing: as `settled`, except that a
+   * Discard whose marker is down counts as done, since the next start
+   * finishes it, even while its rename back is still on its way or queued,
+   * and so does a save it discarded that is moving files into place.
+   */
+  readonly durable: () => Promise<void>;
 }
 
 export interface StoreOptions {
@@ -266,9 +273,10 @@ const fieldsOf = (record: CaptureRecord): EditableFields => ({
   title: record.title,
 });
 
-/** A write in or beside the queue, and whether it can still change what is on disk. */
+/** A write in or beside the queue: whether it can still change what is on disk, and whether a quit now would lose what it does. */
 interface Pending {
   readonly harmless: () => boolean;
+  readonly durable: () => boolean;
 }
 
 /** Where a save is: it can be dropped until it starts moving files into place. */
@@ -308,6 +316,8 @@ export const openCaptureStore = async (
   const ended = new Map<CaptureId, Set<string>>();
   /** Per capture whose discard marker may be on disk: its write, true once it is down. */
   const markers = new Map<CaptureId, Promise<boolean>>();
+  /** Captures whose discard marker is confirmed on disk: the next start finishes their Discard. */
+  const markersDown = new Set<CaptureId>();
   /** New captures the panel gave up. */
   const withdrawn = new Set<CaptureId>();
   /** Entries a start couldn't finish a Discard for: read-only until the next start tries again. */
@@ -327,9 +337,10 @@ export const openCaptureStore = async (
   /** The tail never rejects, so one failed task never blocks the next. */
   const enqueue = async <T>(
     task: () => Promise<T>,
-    harmless: () => boolean = () => false
+    harmless: () => boolean = () => false,
+    durable: () => boolean = harmless
   ): Promise<T> => {
-    const entry: Pending = { harmless };
+    const entry: Pending = { durable, harmless };
     const run = after(tail, task);
 
     pending.add(entry);
@@ -345,7 +356,7 @@ export const openCaptureStore = async (
 
   /** A write that can't wait for the queue: settled() waits for it all the same. */
   const beside = async <T>(run: Promise<T>): Promise<T> => {
-    const entry: Pending = { harmless: () => false };
+    const entry: Pending = { durable: () => false, harmless: () => false };
 
     pending.add(entry);
 
@@ -431,9 +442,18 @@ export const openCaptureStore = async (
     const known = markers.get(id);
 
     const writing = beside(
-      (async () =>
-        (known !== undefined && (await known)) ||
-        (await touch(fileOf(id, MARKER_FILE))))()
+      (async () => {
+        const isDown =
+          (known !== undefined && (await known)) ||
+          (await touch(fileOf(id, MARKER_FILE)));
+
+        // Before beside() wakes the waits, so durable() sees it.
+        if (isDown) {
+          markersDown.add(id);
+        }
+
+        return isDown;
+      })()
     );
 
     markers.set(id, writing);
@@ -450,6 +470,7 @@ export const openCaptureStore = async (
     }
 
     await marking;
+    markersDown.delete(id);
     await fs.rm(fileOf(id, MARKER_FILE));
     await syncQuietly(path.join(root, id));
 
@@ -991,6 +1012,7 @@ export const openCaptureStore = async (
     undo.delete(id);
     ended.delete(id);
     markers.delete(id);
+    markersDown.delete(id);
     notify();
     await removeQuietly(trash);
 
@@ -1028,6 +1050,16 @@ export const openCaptureStore = async (
     );
   };
 
+  /** Resolves once every write in or beside the queue, including writes queued meanwhile, is done as far as `done` goes. */
+  const until = async (done: (write: Pending) => boolean): Promise<void> => {
+    while (![...pending].every(done)) {
+      // oxlint-disable-next-line no-await-in-loop, promise/avoid-new -- woken whenever a write ends or a discard drops one.
+      await new Promise<void>((resolve) => {
+        waking.add(resolve);
+      });
+    }
+  };
+
   return {
     discard: async (id, tag) => {
       ended.set(id, new Set([...(ended.get(id) ?? []), tag.epoch]));
@@ -1044,8 +1076,12 @@ export const openCaptureStore = async (
 
       return await enqueue(
         async () => await restoreNow(id, tag),
-        () => !owes(id, tag)
+        () => !owes(id, tag),
+        () => !owes(id, tag) || markersDown.has(id)
       );
+    },
+    durable: async () => {
+      await until((write) => write.durable());
     },
     get: (id) => cache.get(id),
     imageFile: (id) =>
@@ -1079,12 +1115,7 @@ export const openCaptureStore = async (
     setDone: async (id, done) =>
       await enqueue(async () => await statusNow(id, done)),
     settled: async () => {
-      while (![...pending].every((write) => write.harmless())) {
-        // oxlint-disable-next-line no-await-in-loop, promise/avoid-new -- woken whenever a write ends or a discard drops one.
-        await new Promise<void>((resolve) => {
-          waking.add(resolve);
-        });
-      }
+      await until((write) => write.harmless());
     },
     subscribe: (listener) => {
       listeners.add(listener);
@@ -1098,7 +1129,9 @@ export const openCaptureStore = async (
 
       return await enqueue(
         async () => await saveNow(id, fields, tag, progress),
-        () => isEnded(id, tag) && !progress.moving
+        () => isEnded(id, tag) && !progress.moving,
+        // Discarded once it was moving files: the marker down means the next start puts the saved version back.
+        () => isEnded(id, tag) && (!progress.moving || markersDown.has(id))
       );
     },
     withdraw,

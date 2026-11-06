@@ -50,7 +50,7 @@ import type { RowFocus } from "./capture-commands";
 import { useCopyEntry } from "./copy-entry";
 import { snapshotOf } from "./draft-lifecycle";
 import { dayLabel, readOnlyText, timeOfDay } from "./format";
-import { useDraft } from "./library-drafts";
+import { drafts, useDraft } from "./library-drafts";
 import { useLibraryState } from "./library-state";
 import type { CaptureGroup, ListKind } from "./list-model";
 import { matchSnippet, stepProgress } from "./list-model";
@@ -198,9 +198,11 @@ const CaptureRow = ({
   const draft = useDraft(capture.id);
   const unsaved = (draft?.error ?? null) !== null;
 
-  // The row names the capture as its page shows it: typing, a change that couldn't be saved, or what Discard changes put back while the disk catches up.
+  // The row names the capture as its page shows it: typing, a change that couldn't be saved, or what Discard changes puts back while main catches up.
   const title =
-    draft === undefined ? capture.title : snapshotOf(draft).payload.title;
+    draft === undefined
+      ? (drafts.saved(capture.id)?.title ?? capture.title)
+      : snapshotOf(draft).payload.title;
 
   const snippet = matchSnippet(capture, parsed.terms);
   const { chipRef, columnRef, fits } = useChipFits();

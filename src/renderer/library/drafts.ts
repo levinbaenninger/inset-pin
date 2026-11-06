@@ -1,5 +1,9 @@
 import type { CaptureId, EditableFields } from "@shared/capture-record";
-import { LEAVE_SAVE_WAIT_MS, SAVE_TOO_SLOW } from "@shared/contracts";
+import {
+  DISCARD_PENDING,
+  LEAVE_SAVE_WAIT_MS,
+  SAVE_TOO_SLOW,
+} from "@shared/contracts";
 import type {
   ActionResult,
   OwedDiscard,
@@ -62,8 +66,15 @@ export interface Unsaved {
   readonly error: string | null;
   /** Whether any of it is still being saved, rather than waiting for Retry. */
   readonly pending: boolean;
-  /** Whether all of it is changes main couldn't discard, so leaving asks about discarding rather than saving. */
+  /** Whether all of it main has answered is changes it couldn't discard, so leaving asks about discarding rather than saving. */
   readonly undiscarded: boolean;
+}
+
+/** Captures whose Discard main hasn't answered yet. */
+export interface Discarding {
+  readonly count: number;
+  /** Whether any holds typing done since its Discard, which leaving before main answers loses. */
+  readonly typed: boolean;
 }
 
 /** How the wait before a close or a quit ended. */
@@ -396,15 +407,29 @@ export class DraftStore {
       (draft) => draft.error !== null
     )?.error;
 
+    // Typing behind a Discard on its way waits for main's answer, as the Discard does.
+    const answered = [...this.#drafts].flatMap(([id, draft]) =>
+      this.#undoing.has(id) ? [] : [draft]
+    );
+
     return count === 0
       ? null
       : {
           count,
           error: error?.message ?? null,
           pending: !this.#quiet(),
-          undiscarded: left.every(waitsForUser),
+          undiscarded: answered.every(waitsForUser),
         };
   };
+
+  /** The captures whose Discard main hasn't answered yet; null when there are none. */
+  readonly discarding = (): Discarding | null =>
+    this.#undoing.size === 0
+      ? null
+      : {
+          count: this.#undoing.size,
+          typed: [...this.#undoing.keys()].some((id) => this.#drafts.has(id)),
+        };
 
   /** Retry for every capture that holds changes: the user asked, so a Discard main couldn't finish is kept too (Keep changes). */
   retryAll(): void {
@@ -467,7 +492,7 @@ export class DraftStore {
    * shows as it starts, then waits for main, at most the save limit. It
    * copies that once main has put back what is saved and any typing it
    * carries is saved, and is refused once the changes are back, or when main
-   * doesn't answer in time.
+   * doesn't answer in time, as a Discard and never as a save.
    */
   async #settleUndoing(id: CaptureId, undoing: Undoing): Promise<SavedEdits> {
     const draft = this.#drafts.get(id);
@@ -482,7 +507,7 @@ export class DraftStore {
     const discarded = await withinLimit(undoing.done, LEAVE_SAVE_WAIT_MS);
 
     if (discarded === TOO_SLOW) {
-      return { message: SAVE_TOO_SLOW, ok: false };
+      return { during: "discard", message: DISCARD_PENDING, ok: false };
     }
 
     if (!discarded.ok) {

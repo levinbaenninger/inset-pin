@@ -1,6 +1,6 @@
 import type { CaptureId, EditableFields } from "@shared/capture-record";
-import { SAVE_TOO_SLOW } from "@shared/contracts";
-import type { CopyResult, SavedEdits } from "@shared/contracts";
+import { DISCARD_PENDING } from "@shared/contracts";
+import type { CopyResult, OwedDiscard, SavedEdits } from "@shared/contracts";
 import { entryPlainText, entryText } from "@shared/entry-text";
 import { clipboard, ClipboardItem } from "electron";
 
@@ -78,6 +78,38 @@ const fieldsOf = (record: EditableFields): EditableFields => ({
 });
 
 /**
+ * Why a copy is refused. A save that failed or ran late is refused as a save,
+ * with Retry. While main still owes a Discard of the capture, its stored
+ * record may hold what the user discarded, whatever the library answered and
+ * when no library page was open to refuse the copy: that is refused as a
+ * Discard, never as a save (SPEC round 10).
+ */
+const refusalOf = (
+  saved: SavedEdits,
+  owed: OwedDiscard | undefined
+): CopyResult => {
+  if (!saved.ok && saved.during !== "discard" && owed === undefined) {
+    return {
+      message: `Couldn’t save your changes, so nothing was copied. ${saved.message}`,
+      ok: false,
+      retry: true,
+    };
+  }
+
+  const cause =
+    !saved.ok && saved.during === "discard"
+      ? saved.message
+      : (owed?.message ?? DISCARD_PENDING);
+
+  return {
+    message: `Couldn’t discard your changes, so nothing was copied. ${cause}`,
+    ok: false,
+    // Keep changes, in the library, settles a Discard main couldn't finish; one main hasn't answered only needs a moment.
+    retry: !saved.ok && owed?.message !== null,
+  };
+};
+
+/**
  * The one way anything reaches the clipboard (clipboard-writers.test.ts holds
  * every other file to that). It has the library save what is typed into the
  * capture and wait for the disk, then copies the snapshot the library took
@@ -101,27 +133,10 @@ export const createCopyGate =
 
     const stored = fieldsOf(entry.record);
     const saved = await saveEdits(id);
-
-    if (!saved.ok) {
-      const message =
-        saved.during === "discard"
-          ? `Couldn’t discard your changes, so nothing was copied. ${saved.message}`
-          : `Couldn’t save your changes, so nothing was copied. ${saved.message}`;
-
-      return {
-        message,
-        ok: false,
-        retry: true,
-      };
-    }
-
-    // No library page was open to refuse it, so the stored record may still hold what the user discarded; only main's answer or the library can settle it.
     const owed = store.owed().find((one) => one.id === id);
 
-    if (owed !== undefined) {
-      return fail(
-        `Couldn’t discard your changes, so nothing was copied. ${owed.message ?? SAVE_TOO_SLOW}`
-      );
+    if (!saved.ok || owed !== undefined) {
+      return refusalOf(saved, owed);
     }
 
     // Nothing typed: the record as stored when the copy started is what the library showed.

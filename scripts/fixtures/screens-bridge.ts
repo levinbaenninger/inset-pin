@@ -22,6 +22,10 @@ declare global {
   var __holdAnswers: boolean | undefined;
   /** While true, Discard can't put back what a save replaced, as a lock on capture.json.prev would. */
   var __failDiscards: boolean | undefined;
+  /** While true, a Discard waits for `__releaseDiscards` before main acts on it, as a rename a lock holds would. */
+  var __holdDiscards: boolean | undefined;
+  /** Lets every held Discard go on, each failing or not as `__failDiscards` says then. */
+  var __releaseDiscards: (() => void) | undefined;
   /** Answers every held save, each failing or not as `__failSaves` says then. */
   var __releaseSaves: (() => void) | undefined;
   /** Answers only the oldest held save, so a check can look between two saves landing. */
@@ -130,6 +134,8 @@ export const installBridge = (input: BridgeInput): void => {
   let held: (() => void)[] = [];
   /** Reads waiting for `__releaseGets`. */
   let heldGets: (() => void)[] = [];
+  /** Discards waiting for `__releaseDiscards`. */
+  let heldDiscards: (() => void)[] = [];
 
   interface Tag {
     readonly epoch: string;
@@ -170,6 +176,16 @@ export const installBridge = (input: BridgeInput): void => {
     const waiting = held;
 
     held = [];
+
+    for (const answer of waiting) {
+      answer();
+    }
+  };
+
+  globalThis.__releaseDiscards = () => {
+    const waiting = heldDiscards;
+
+    heldDiscards = [];
 
     for (const answer of waiting) {
       answer();
@@ -312,6 +328,13 @@ export const installBridge = (input: BridgeInput): void => {
       discard: async ({ id, tag }: { id: string; tag: Tag }) => {
         record(`discard:${id}:${titles.get(tagKey(tag)) ?? "?"}`);
         ended.add(tag.epoch);
+
+        if (globalThis.__holdDiscards === true) {
+          // oxlint-disable-next-line promise/avoid-new -- __releaseDiscards lets the held Discard go on through this callback.
+          await new Promise<void>((resolve) => {
+            heldDiscards.push(resolve);
+          });
+        }
 
         const slot = undo.get(id);
         const found = find(id);
