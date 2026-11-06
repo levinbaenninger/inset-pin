@@ -4,6 +4,7 @@ import {
   captureKeyAction,
   fieldKeyAction,
   libraryShortcuts,
+  menuKeyAction,
   panelShortcuts,
   pinKeyAction,
   rowKeyAction,
@@ -190,6 +191,40 @@ describe(rowKeyAction, () => {
       rowKeyAction(press("ArrowDown"), true),
       rowKeyAction(press("c", mac), true),
     ]).toStrictEqual([null, null, null, null, null]);
+  });
+});
+
+const menuKeys = (isMac: boolean, held: Partial<KeyPress>) => [
+  menuKeyAction(press("c", held), isMac),
+  menuKeyAction(press("c", { ...held, altKey: true, code: "KeyC" }), isMac),
+  menuKeyAction(press("C", { ...held, shiftKey: true }), isMac),
+  menuKeyAction(press("f", { ...held, altKey: true, code: "KeyF" }), isMac),
+  menuKeyAction(press(isMac ? "Backspace" : "Delete"), isMac),
+  menuKeyAction(press(" "), isMac),
+];
+
+describe(menuKeyAction, () => {
+  it("takes every key a capture menu shows, ⌘C included, on macOS and Windows", () => {
+    const shown = [
+      "copyText",
+      "copyDetails",
+      "copyImage",
+      "float",
+      "delete",
+      "done",
+    ];
+
+    expect(menuKeys(true, mac)).toStrictEqual(shown);
+    expect(menuKeys(false, win)).toStrictEqual(shown);
+  });
+
+  it("reads Ctrl+Alt+C as Copy with Details, and C without the platform's own key as nothing", () => {
+    expect([
+      menuKeyAction(press("c", { ...win, altKey: true }), false),
+      menuKeyAction(press("c", win), true),
+      menuKeyAction(press("c", mac), false),
+      menuKeyAction(press("c"), true),
+    ]).toStrictEqual(["copyDetails", null, null, null]);
   });
 });
 

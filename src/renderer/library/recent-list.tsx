@@ -18,7 +18,8 @@ import {
 import { keyLabels, rowKeyAction } from "@shared/shortcuts";
 import type { RowKeyAction } from "@shared/shortcuts";
 import { Link } from "@tanstack/react-router";
-import { Fragment } from "react";
+import { Fragment, useLayoutEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 
 import {
   ContextMenu,
@@ -43,13 +44,15 @@ import { DueChip } from "@/fields/due";
 import { cn } from "@/lib/utils";
 import { isMac } from "@/shared/platform";
 
-import { MenuEntries, useCaptureCommands } from "./capture-commands";
+import { MenuEntries, onMenuKey, useCaptureCommands } from "./capture-commands";
+import type { RowFocus } from "./capture-commands";
 import { useCopyEntry } from "./copy-entry";
 import { dayLabel, readOnlyText, timeOfDay } from "./format";
 import { useLibraryState } from "./library-state";
 import type { CaptureGroup, ListKind } from "./list-model";
 import { matchSnippet, stepProgress } from "./list-model";
 import { Thumbnail } from "./saved-image";
+import { useSidebar } from "./sidebar";
 
 /** Text with the search's words marked, as cheap as a split. */
 const Highlighted = ({
@@ -78,46 +81,80 @@ const Highlighted = ({
 /**
  * The time and step progress, with the Due chip right-aligned, as every Inset
  * list shows it. The items run right to left and wrap out of sight below, so
- * a narrow row drops the time first, then the progress, and the Due chip
- * keeps its day.
+ * a narrow row drops the time first, then the progress.
  */
 const RowMeta = ({
   capture,
-  now,
+  chip,
 }: {
   readonly capture: SavedCapture;
-  readonly now: Date;
+  readonly chip: ReactNode;
 }) => {
   const progress = stepProgress(capture.steps);
 
   return (
     <span className="text-muted-foreground flex h-4.5 min-w-0 flex-row-reverse flex-wrap items-center justify-end gap-x-2 overflow-hidden text-xs tabular-nums">
-      {capture.due === null ? null : (
-        <span className="ml-auto flex max-w-full min-w-0">
-          <DueChip due={capture.due} now={now} />
-        </span>
-      )}
+      {chip}
       {progress === null ? null : (
         <span
           aria-label={`${progress.done} of ${progress.total} next steps done`}
           className="flex shrink-0 items-center gap-1"
+          data-meta="progress"
         >
           <HugeiconsIcon icon={CheckmarkCircle02Icon} size={12} />
           {progress.done}/{progress.total}
         </span>
       )}
-      <span className="shrink-0">{timeOfDay(capture.capturedAt)}</span>
+      <span className="shrink-0" data-meta="time">
+        {timeOfDay(capture.capturedAt)}
+      </span>
     </span>
   );
 };
 
+/**
+ * Whether the Due chip fits the row's text column. The chip never shrinks or
+ * drops its icon, so where it doesn't fit (the narrowest sidebar, a long
+ * overdue date) the row shows it on a line of its own under the title.
+ */
+const useChipFits = () => {
+  const columnRef = useRef<HTMLSpanElement>(null);
+  const chipRef = useRef<HTMLSpanElement>(null);
+  const [fits, setFits] = useState(true);
+
+  // After every render: moving the chip mounts it anew, and the new one needs observing.
+  useLayoutEffect(() => {
+    const measure = (): void => {
+      if (columnRef.current !== null && chipRef.current !== null) {
+        setFits(chipRef.current.offsetWidth <= columnRef.current.clientWidth);
+      }
+    };
+
+    const observer = new ResizeObserver(measure);
+
+    for (const part of [columnRef.current, chipRef.current]) {
+      if (part !== null) {
+        observer.observe(part);
+      }
+    }
+
+    measure();
+
+    return () => {
+      observer.disconnect();
+    };
+  });
+
+  return { chipRef, columnRef, fits };
+};
+
 const ROW_SELECTOR = "[data-testid='capture-row']";
 
-const focusNeighbour = (row: HTMLElement): void => {
+const neighbourOf = (row: HTMLElement | null): HTMLElement | null => {
   const rows = [...document.querySelectorAll<HTMLElement>(ROW_SELECTOR)];
-  const at = rows.indexOf(row);
+  const at = row === null ? -1 : rows.indexOf(row);
 
-  (rows[at + 1] ?? rows[at - 1])?.focus();
+  return at === -1 ? null : (rows[at + 1] ?? rows[at - 1] ?? null);
 };
 
 const CaptureRow = ({
@@ -128,8 +165,35 @@ const CaptureRow = ({
   readonly active: boolean;
 }) => {
   const { now, parsed } = useLibraryState();
-  const { commands, dialog, entries } = useCaptureCommands(capture, "row");
+  const rowRef = useRef<HTMLAnchorElement>(null);
+  const landing = useRef<HTMLElement | null>(null);
+
+  // The row's menu and delete dialog hand the focus back to the row, or to its neighbour once the row leaves the list.
+  const focus: RowFocus = {
+    land: () => {
+      (landing.current ?? rowRef.current)?.focus();
+      landing.current = null;
+    },
+    leaving: () => {
+      landing.current = neighbourOf(rowRef.current);
+    },
+  };
+
+  const { commands, dialog, entries } = useCaptureCommands(
+    capture,
+    "row",
+    focus
+  );
+
   const snippet = matchSnippet(capture, parsed.terms);
+  const { chipRef, columnRef, fits } = useChipFits();
+
+  const chip =
+    capture.due === null ? null : (
+      <span className="ml-auto flex shrink-0" ref={chipRef}>
+        <DueChip due={capture.due} now={now} />
+      </span>
+    );
 
   // The keys its right-click menu lists act on the row in focus, which need not be the capture shown.
   const run: Record<RowKeyAction, () => void> = {
@@ -149,7 +213,7 @@ const CaptureRow = ({
           <Link
             aria-current={active ? "page" : undefined}
             className={cn(
-              "focus-visible:ring-ring/50 data-[state=open]:bg-foreground/5 flex items-start gap-2.5 rounded-md px-2 py-2 outline-none focus-visible:ring-3",
+              "focus-visible:ring-ring/50 data-[state=open]:bg-foreground/5 block rounded-md px-2 py-2 outline-none focus-visible:ring-3",
               active
                 ? "bg-foreground/10"
                 : "hover:bg-foreground/5 focus:bg-foreground/5"
@@ -172,37 +236,51 @@ const CaptureRow = ({
                   return;
                 }
 
-                // The row leaves the list, so the focus moves on first and Space again does the next one.
-                if (action === "done") {
-                  focusNeighbour(event.currentTarget);
-                }
-
                 run[action]();
+
+                // The row leaves the list, so the focus moves on and Space again does the next one.
+                if (action === "done") {
+                  focus.land();
+                }
               }
             }}
             params={{ captureId: capture.id }}
+            ref={rowRef}
             to="/captures/$captureId"
           >
-            <Thumbnail image={capture.image} pins={capture.pins} />
-            <span className="@container flex min-w-0 flex-1 flex-col gap-0.5">
+            <span className="flex items-start gap-2.5">
+              <Thumbnail image={capture.image} pins={capture.pins} />
               <span
-                className={cn(
-                  "line-clamp-2 text-sm leading-snug font-medium wrap-break-word",
-                  capture.status.kind === "done" && "text-muted-foreground"
-                )}
+                className="flex min-w-0 flex-1 flex-col gap-0.5"
+                ref={columnRef}
               >
-                <Highlighted terms={parsed.terms} text={capture.title} />
-              </span>
-              {snippet === null ? null : (
-                <span className="text-muted-foreground line-clamp-1 text-xs">
-                  <Highlighted terms={parsed.terms} text={snippet} />
+                <span
+                  className={cn(
+                    "line-clamp-2 text-sm leading-snug font-medium wrap-break-word",
+                    capture.status.kind === "done" && "text-muted-foreground"
+                  )}
+                >
+                  <Highlighted terms={parsed.terms} text={capture.title} />
                 </span>
-              )}
-              <RowMeta capture={capture} now={now} />
+                {snippet === null ? null : (
+                  <span className="text-muted-foreground line-clamp-1 text-xs">
+                    <Highlighted terms={parsed.terms} text={snippet} />
+                  </span>
+                )}
+                <RowMeta capture={capture} chip={fits ? chip : null} />
+              </span>
             </span>
+            {fits ? null : <span className="mt-1 flex">{chip}</span>}
           </Link>
         </ContextMenuTrigger>
-        <ContextMenuContent className="min-w-52">
+        <ContextMenuContent
+          className="min-w-52"
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            focus.land();
+          }}
+          onKeyDown={onMenuKey}
+        >
           <MenuEntries entries={entries} kind="context" />
         </ContextMenuContent>
       </ContextMenu>
@@ -308,7 +386,7 @@ const FilterMenu = () => {
               icon={Tick02Icon}
             />
             {DUE_FILTER_LABELS[filter]}
-            <span className="text-muted-foreground ml-auto font-mono text-xs">
+            <span className="text-muted-foreground ml-auto text-xs">
               due:{filter}
             </span>
           </DropdownMenuItem>
@@ -330,7 +408,7 @@ const FilterMenu = () => {
   );
 };
 
-/** While a `due:` word is typed, the filters it can become; a click or Return finishes it. */
+/** While a `due:` word is typed, the filters it can become, as in every Inset search; a click or Return (the first) finishes it. */
 const DueSuggestions = () => {
   const { parsed, query, searchRef, setQuery } = useLibraryState();
   const suggestions = dueSuggestions(parsed);
@@ -345,18 +423,23 @@ const DueSuggestions = () => {
       className="bg-popover text-popover-foreground ring-foreground/10 mt-1.5 flex flex-col rounded-lg p-1 shadow-md ring-1"
       data-testid="due-suggestions"
     >
-      {suggestions.map((filter) => (
+      {suggestions.map((filter, index) => (
         <li key={filter}>
           <button
-            className="hover:bg-accent focus-visible:bg-accent flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-sm outline-none"
+            aria-label={`${DUE_FILTER_LABELS[filter]} (due:${filter})`}
+            className={cn(
+              "hover:bg-accent focus-visible:bg-accent flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-xs font-medium outline-none",
+              index === 0 && "bg-accent"
+            )}
             onClick={() => {
               setQuery(withDueFilter(query, filter));
               searchRef.current?.focus();
             }}
+            title={index === 0 ? "Return picks this one" : undefined}
             type="button"
           >
-            <span className="font-mono text-xs">due:{filter}</span>
-            <span className="text-muted-foreground ml-auto truncate text-xs">
+            due:{filter}
+            <span className="text-muted-foreground ml-auto truncate font-normal">
               {DUE_FILTER_LABELS[filter]}
             </span>
           </button>
@@ -366,8 +449,12 @@ const DueSuggestions = () => {
   );
 };
 
+/** Below this sidebar width the field has no room to name the `due:` filters; the filter menu still does. */
+const ROOM_FOR_HINT = 240;
+
 export const SearchField = () => {
   const { parsed, query, searchRef, setQuery } = useLibraryState();
+  const { state } = useSidebar();
 
   return (
     <div className="flex flex-col">
@@ -396,7 +483,9 @@ export const SearchField = () => {
               setQuery(withDueFilter(query, first));
             }
           }}
-          placeholder="Search or due:today"
+          placeholder={
+            state.width < ROOM_FOR_HINT ? "Search" : "Search or due:today"
+          }
           ref={searchRef}
           type="search"
           value={query}

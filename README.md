@@ -65,7 +65,7 @@ Click the Dock icon, choose **Recent captures…** from the pin icon, or start t
 - **Copy Text** (`⌘C` when nothing is selected) copies the title and description. **Copy with Details** (`⌥⌘C`) adds the steps as `- [ ]` items, `Due: <date>` and the pin labels. **Copy Image** (`⇧⌘C`) copies the crop with every pin drawn on it. Dragging the image into another app drops the same picture as a file. Every copy saves what you are typing first, so it matches the screen.
 - **Float on Top** (`⌥⌘F` or `Ctrl+Alt+F`, previously "Pin") keeps the capture in a small window above every other app.
 - **Delete…** (`⌫`) asks first.
-- The ⋯ button and a right-click on a row hold the same commands with their keys. With a sidebar row in focus, as after a right-click, those keys act on that row's capture, not the one open. **Settings** and **Keyboard shortcuts** sit at the foot of the sidebar.
+- The ⋯ button and a right-click on a row hold the same commands with their keys. While a row's menu is open, and while the row has the focus after it closes, those keys act on that row's capture, not the one open. **Settings** and **Keyboard shortcuts** sit at the foot of the sidebar.
 
 Captures saved by an older version open with nothing lost. A one-line thought becomes the title. A longer one stays whole, exactly as typed, as the description, and its first line becomes the title. The old pin becomes pin 1. The file is rewritten in the new format only when you change the capture.
 

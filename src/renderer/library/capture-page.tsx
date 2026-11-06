@@ -43,7 +43,7 @@ import { inLayer, isTextField } from "@/shared/key-targets";
 import { isMac } from "@/shared/platform";
 import { usePinKeys } from "@/shared/use-pin-keys";
 
-import { MenuEntries, useCaptureCommands } from "./capture-commands";
+import { MenuEntries, onMenuKey, useCaptureCommands } from "./capture-commands";
 import { onCommand } from "./command-bus";
 import { useCopyEntry } from "./copy-entry";
 import { formatCaptureTime, readOnlyText, sourceText } from "./format";
@@ -407,7 +407,11 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
               label="More"
             />
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="min-w-56">
+          <DropdownMenuContent
+            align="end"
+            className="min-w-56"
+            onKeyDown={onMenuKey}
+          >
             <MenuEntries entries={entries} kind="dropdown" />
           </DropdownMenuContent>
         </DropdownMenu>

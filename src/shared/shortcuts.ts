@@ -261,6 +261,20 @@ export const rowKeyAction = (
     : null;
 };
 
+export type MenuKeyAction = RowKeyAction | "copyText";
+
+/**
+ * The keys an open capture menu shows. Inside a menu, ⌘C is a key like the
+ * others: it picks Copy Text instead of arriving as the copy event.
+ */
+export const menuKeyAction = (
+  press: KeyPress,
+  isMac: boolean
+): MenuKeyAction | null =>
+  letter(press, "c") && command(press, isMac) && !press.shiftKey
+    ? "copyText"
+    : rowKeyAction(press, isMac);
+
 /** Tighten and widen in the capture panel: ⌘= shows less, ⌘− shows more. */
 export const zoomKeyAction = (
   press: KeyPress,

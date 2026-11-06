@@ -5,8 +5,12 @@
  * (scripts/fixtures/screens-bridge.ts) that answers from the sample data
  * below, so a before and an after run show the same captures.
  *
+ * Before the shots it runs checks that press keys in the real renderer and
+ * read back what the bridge was asked to do; a failed check fails the run.
+ *
  *   pnpm screens            # builds, then writes release/screens/*.png
  *   node scripts/screens.ts [output folder]   # after pnpm build
+ *   SCREENS_ONLY=checks node scripts/screens.ts /tmp/out   # the checks alone
  */
 import { once } from "node:events";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -986,6 +990,526 @@ const shootRenderer = async (
   return [path.relative(OUT, file)];
 };
 
+/* ---------- Checks: the real renderer, keys pressed, bridge calls read back ---------- */
+
+const ROW = "[data-testid='capture-row']";
+
+/** A small assertion log: every line is PASS or FAIL, and the FAILs fail the run. */
+const makeReport = (platform: Platform) => {
+  const failures: string[] = [];
+
+  const expectSame = <T>(label: string, got: T, want: T): void => {
+    const ok = JSON.stringify(got) === JSON.stringify(want);
+    const line = `${platform} ${label}: ${JSON.stringify(got)}`;
+
+    console.log(
+      ok ? `PASS ${line}` : `FAIL ${line}, want ${JSON.stringify(want)}`
+    );
+
+    if (!ok) {
+      failures.push(`${platform} ${label}`);
+    }
+  };
+
+  return { expectSame, failures };
+};
+
+const openLibrary = async (
+  browser: Browser,
+  origin: string,
+  input: BridgeInput,
+  platform: Platform,
+  hash: string,
+  storage: Readonly<Record<string, string>> = {}
+) => {
+  const context = await browser.newContext({
+    userAgent: USER_AGENT[platform],
+    viewport: SIZES.library,
+  });
+
+  const page = await context.newPage();
+
+  await page.addInitScript(installBridge, input);
+  await page.addInitScript((entries) => {
+    for (const [key, value] of Object.entries(entries)) {
+      localStorage.setItem(key, value);
+    }
+  }, storage);
+  await page.goto(`${origin}/library.html#${hash}`);
+  await page.locator(ROW).first().waitFor();
+  await page.waitForLoadState("networkidle");
+
+  return { context, page };
+};
+
+/**
+ * Round 4's context-menu ownership: with capture A open and row B's menu
+ * open, each key the menu shows acts on B, never on A, and closing the menu
+ * leaves the focus on row B. Copies save A's typing first and copy nothing
+ * when that save fails.
+ */
+const checkRowMenu = async (
+  browser: Browser,
+  origin: string,
+  captures: readonly Capture[],
+  platform: Platform
+): Promise<string[]> => {
+  const { expectSame, failures } = makeReport(platform);
+  const a = uuid(1);
+
+  const { context, page } = await openLibrary(
+    browser,
+    origin,
+    { captures: structuredClone(captures), page: "library" },
+    platform,
+    `/captures/${a}`
+  );
+
+  const rows = page.locator(ROW);
+
+  const ids = await rows.evaluateAll((elements: HTMLElement[]) =>
+    elements.map((element) => element.dataset.captureId ?? "")
+  );
+
+  const bIndex = 2;
+  const b = ids[bIndex];
+  const bTitle = captures.find((one) => one.id === b)?.title ?? "";
+  const m = mod(platform);
+  const del = platform === "macos" ? "Backspace" : "Delete";
+
+  const takeCalls = async (): Promise<string[]> =>
+    await page.evaluate(() => {
+      const calls = globalThis.__calls ?? [];
+
+      globalThis.__calls = [];
+
+      return calls;
+    });
+
+  const focused = async (): Promise<string | null> =>
+    await page.evaluate(
+      (selector) =>
+        document.activeElement?.closest<HTMLElement>(selector)?.dataset
+          .captureId ??
+        document.activeElement?.tagName ??
+        null,
+      ROW
+    );
+
+  // Radix listens for a click outside only a moment after the menu mounts; a person is never that fast.
+  const openMenu = async (index: number): Promise<void> => {
+    await rows.nth(index).click({ button: "right" });
+    await page.getByRole("menu").waitFor();
+    await page.waitForTimeout(150);
+  };
+
+  /**
+   * Whether the menu went by itself. Commands run once it has gone, and
+   * saving is a round trip; a second, wrong call would land in the wait too.
+   */
+  const settled = async (): Promise<boolean> => {
+    const closed = await page
+      .getByRole("menu")
+      .waitFor({ state: "detached", timeout: 1500 })
+      .then(
+        () => true,
+        () => false
+      );
+
+    if (!closed) {
+      await page.keyboard.press("Escape");
+      await page.getByRole("menu").waitFor({ state: "detached" });
+    }
+
+    await page.waitForTimeout(300);
+
+    return closed;
+  };
+
+  const rowKey = async (key: string, command: string): Promise<void> => {
+    await openMenu(bIndex);
+    await page.keyboard.press(key);
+    const closed = await settled();
+    expectSame(
+      `${key} in row B's menu acts on B, focus on B`,
+      { calls: await takeCalls(), closed, focus: await focused() },
+      { calls: [`${command}:${b}`], closed: true, focus: b }
+    );
+  };
+
+  /** The ⋯ menu belongs to the open capture A; Space does nothing there, since its Mark as Done shows no key. */
+  const moreKey = async (
+    key: string,
+    command: string | null
+  ): Promise<void> => {
+    await page.getByTestId("more").click();
+    await page.getByRole("menu").waitFor();
+    await page.keyboard.press(key);
+    const shut = await settled();
+    expectSame(
+      `${key} in the ⋯ menu acts on A`,
+      { calls: await takeCalls(), shut },
+      command === null
+        ? { calls: [], shut: false }
+        : { calls: [`${command}:${a}`], shut: true }
+    );
+  };
+
+  await takeCalls();
+  await rowKey(`${m}+c`, "copyText");
+  await rowKey(`${m}+Alt+c`, "copyDetails");
+  await rowKey(`${m}+Shift+c`, "copyImage");
+  await rowKey(`${m}+Alt+f`, "floatOnTop");
+
+  await openMenu(bIndex);
+  await page.getByRole("menuitem", { name: /Copy with Details/u }).click();
+  let closed = await settled();
+  expectSame(
+    "clicking Copy with Details in row B's menu",
+    { calls: await takeCalls(), closed, focus: await focused() },
+    { calls: [`copyDetails:${b}`], closed: true, focus: b }
+  );
+
+  await openMenu(bIndex);
+  await page.keyboard.press(del);
+
+  const asked = await page
+    .getByRole("alertdialog")
+    .textContent({ timeout: 1500 })
+    .catch(() => "");
+
+  await page.keyboard.press("Escape");
+  await page.getByRole("alertdialog").waitFor({ state: "detached" });
+  await page.getByRole("menu").waitFor({ state: "detached" });
+  await page.waitForTimeout(300);
+  expectSame(
+    `${del} in row B's menu asks about B; Esc returns to row B`,
+    {
+      asksAboutB: asked?.includes(bTitle) === true,
+      calls: await takeCalls(),
+      focus: await focused(),
+    },
+    { asksAboutB: true, calls: [], focus: b }
+  );
+
+  await openMenu(bIndex);
+  await page.keyboard.press(del);
+  await page
+    .getByRole("alertdialog")
+    .getByRole("button", { name: "Delete" })
+    .click();
+  await page.getByRole("alertdialog").waitFor({ state: "detached" });
+  await page.waitForTimeout(300);
+  expectSame(
+    "confirming the delete removes B and moves on to the next row",
+    { calls: await takeCalls(), focus: await focused() },
+    { calls: [`remove:${b}`], focus: ids[bIndex + 1] }
+  );
+
+  await openMenu(bIndex);
+  await page.keyboard.press("Escape");
+  closed = await settled();
+  expectSame(
+    "Esc closes row B's menu onto row B",
+    { calls: await takeCalls(), closed, focus: await focused() },
+    { calls: [], closed: true, focus: b }
+  );
+
+  await openMenu(bIndex);
+  await page.mouse.click(760, 640);
+  closed = await settled();
+  expectSame(
+    "a click outside closes row B's menu onto row B",
+    { calls: await takeCalls(), closed, focus: await focused() },
+    { calls: [], closed: true, focus: b }
+  );
+
+  await moreKey(`${m}+Alt+c`, "copyDetails");
+  await moreKey(`${m}+Shift+c`, "copyImage");
+  await moreKey(" ", null);
+
+  await page.getByTestId("more").click();
+  await page.getByRole("menu").waitFor();
+  await page.getByRole("menuitem", { name: /Delete/u }).click();
+  await page.getByRole("alertdialog").waitFor();
+  await page.keyboard.press("Escape");
+  await page.getByRole("alertdialog").waitFor({ state: "detached" });
+  await page.waitForTimeout(300);
+
+  const afterCancel = await page.evaluate(() => {
+    const active = document.activeElement;
+
+    return active instanceof HTMLElement
+      ? (active.dataset.testid ?? active.tagName)
+      : null;
+  });
+
+  expectSame(
+    "Delete… in the ⋯ menu, then Esc, returns to the ⋯ button",
+    { calls: await takeCalls(), focus: afterCancel },
+    { calls: [], focus: "more" }
+  );
+
+  const title = page.getByTestId("title-field");
+  const aIndex = ids.indexOf(a);
+  const aTitle = captures.find((one) => one.id === a)?.title ?? "";
+
+  const typeAtEnd = async (text: string): Promise<void> => {
+    await title.evaluate((field: HTMLInputElement | HTMLTextAreaElement) => {
+      field.focus();
+      field.setSelectionRange(field.value.length, field.value.length);
+    });
+    await page.keyboard.type(text);
+  };
+
+  await typeAtEnd(" (edited)");
+  await openMenu(aIndex);
+  await page.keyboard.press(`${m}+c`);
+  await settled();
+
+  const savedFirst = await takeCalls();
+
+  expectSame(
+    "copying A from its row while its title is being typed saves the typing first",
+    savedFirst.slice(-2),
+    [`update:${a}:${aTitle} (edited)`, `copyText:${a}`]
+  );
+
+  await page.evaluate(() => {
+    globalThis.__failSaves = true;
+  });
+  await typeAtEnd(" again");
+  await openMenu(aIndex);
+  await page.keyboard.press(`${m}+c`);
+  await settled();
+
+  const afterFailure = await takeCalls();
+
+  expectSame(
+    "after a failed save the row copies nothing and says so",
+    {
+      copies: afterFailure.filter((call) => call.startsWith("copy")),
+      notice: await page
+        .getByText(/Couldn’t save your changes, so nothing was copied/u)
+        .isVisible(),
+    },
+    { copies: [], notice: true }
+  );
+
+  // Plain ⌘C arrives as the copy event, which Chromium raises for ⌘C only on a Mac.
+  if (platform === "macos") {
+    await page.getByTestId("more").focus();
+    await page.keyboard.press("Meta+c");
+    await page.waitForTimeout(300);
+
+    const refused = await takeCalls();
+
+    expectSame(
+      "plain ⌘C on the page after a failed save copies nothing",
+      refused.filter((call) => call.startsWith("copy")),
+      []
+    );
+
+    await page.evaluate(() => {
+      globalThis.__failSaves = false;
+    });
+    await page.keyboard.press("Meta+c");
+    await page.waitForTimeout(300);
+
+    const copied = await takeCalls();
+
+    expectSame(
+      "plain ⌘C on the page saves the typing, then copies A",
+      copied.slice(-2),
+      [`update:${a}:${aTitle} (edited) again`, `copyText:${a}`]
+    );
+  }
+
+  await page.evaluate(() => {
+    globalThis.__failSaves = false;
+  });
+  await openMenu(bIndex);
+  await page.keyboard.press(" ");
+  closed = await settled();
+  expectSame(
+    "Space in row B's menu marks B done and moves on to the next row",
+    { calls: await takeCalls(), closed, focus: await focused() },
+    { calls: [`setDone:${b}:true`], closed: true, focus: ids[bIndex + 1] }
+  );
+
+  await context.close();
+
+  return failures;
+};
+
+/**
+ * Round 4's narrow-chip rule: at every sidebar width each Due chip shows its
+ * calendar icon and its whole label, and a row drops its time before its step
+ * progress. The widest label, an overdue day from last year, is added here.
+ * The search placeholder has to fit too.
+ */
+const checkSidebarWidths = async (
+  browser: Browser,
+  origin: string,
+  captures: readonly Capture[],
+  platform: Platform
+): Promise<string[]> => {
+  const { expectSame, failures } = makeReport(platform);
+
+  const withWidest = [
+    ...structuredClone(captures),
+    capture(8, "mail", {
+      capturedAt: ago(0, 7, 15),
+      due: `${NOW.getFullYear() - 1}-12-30`,
+      pins: [],
+      steps: [step(9, "Call the landlord"), step(10, "Sign", true)],
+      title: "Lease renewal",
+    }),
+  ];
+
+  const atWidth = async (width: number): Promise<void> => {
+    const { context, page } = await openLibrary(
+      browser,
+      origin,
+      { captures: withWidest, page: "library" },
+      platform,
+      `/captures/${uuid(3)}`,
+      { "inset.sidebar": JSON.stringify({ collapsed: false, width }) }
+    );
+
+    const rows = await page.locator(ROW).evaluateAll((elements) => {
+      // Inside the page: evaluate serializes this function, so the helper can't live outside it.
+      // oxlint-disable-next-line unicorn/consistent-function-scoping
+      const shown = (part: Element | null): boolean => {
+        if (part === null) {
+          return false;
+        }
+
+        const rect = part.getBoundingClientRect();
+        let clip = part.parentElement;
+
+        while (clip !== null && getComputedStyle(clip).overflow === "visible") {
+          clip = clip.parentElement;
+        }
+
+        const box = (clip ?? document.body).getBoundingClientRect();
+
+        return (
+          rect.width > 0 &&
+          rect.left >= box.left - 0.5 &&
+          rect.right <= box.right + 0.5 &&
+          rect.top >= box.top - 0.5 &&
+          rect.bottom <= box.bottom + 0.5
+        );
+      };
+
+      return elements.map((row) => {
+        const chip = row.querySelector("[data-due-state]");
+        const progress = row.querySelector("[data-meta='progress']");
+
+        return {
+          chip:
+            chip === null
+              ? null
+              : {
+                  icon: shown(chip.querySelector("svg")),
+                  label: chip.textContent,
+                  shown: shown(chip),
+                  whole: [...chip.querySelectorAll("*"), chip].every(
+                    (part) => part.scrollWidth <= part.clientWidth + 0.5
+                  ),
+                },
+          // The time goes first: it never shows while the progress is gone.
+          timeBeforeProgress:
+            progress === null ||
+            shown(progress) ||
+            !shown(row.querySelector("[data-meta='time']")),
+        };
+      });
+    });
+
+    const chips = rows.flatMap((row) => (row.chip === null ? [] : [row.chip]));
+
+    expectSame(
+      `Due chips at a ${width} px sidebar keep the icon and the whole label`,
+      chips.filter((chip) => !(chip.icon && chip.shown && chip.whole)),
+      []
+    );
+    expectSame(
+      `${width} px sidebar shows every Due chip`,
+      chips.length,
+      withWidest.filter((one) => one.due !== null && one.status.kind !== "done")
+        .length
+    );
+    expectSame(
+      `${width} px sidebar drops the time before the progress`,
+      rows.filter((row) => !row.timeBeforeProgress).length,
+      0
+    );
+
+    const placeholderFits = await page
+      .getByTestId("search")
+      .evaluate((input: HTMLInputElement) => {
+        const text = document.createElement("canvas").getContext("2d");
+        const style = input.computedStyleMap();
+
+        const px = (property: string): number => {
+          const value = style.get(property);
+
+          return value instanceof CSSUnitValue ? value.value : 0;
+        };
+
+        if (text === null) {
+          return false;
+        }
+
+        text.font = getComputedStyle(input).font;
+
+        // Room to spare, so the hint doesn't run into the filter button.
+        return (
+          text.measureText(input.placeholder).width + 12 <=
+          input.clientWidth - px("padding-left") - px("padding-right")
+        );
+      });
+
+    expectSame(
+      `${width} px sidebar: the search placeholder fits`,
+      placeholderFits,
+      true
+    );
+    await context.close();
+  };
+
+  for (const width of [220, 239, 240, 260, 300, 440]) {
+    // Sequential on purpose: one window at a time, like the shots.
+    // oxlint-disable-next-line no-await-in-loop
+    await atWidth(width);
+  }
+
+  return failures;
+};
+
+const runChecks = async (
+  browser: Browser,
+  origin: string,
+  captures: readonly Capture[]
+): Promise<string[]> => {
+  const onPlatform = async (platform: Platform): Promise<string[]> => [
+    ...(await checkRowMenu(browser, origin, captures, platform)),
+    ...(await checkSidebarWidths(browser, origin, captures, platform)),
+  ];
+
+  const failures: string[] = [];
+
+  for (const platform of ["macos", "windows"] as const) {
+    // Sequential on purpose: the checks wait on timers, like the shots.
+    // oxlint-disable-next-line no-await-in-loop
+    failures.push(...(await onPlatform(platform)));
+  }
+
+  return failures;
+};
+
 interface Shot {
   scene: Scene;
   platform: Platform;
@@ -1056,19 +1580,31 @@ const main = async () => {
   );
 
   const { origin, server } = await serve();
-  const { failed, taken } = await shootEach(browser, origin, shots);
-  const rendered = await shootRenderer(browser, captures);
+  const checkFailures = await runChecks(browser, origin, captures);
 
-  await writeFile(
-    path.join(OUT, "index.json"),
-    `${JSON.stringify([...rendered, ...taken], null, 2)}\n`
-  );
+  if (process.env.SCREENS_ONLY !== "checks") {
+    const { failed, taken } = await shootEach(browser, origin, shots);
+    const rendered = await shootRenderer(browser, captures);
+
+    await writeFile(
+      path.join(OUT, "index.json"),
+      `${JSON.stringify([...rendered, ...taken], null, 2)}\n`
+    );
+    console.log(`${taken.length + rendered.length} screenshots in ${OUT}`);
+
+    if (failed.length > 0) {
+      console.error(`${failed.length} failed: ${failed.join(", ")}`);
+      process.exitCode = 1;
+    }
+  }
+
   await browser.close();
   server.close();
-  console.log(`${taken.length + rendered.length} screenshots in ${OUT}`);
 
-  if (failed.length > 0) {
-    console.error(`${failed.length} failed: ${failed.join(", ")}`);
+  if (checkFailures.length > 0) {
+    console.error(
+      `${checkFailures.length} checks failed: ${checkFailures.join("; ")}`
+    );
     process.exitCode = 1;
   }
 };

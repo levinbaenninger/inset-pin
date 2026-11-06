@@ -10,7 +10,8 @@ import {
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { CaptureId } from "@shared/capture-record";
 import type { ActionResult, SavedCapture } from "@shared/contracts";
-import { keyLabels } from "@shared/shortcuts";
+import { keyLabels, menuKeyAction } from "@shared/shortcuts";
+import type { MenuKeyAction } from "@shared/shortcuts";
 import {
   getRouteApi,
   useNavigate,
@@ -18,6 +19,7 @@ import {
   useRouter,
 } from "@tanstack/react-router";
 import { useState } from "react";
+import type { KeyboardEvent } from "react";
 
 import {
   AlertDialog,
@@ -54,6 +56,7 @@ const KEYS = keyLabels(isMac);
 
 interface MenuItem {
   readonly kind: "item";
+  readonly action: MenuKeyAction;
   readonly label: string;
   readonly icon: Icon;
   readonly keys?: string;
@@ -77,6 +80,16 @@ const settle = async (
 };
 
 /**
+ * Where a row puts the focus back once its menu or delete dialog closes.
+ * `leaving` runs while the row is still listed and about to go (marked done,
+ * or deleted), so the focus can land on its neighbour instead.
+ */
+export interface RowFocus {
+  readonly leaving: () => void;
+  readonly land: () => void;
+}
+
+/**
  * Everything that can be done to one capture, once: the right-click menu in
  * the sidebar, the capture's ⋯ menu and its keys all use these. Delete asks
  * first, in the dialog this returns. `from` says whose menu it is: Space marks
@@ -84,7 +97,8 @@ const settle = async (
  */
 export const useCaptureCommands = (
   capture: SavedCapture,
-  from: "row" | "page"
+  from: "row" | "page",
+  focus?: RowFocus
 ) => {
   const navigate = useNavigate();
   const router = useRouter();
@@ -198,12 +212,14 @@ export const useCaptureCommands = (
       void floatAfterSaving();
     },
     toggleDone: () => {
+      focus?.leaving();
       void setDone(capture.id, !done);
     },
   };
 
   const entries: readonly MenuEntry[] = [
     {
+      action: "copyText",
       icon: Copy01Icon,
       keys: KEYS.copyText,
       kind: "item",
@@ -211,6 +227,7 @@ export const useCaptureCommands = (
       run: commands.copyText,
     },
     {
+      action: "copyDetails",
       icon: TextAlignLeftIcon,
       keys: KEYS.copyDetails,
       kind: "item",
@@ -218,6 +235,7 @@ export const useCaptureCommands = (
       run: commands.copyDetails,
     },
     {
+      action: "copyImage",
       icon: Image01Icon,
       keys: KEYS.copyImage,
       kind: "item",
@@ -225,6 +243,7 @@ export const useCaptureCommands = (
       run: commands.copyImage,
     },
     {
+      action: "float",
       icon: PictureInPictureOnIcon,
       keys: KEYS.float,
       kind: "item",
@@ -233,6 +252,7 @@ export const useCaptureCommands = (
     },
     { id: "status", kind: "separator" },
     {
+      action: "done",
       icon: done ? Undo02Icon : CheckmarkCircle02Icon,
       keys: from === "row" ? KEYS.done : undefined,
       kind: "item",
@@ -241,6 +261,7 @@ export const useCaptureCommands = (
     },
     { id: "delete", kind: "separator" },
     {
+      action: "delete",
       destructive: true,
       icon: Delete02Icon,
       keys: KEYS.delete,
@@ -252,7 +273,14 @@ export const useCaptureCommands = (
 
   const dialog = (
     <AlertDialog onOpenChange={setConfirming} open={confirming}>
-      <AlertDialogContent>
+      <AlertDialogContent
+        onCloseAutoFocus={(event) => {
+          if (focus !== undefined) {
+            event.preventDefault();
+            focus.land();
+          }
+        }}
+      >
         <AlertDialogHeader>
           <AlertDialogTitle>Delete this capture?</AlertDialogTitle>
           <AlertDialogDescription>
@@ -267,6 +295,7 @@ export const useCaptureCommands = (
           <AlertDialogCancel>Cancel</AlertDialogCancel>
           <AlertDialogAction
             onClick={() => {
+              focus?.leaving();
               void remove();
             }}
             variant="destructive"
@@ -294,6 +323,34 @@ const PARTS = {
   },
 } as const;
 
+/**
+ * A key an open menu shows picks that item, as a click would: the menu
+ * closes and the command runs on the menu's own capture. Handled here, so the
+ * page never sees the key and never acts on the capture that is open.
+ */
+export const onMenuKey = (event: KeyboardEvent<HTMLElement>): void => {
+  if (event.defaultPrevented || event.nativeEvent.isComposing) {
+    return;
+  }
+
+  const action = menuKeyAction(event, isMac);
+
+  const item =
+    action === null
+      ? null
+      : event.currentTarget.querySelector<HTMLElement>(
+          `[data-key-action="${action}"]`
+        );
+
+  if (item !== null) {
+    event.preventDefault();
+
+    if (!event.repeat) {
+      item.click();
+    }
+  }
+};
+
 /** The entries as items of a right-click menu or of the ⋯ dropdown; the two take the same shape. */
 export const MenuEntries = ({
   entries,
@@ -309,6 +366,7 @@ export const MenuEntries = ({
       <Separator key={entry.id} />
     ) : (
       <Item
+        data-key-action={entry.keys === undefined ? undefined : entry.action}
         key={entry.label}
         onSelect={() => {
           entry.run();

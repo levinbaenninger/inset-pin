@@ -38,9 +38,8 @@ const STATE_CLASS: Record<DueState, string> = {
 
 /**
  * The small due chip in a list row: a calendar icon and the day, "Overdue ·
- * Nov 3" once it has passed. In the narrowest rows the icon goes so the date
- * fits; anything longer is cut, with the whole day in its tooltip and
- * accessible name.
+ * Nov 3" once it has passed. It is never cut and never loses the icon; a row
+ * too narrow for it moves the chip to a line of its own.
  */
 export const DueChip = ({
   due,
@@ -52,18 +51,14 @@ export const DueChip = ({
   <span
     aria-label={dueSentence(due, now)}
     className={cn(
-      "inline-flex h-4.5 max-w-full min-w-0 items-center gap-1 rounded-md px-1 text-xs font-medium whitespace-nowrap tabular-nums",
+      "inline-flex h-4.5 shrink-0 items-center gap-1 rounded-md px-1 text-xs font-medium whitespace-nowrap tabular-nums",
       STATE_CLASS[dueState(due, now)]
     )}
     data-due-state={dueState(due, now)}
     title={dueSentence(due, now)}
   >
-    <HugeiconsIcon
-      className="shrink-0 @max-[124px]:hidden"
-      icon={Calendar03Icon}
-      size={11}
-    />
-    <span className="truncate">{dueChipText(due, now)}</span>
+    <HugeiconsIcon className="shrink-0" icon={Calendar03Icon} size={11} />
+    {dueChipText(due, now)}
   </span>
 );
 

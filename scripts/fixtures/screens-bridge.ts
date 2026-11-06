@@ -10,6 +10,10 @@
 declare global {
   /** The height a fitted window (the capture panel, Settings) reported last. */
   var __fitted: number | undefined;
+  /** The library calls that act on a capture, as `name:id`, for the checks in scripts/screens.ts to read. */
+  var __calls: string[] | undefined;
+  /** While true, saving a capture's typing fails, as a full disk would. */
+  var __failSaves: boolean | undefined;
 }
 
 /** A capture as the fake bridge keeps it; a read-only entry has no status. */
@@ -64,6 +68,18 @@ export const installBridge = (input: BridgeInput): void => {
     globalThis.__fitted = height;
   };
 
+  const record = (call: string): void => {
+    globalThis.__calls = [...(globalThis.__calls ?? []), call];
+  };
+
+  const recorded =
+    (name: string) =>
+    async (id: string): Promise<typeof OK> => {
+      record(`${name}:${id}`);
+
+      return await resolve(OK);
+    };
+
   const apis = {
     capture: {
       answerQuit: nothing,
@@ -81,19 +97,23 @@ export const installBridge = (input: BridgeInput): void => {
     },
     library: {
       captureSoon: nothing,
-      copyDetails: async () => await resolve(OK),
-      copyImage: async () => await resolve(OK),
-      copyText: async () => await resolve(OK),
-      floatOnTop: nothing,
+      copyDetails: recorded("copyDetails"),
+      copyImage: recorded("copyImage"),
+      copyText: recorded("copyText"),
+      floatOnTop: (id: string) => {
+        record(`floatOnTop:${id}`);
+      },
       flushed: nothing,
       get: async (id: string) => await resolve(find(id) ?? null),
       list: async () => await resolve(captures),
       on,
       openSettings: nothing,
-      remove: async () => await resolve(OK),
+      remove: recorded("remove"),
       reportShown: nothing,
       setDone: async ({ done, id }: { done: boolean; id: string }) => {
         const found = find(id);
+
+        record(`setDone:${id}:${String(done)}`);
 
         if (found !== undefined) {
           found.status = done
@@ -110,8 +130,20 @@ export const installBridge = (input: BridgeInput): void => {
       startImageDrag: nothing,
       status: async () =>
         await resolve({ iconIn: "dockAndMenuBar", shortcutRegistered: true }),
-      update: async ({ fields, id }: { fields: object; id: string }) => {
+      update: async ({
+        fields,
+        id,
+      }: {
+        fields: { readonly title?: string };
+        id: string;
+      }) => {
         const found = find(id);
+
+        record(`update:${id}:${fields.title ?? ""}`);
+
+        if (globalThis.__failSaves === true) {
+          return await resolve({ message: "The disk is full.", ok: false });
+        }
 
         if (found !== undefined) {
           Object.assign(found, fields);
