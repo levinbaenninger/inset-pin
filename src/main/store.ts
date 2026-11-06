@@ -314,7 +314,11 @@ export const openCaptureStore = async (
   const undo = new Map<CaptureId, Undo>();
   /** Per capture, the epochs Discard changes ended. */
   const ended = new Map<CaptureId, Set<string>>();
-  /** Per capture whose discard marker may be on disk: its write, true once it is down. */
+  /**
+   * Per capture whose discard marker may be on disk: the last write or removal
+   * of it, each run after the one before. True once a write put it down;
+   * a removal ends false, and never rejects.
+   */
   const markers = new Map<CaptureId, Promise<boolean>>();
   /** Captures whose discard marker is confirmed on disk: the next start finishes their Discard. */
   const markersDown = new Set<CaptureId>();
@@ -437,14 +441,14 @@ export const openCaptureStore = async (
   const fileOf = (id: string, name: string): string =>
     path.join(root, id, name);
 
-  /** Puts the discard marker down now, ahead of the queue, unless an earlier write put it down already. */
+  /** Puts the discard marker down now, ahead of the queue, once a removal on its way is done, unless an earlier write put it down already. */
   const mark = async (id: CaptureId): Promise<boolean> => {
-    const known = markers.get(id);
+    const before = markers.get(id);
 
     const writing = beside(
       (async () => {
         const isDown =
-          (known !== undefined && (await known)) ||
+          (before !== undefined && (await before)) ||
           (await touch(fileOf(id, MARKER_FILE)));
 
         // Before beside() wakes the waits, so durable() sees it.
@@ -461,20 +465,36 @@ export const openCaptureStore = async (
     return await writing;
   };
 
-  /** Takes the marker away, so it can't undo a save that comes after; throws when it can't. */
+  /**
+   * Takes the marker away, so it can't undo a save that comes after; throws
+   * when it can't. A Discard meanwhile puts it down again after it, never
+   * counting the marker this removes as down.
+   */
   const unmark = async (id: CaptureId): Promise<void> => {
-    const marking = markers.get(id);
+    const before = markers.get(id);
 
-    if (marking === undefined) {
+    if (before === undefined) {
       return;
     }
 
-    await marking;
-    markersDown.delete(id);
-    await fs.rm(fileOf(id, MARKER_FILE));
-    await syncQuietly(path.join(root, id));
+    const removing = (async () => {
+      await before;
+      markersDown.delete(id);
+      await fs.rm(fileOf(id, MARKER_FILE));
+      await syncQuietly(path.join(root, id));
+    })();
 
-    if (markers.get(id) === marking) {
+    const removed = (async () => {
+      await quietly(removing);
+
+      return false;
+    })();
+
+    markers.set(id, removed);
+    await removing;
+
+    // A removal that failed stays, so the next save tries again.
+    if (markers.get(id) === removed) {
       markers.delete(id);
     }
   };

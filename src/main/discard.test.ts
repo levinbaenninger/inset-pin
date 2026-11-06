@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DraftStore, SAVE_AFTER_MS } from "../renderer/library/drafts";
 import { createLeaveHold } from "../renderer/library/leave-hold";
+import { openLibrary } from "../renderer/library/opening";
 import { createCopyGate } from "./copy-gate";
 import type { ClipboardWriter } from "./copy-gate";
 import { nodeStoreFs, openCaptureStore } from "./store";
@@ -54,8 +55,8 @@ const nothing = (): void => undefined;
  * step of a save and then fill, as a slow and then full disk would.
  */
 interface Disk {
-  /** Holds the next content write, or the next rename into capture.json. */
-  hold: "write" | "rename" | null;
+  /** Holds the next content write, the next rename into capture.json, or the next removal of the discard marker. */
+  hold: "write" | "rename" | "unmark" | null;
   full: boolean;
   /** Renames into capture.json.prev fail, as a backup a Windows lock holds would. */
   backupLocked: boolean;
@@ -370,6 +371,16 @@ describe("Discard changes never writes content to undo a save (SPEC round 8)", (
           }
 
           await nodeStoreFs.rename(from, to);
+        },
+        rm: async (target) => {
+          if (
+            disk.hold === "unmark" &&
+            path.basename(target) === "capture.json.discard"
+          ) {
+            await holdHere();
+          }
+
+          await nodeStoreFs.rm(target);
         },
         writeFileDurable: async (target, data) => {
           if (target.includes(ID)) {
@@ -1085,6 +1096,80 @@ describe("Discard changes never writes content to undo a save (SPEC round 8)", (
         });
       });
 
+      it("stays closed and reports nothing while its lookup of what main owes fails, then opens it failed, so an unrelated edit can't clear the Discard", async () => {
+        await closedWhileOwed();
+        vi.spyOn(console, "error").mockImplementation(nothing);
+
+        const drafts = openDrafts();
+        const counts: number[] = [];
+        const seen: string[] = [];
+        let asked = 0;
+
+        const opening = openLibrary({
+          drafts,
+          owed: async () => {
+            asked += 1;
+
+            if (asked === 1) {
+              throw new Error("The IPC channel closed.");
+            }
+
+            return await Promise.resolve(store.owed());
+          },
+          report: (count) => {
+            counts.push(count);
+          },
+        });
+
+        /** What main had heard, and what the capture held, as the page went unread. */
+        const unread: unknown[] = [];
+
+        opening.subscribe(() => {
+          seen.push(opening.get());
+
+          if (opening.get() === "unread") {
+            unread.push({ counts: [...counts], shown: drafts.get(ID) });
+          }
+        });
+        await opening.opened;
+
+        const writes = disk.writes.length;
+
+        drafts.edit(
+          ID,
+          { ...DISCARDED, description: "Unrelated edit after reopening" },
+          DISCARDED,
+          { now: true }
+        );
+        await delay(SAVE_AFTER_MS + 100);
+        await settle();
+        vi.restoreAllMocks();
+
+        expect({
+          counts,
+          marker: await readFile(
+            path.join(root, ID, "capture.json.discard"),
+            "utf-8"
+          ).then(
+            () => true,
+            () => false
+          ),
+          owed: store.owed().map((one) => one.message),
+          restart: await restarted(),
+          seen,
+          unread,
+          writes: contentOf(disk.writes.slice(writes)),
+        }).toStrictEqual({
+          counts: [1],
+          marker: true,
+          owed: ["Inset can’t write to its data folder."],
+          restart: BASE.title,
+          seen: ["unread", "open"],
+          unread: [{ counts: [], shown: undefined }],
+          writes: [],
+        });
+      }, 10_000);
+
       it("refuses a copy made with no library page open, as Float on Top makes, until the library settles it", async () => {
         await closedWhileOwed();
 
@@ -1529,6 +1614,73 @@ describe("Discard changes never writes content to undo a save (SPEC round 8)", (
         beforeDiscard: false,
         installHeld: { durable: true, restart: BASE.title, settled: false },
         later: { disk: BASE, owed: [] },
+      });
+    });
+
+    it("puts the marker down again for a Discard that arrives while Keep changes is removing it, so a quit during the restore leaves a start that puts the saved version back", async () => {
+      const { answers, drafts } = await retriedAndLanded();
+
+      disk.restoreLocked = true;
+      drafts.discard(ID);
+      await vi.waitFor(() => {
+        expect(drafts.get(ID)?.error?.during).toBe("discard");
+      });
+      answers.release();
+      await settle();
+      disk.restoreLocked = false;
+
+      drafts.edit(ID, { ...DISCARDED, title: "Typed during keep" }, BASE, {
+        now: true,
+      });
+      disk.hold = "unmark";
+
+      const keeping = drafts.retry(ID);
+
+      await vi.waitFor(() => {
+        expect(disk.held).toBeTruthy();
+      });
+
+      const releaseUnmark = disk.release;
+
+      drafts.discard(ID);
+      await delay(20);
+      disk.held = false;
+      disk.hold = "rename";
+      releaseUnmark();
+      await vi.waitFor(() => {
+        expect(disk.held).toBeTruthy();
+      });
+
+      const restoreHeld = {
+        durable: await within(store.durable()),
+        marker: await readFile(
+          path.join(root, ID, "capture.json.discard"),
+          "utf-8"
+        ).then(
+          () => true,
+          () => false
+        ),
+        owed: store.owed().length,
+        restart: await restarted(),
+        shown: shown(drafts).title,
+      };
+
+      disk.release();
+      await keeping;
+      await settle();
+
+      expect({
+        later: { disk: fieldsOf(await onDisk()), owed: store.owed() },
+        restoreHeld,
+      }).toStrictEqual({
+        later: { disk: BASE, owed: [] },
+        restoreHeld: {
+          durable: true,
+          marker: true,
+          owed: 1,
+          restart: BASE.title,
+          shown: BASE.title,
+        },
       });
     });
 

@@ -410,6 +410,7 @@ interface SceneData {
   captures?: BridgeInput["captures"];
   capture?: object;
   commands?: readonly string[];
+  owedFails?: BridgeInput["owedFails"];
 }
 
 interface Scene {
@@ -986,6 +987,17 @@ const makeScenes = (
       name: "library-27-discard-pending-close",
       page: "library",
       platforms: ["windows"],
+    },
+    {
+      // Round 12: while main can't say which Discards it owes, the library shows no capture and keeps asking.
+      act: async (page) => {
+        await page.getByTestId("owed-unread").waitFor();
+      },
+      data: { ...library(), owedFails: "always" },
+      hash: `/captures/${uuid(1)}`,
+      name: "library-28-owed-unread",
+      page: "library",
+      platforms: ["macos"],
     },
     {
       data: { view: SETTINGS_VIEW },
@@ -3674,6 +3686,106 @@ const checkDrafts = async (
       await s.context.close();
     }
   });
+
+  // Round 12: a library whose lookup of what main owes fails shows no capture and reports no count until a lookup answers.
+  await attempt(
+    "a library whose lookup of owed Discards fails once",
+    async () => {
+      const stored = captures.find((one) => one.id === a);
+
+      if (stored === undefined) {
+        throw new Error("capture A is missing");
+      }
+
+      const confirmed = {
+        description: stored.description,
+        due: stored.due,
+        pins: stored.pins,
+        steps: stored.steps,
+        title: aTitle,
+      };
+
+      const discarded = `${aTitle} (discarded)`;
+
+      const context = await browser.newContext({
+        userAgent: USER_AGENT[platform],
+        viewport: SIZES.library,
+      });
+
+      try {
+        const page = await context.newPage();
+
+        await page.addInitScript(installBridge, {
+          captures: structuredClone(
+            captures.map((one) =>
+              one.id === a ? { ...one, title: discarded } : one
+            )
+          ),
+          owed: [
+            {
+              confirmed,
+              id: a,
+              message: "Inset can’t write to its data folder.",
+              tag: { epoch: "closed-page.1", seq: 7 },
+              values: { ...confirmed, title: discarded },
+            },
+          ],
+          owedFails: 1,
+          page: "library",
+        } satisfies BridgeInput);
+        await page.goto(`${origin}/library.html#/captures/${a}`);
+        await page.getByTestId("owed-unread").waitFor();
+
+        const unread = await page.evaluate(
+          (selector) => ({
+            counts: globalThis.__unsavedCounts ?? [],
+            rows: document.querySelectorAll(selector).length,
+            text:
+              document.querySelector("[data-testid='owed-unread']")
+                ?.textContent ?? null,
+          }),
+          ROW
+        );
+
+        await page.locator(ROW).first().waitFor();
+        await page.getByTestId("save-failure").waitFor();
+
+        const opened = await page.evaluate(() => ({
+          counts: globalThis.__unsavedCounts ?? [],
+          failure:
+            document.querySelector("[data-testid='save-failure']")
+              ?.textContent ?? null,
+          notice:
+            document.querySelector("[data-testid='owed-unread']") !== null,
+          title:
+            document.querySelector<HTMLTextAreaElement>(
+              "[data-testid='title-field']"
+            )?.value ?? null,
+        }));
+
+        expectSame(
+          "it shows Library can’t open yet with no capture and tells main no count, then asks again and opens with the Discard failed and a count of 1",
+          { opened, unread },
+          {
+            opened: {
+              counts: [1],
+              failure:
+                "Couldn’t discard your changes. Inset can’t write to its data folder.Keep changesDiscard again",
+              notice: false,
+              title: discarded,
+            },
+            unread: {
+              counts: [],
+              rows: 0,
+              text: "Library can’t open yetInset couldn’t check which changes it still has to discard. Trying again…",
+            },
+          }
+        );
+      } finally {
+        await context.close();
+      }
+    }
+  );
 
   // Round 7 red team: a Retry beside the error that doesn't finish in 3 s says so, and Retry can wait again.
   await attempt("a Retry beside the error that doesn't finish", async () => {

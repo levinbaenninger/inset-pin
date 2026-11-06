@@ -3,7 +3,7 @@ import "@/styles.css";
 import { CaptureIdSchema } from "@shared/capture-record";
 import type { ActionResult, FlushRequest, SavedEdits } from "@shared/contracts";
 import { RouterProvider } from "@tanstack/react-router";
-import { StrictMode } from "react";
+import { StrictMode, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 
 import { libraryBridge } from "@/shared/bridge";
@@ -15,6 +15,8 @@ import { followSystemTheme } from "@/shared/theme";
 
 import { startCommandBus } from "./command-bus";
 import { drafts, leaveHold } from "./library-drafts";
+import { openLibrary } from "./opening";
+import { OwedUnread } from "./owed-unread";
 import { router } from "./router";
 
 followSystemTheme();
@@ -34,18 +36,18 @@ libraryBridge().on("changed", () => {
 const withoutFields = (result: ActionResult): SavedEdits =>
   result.ok ? { fields: null, ok: true } : result;
 
-// A Discard a closed or reloaded page sent may still be owed, so this page shows it before it answers or reports anything.
-const owedShown = (async (): Promise<void> => {
-  try {
-    drafts.owe(await libraryBridge().owedDiscards());
-  } catch {
-    // Main couldn't answer, so it can't be asked to save either: the page still opens.
-  }
-})();
+// A Discard a closed or reloaded page sent may still be owed, so this page shows it before it answers or reports anything. Main asks a page that may not answer, so it keeps the count it last heard until this page reports its own.
+const opening = openLibrary({
+  drafts,
+  owed: async () => await libraryBridge().owedDiscards(),
+  report: (count) => {
+    libraryBridge().unsavedCount(count);
+  },
+});
 
 /** Before a copy, a close or a quit, main waits for what is typed to be saved, and hears how it went. */
 const answerFlush = async (request: FlushRequest): Promise<SavedEdits> => {
-  await owedShown;
+  await opening.opened;
 
   if (request.id === null) {
     return withoutFields(leaveHold.ask(request.leaving));
@@ -85,32 +87,27 @@ handleMenuKeys({
   },
 });
 
-const start = async (): Promise<void> => {
-  await owedShown;
+/** The captures show only once the page knows which Discards main still owes. */
+const Library = () => {
+  const state = useSyncExternalStore(opening.subscribe, opening.get);
 
-  // Main asks a page that may not answer, so it keeps the count it last heard. A fresh page reports at once: until it does, main keeps the count a crashed or reloaded page left.
-  let reported = drafts.unsaved()?.count ?? 0;
-
-  libraryBridge().unsavedCount(reported);
-
-  drafts.subscribe(() => {
-    const count = drafts.unsaved()?.count ?? 0;
-
-    if (count !== reported) {
-      reported = count;
-      libraryBridge().unsavedCount(count);
-    }
-  });
-
-  const root = document.querySelector("#root");
-
-  if (root !== null) {
-    createRoot(root).render(
-      <StrictMode>
-        <RouterProvider router={router} />
-      </StrictMode>
-    );
+  if (state === "reading") {
+    return null;
   }
+
+  if (state === "unread") {
+    return <OwedUnread />;
+  }
+
+  return <RouterProvider router={router} />;
 };
 
-void start();
+const root = document.querySelector("#root");
+
+if (root !== null) {
+  createRoot(root).render(
+    <StrictMode>
+      <Library />
+    </StrictMode>
+  );
+}

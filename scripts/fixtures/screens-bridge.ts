@@ -73,6 +73,8 @@ export interface BridgeInput {
   readonly commands?: readonly string[];
   /** Discards main still owes as the library loads, as after a close whose Discard failed. */
   readonly owed?: readonly OwedFixture[];
+  /** How many lookups of `owed` fail before one answers, as a closed IPC channel would; "always" never answers. */
+  readonly owedFails?: number | "always";
 }
 
 /** A capture's editable fields, as main stores them. */
@@ -130,6 +132,8 @@ export const installBridge = (input: BridgeInput): void => {
   /** The page's answers to a flush, by token, as main waits for them. */
   const answers = new Map<string, (result: Saved) => void>();
   let flushes = 0;
+  /** How many times the page asked which Discards main still owes. */
+  let owedAsks = 0;
   /** Saves waiting for `__releaseSaves`, oldest first. */
   let held: (() => void)[] = [];
   /** Reads waiting for `__releaseGets`. */
@@ -394,7 +398,17 @@ export const installBridge = (input: BridgeInput): void => {
       openSettings: () => {
         record("openSettings");
       },
-      owedDiscards: async () => await respond(input.owed ?? []),
+      owedDiscards: async () => {
+        owedAsks += 1;
+
+        const fails = input.owedFails ?? 0;
+
+        if (fails === "always" || owedAsks <= fails) {
+          throw new Error("The IPC channel closed.");
+        }
+
+        return await respond(input.owed ?? []);
+      },
       remove: recorded("remove"),
       reportShown: nothing,
       resumeLeaving: () => {
