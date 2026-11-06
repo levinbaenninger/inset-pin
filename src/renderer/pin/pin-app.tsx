@@ -1,4 +1,5 @@
 import {
+  Alert02Icon,
   ArrowUpRight01Icon,
   Cancel01Icon,
   Image01Icon,
@@ -17,6 +18,13 @@ import { useExpiringState } from "@/shared/use-expiring-state";
 const api = pinBridge();
 
 const COPIED_MS = 1600;
+
+/** Long enough to read why nothing was copied. */
+const FAILED_MS = 4000;
+
+type CopyOutcome =
+  | { readonly kind: "copied" }
+  | { readonly kind: "failed"; readonly message: string };
 
 type Saved = Extract<CaptureDetail, { kind: "ok" }>;
 
@@ -41,12 +49,17 @@ const useCapture = (): Saved | null => {
   return capture;
 };
 
-const copyImage = async (onCopied: (copied: true) => void): Promise<void> => {
-  const result = await api.copyImage();
+const copyImage = async (
+  onDone: (outcome: CopyOutcome) => void
+): Promise<void> => {
+  const result = await api.copyImage().catch(() => ({
+    message: "Inset couldn’t reach the app. Try again.",
+    ok: false as const,
+  }));
 
-  if (result.ok) {
-    onCopied(true);
-  }
+  onDone(
+    result.ok ? { kind: "copied" } : { kind: "failed", message: result.message }
+  );
 };
 
 const percent = (value: number, total: number): string =>
@@ -94,8 +107,16 @@ const useWindowFocused = (): boolean => {
   return focused;
 };
 
+const COPY_BUTTON = {
+  copied: { icon: Tick02Icon, label: "Copied" },
+  failed: { icon: Alert02Icon, label: "Couldn’t copy" },
+  idle: { icon: Image01Icon, label: "Copy image" },
+} as const;
+
 const Pin = ({ capture }: { readonly capture: Saved }) => {
-  const [copied, setCopied] = useExpiringState<true>(COPIED_MS);
+  const [lifetime, setLifetime] = useState(COPIED_MS);
+  const [copied, setCopied] = useExpiringState<CopyOutcome>(lifetime);
+  const button = COPY_BUTTON[copied?.kind ?? "idle"];
   const focused = useWindowFocused();
   const { image, pins, title } = capture;
 
@@ -141,15 +162,15 @@ const Pin = ({ capture }: { readonly capture: Saved }) => {
         </ImageButton>
         <span className="flex-1" />
         <ImageButton
-          label={copied === null ? "Copy image" : "Copied"}
+          label={button.label}
           onClick={() => {
-            void copyImage(setCopied);
+            void copyImage((outcome) => {
+              setLifetime(outcome.kind === "failed" ? FAILED_MS : COPIED_MS);
+              setCopied(outcome);
+            });
           }}
         >
-          <HugeiconsIcon
-            icon={copied === null ? Image01Icon : Tick02Icon}
-            size={14}
-          />
+          <HugeiconsIcon icon={button.icon} size={14} />
         </ImageButton>
         <ImageButton
           label="Show in library"
@@ -162,9 +183,24 @@ const Pin = ({ capture }: { readonly capture: Saved }) => {
       </div>
       {/* The padding sits outside the clamped text, or a third line would show through it. */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-linear-to-t from-black/80 to-transparent px-2.5 pt-6 pb-2">
-        <p className="line-clamp-2 text-xs leading-snug wrap-break-word text-white">
-          {title}
-        </p>
+        {copied?.kind === "failed" ? (
+          <p
+            className="flex items-start gap-1.5 text-xs leading-snug font-medium wrap-break-word text-white"
+            data-testid="copy-failed"
+            role="alert"
+          >
+            <HugeiconsIcon
+              className="text-destructive mt-px shrink-0"
+              icon={Alert02Icon}
+              size={13}
+            />
+            <span className="line-clamp-3">{copied.message}</span>
+          </p>
+        ) : (
+          <p className="line-clamp-2 text-xs leading-snug wrap-break-word text-white">
+            {title}
+          </p>
+        )}
       </div>
     </main>
   );

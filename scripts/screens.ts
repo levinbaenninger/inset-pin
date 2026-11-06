@@ -705,6 +705,19 @@ const makeScenes = (
       page: "pin",
       platforms: ["macos"],
     },
+    {
+      act: async (page) => {
+        await page.evaluate(() => {
+          globalThis.__failSaves = true;
+        });
+        await page.getByRole("button", { name: "Copy image" }).click();
+        await page.getByTestId("copy-failed").waitFor();
+      },
+      data: { capture: captures[0] },
+      name: "float-on-top-copy-failed",
+      page: "pin",
+      platforms: ["macos"],
+    },
   ];
 };
 
@@ -993,6 +1006,11 @@ const shootRenderer = async (
 /* ---------- Checks: the real renderer, keys pressed, bridge calls read back ---------- */
 
 const ROW = "[data-testid='capture-row']";
+
+/** A way to copy that needs nothing set up first. */
+const ready = async (): Promise<void> => {
+  await Promise.resolve();
+};
 
 /** A small assertion log: every line is PASS or FAIL, and the FAILs fail the run. */
 const makeReport = (platform: Platform) => {
@@ -1328,14 +1346,620 @@ const checkRowMenu = async (
   await page.evaluate(() => {
     globalThis.__failSaves = false;
   });
+
+  // Round 5: Space and Return pick the highlighted item; the keys the menu shows act on B whatever is highlighted.
   await openMenu(bIndex);
+
+  const rowMenuText = (await page.getByRole("menu").textContent()) ?? "";
+
   await page.keyboard.press(" ");
-  closed = await settled();
+  await page.waitForTimeout(300);
+
+  const stillOpen = await page.getByRole("menu").isVisible();
+
+  await page.keyboard.press("Escape");
+  await page.getByRole("menu").waitFor({ state: "detached" });
+  await page.waitForTimeout(200);
   expectSame(
-    "Space in row B's menu marks B done and moves on to the next row",
-    { calls: await takeCalls(), closed, focus: await focused() },
-    { calls: [`setDone:${b}:true`], closed: true, focus: ids[bIndex + 1] }
+    "row B's menu shows no Space key, and Space with nothing highlighted does nothing",
+    {
+      calls: await takeCalls(),
+      showsSpace: rowMenuText.includes("Space"),
+      stillOpen,
+    },
+    { calls: [], showsSpace: false, stillOpen: true }
   );
+
+  const hover = (name: RegExp) => async (): Promise<void> => {
+    await page.getByRole("menuitem", { name }).hover();
+  };
+
+  const pickIn = async (
+    label: string,
+    highlight: () => Promise<void>,
+    key: string,
+    command: string
+  ): Promise<void> => {
+    await openMenu(bIndex);
+    await highlight();
+    await page.keyboard.press(key);
+    const shut = await settled();
+    expectSame(
+      label,
+      { calls: await takeCalls(), closed: shut, focus: await focused() },
+      { calls: [`${command}:${b}`], closed: true, focus: b }
+    );
+  };
+
+  await pickIn(
+    "Space on the highlighted Copy Text copies B",
+    async () => {
+      await page.keyboard.press("ArrowDown");
+    },
+    " ",
+    "copyText"
+  );
+  await pickIn(
+    "Return on the highlighted Float on Top floats B",
+    hover(/Float on Top/u),
+    "Enter",
+    "floatOnTop"
+  );
+  await pickIn(
+    `${m}+Alt+c with Copy Image highlighted copies B with details`,
+    hover(/^Copy Image/u),
+    `${m}+Alt+c`,
+    "copyDetails"
+  );
+  await pickIn(
+    `${m}+c with Delete… highlighted copies B's text`,
+    hover(/Delete/u),
+    `${m}+c`,
+    "copyText"
+  );
+
+  // Keys the menu doesn't show stay in it: none reaches capture A or the window.
+  const hidden =
+    platform === "macos"
+      ? [
+          "Meta+d",
+          "Meta+Shift+d",
+          "Meta+Shift+s",
+          "Meta+f",
+          "Meta+/",
+          "Meta+z",
+          "Control+Meta+s",
+        ]
+      : [
+          "Control+d",
+          "Control+Shift+d",
+          "Control+Shift+s",
+          "Control+f",
+          "Control+/",
+          "Control+z",
+          "Control+b",
+          "Control+,",
+        ];
+
+  interface KeyOutcome {
+    readonly calls: readonly string[];
+    readonly inMenu: boolean;
+    readonly layers: number;
+    readonly sidebarShown: boolean;
+  }
+
+  const quiet: KeyOutcome = {
+    calls: [],
+    inMenu: true,
+    layers: 0,
+    sidebarShown: true,
+  };
+
+  /** Escape until no menu, dialog or picker is left, even when a key opened one over the menu. */
+  const closeLayers = async (left = 3): Promise<void> => {
+    const open = await page
+      .locator(
+        '[role="menu"], [role="dialog"], [role="alertdialog"], [data-slot="popover-content"]'
+      )
+      .count();
+
+    if (open === 0 || left === 0) {
+      return;
+    }
+
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(150);
+    await closeLayers(left - 1);
+  };
+
+  const pressInMenu = async (
+    open: () => Promise<void>,
+    key: string
+  ): Promise<KeyOutcome> => {
+    await open();
+    await takeCalls();
+    await page.keyboard.press(key);
+    await page.waitForTimeout(250);
+
+    const state = await page.evaluate(() => ({
+      inMenu:
+        (document.activeElement?.closest('[role="menu"]') ?? null) !== null,
+      layers: document.querySelectorAll(
+        '[role="dialog"], [role="alertdialog"], [data-slot="popover-content"]'
+      ).length,
+      sidebarShown:
+        document.querySelector('[aria-label="Hide sidebar"]') !== null,
+    }));
+
+    const outcome = { calls: await takeCalls(), ...state };
+
+    await closeLayers();
+
+    return outcome;
+  };
+
+  const hiddenKeysIn = async (
+    menu: string,
+    open: () => Promise<void>
+  ): Promise<void> => {
+    const seen = new Map<string, KeyOutcome>();
+
+    for (const key of hidden) {
+      // Sequential on purpose: one menu, one key at a time.
+      // oxlint-disable-next-line no-await-in-loop
+      seen.set(key, await pressInMenu(open, key));
+    }
+
+    expectSame(
+      `keys ${menu} doesn't show stay in it`,
+      Object.fromEntries(seen),
+      Object.fromEntries(hidden.map((key) => [key, quiet]))
+    );
+  };
+
+  const openMore = async (): Promise<void> => {
+    await page.getByTestId("more").click();
+    await page.getByRole("menu").waitFor();
+    await page.waitForTimeout(150);
+  };
+
+  await hiddenKeysIn("row B's menu", async () => {
+    await openMenu(bIndex);
+  });
+  await hiddenKeysIn("the ⋯ menu", openMore);
+  await hiddenKeysIn("the due filter menu", async () => {
+    await page.getByRole("button", { name: "Due filters" }).click();
+    await page.getByRole("menu").waitFor();
+    await page.waitForTimeout(150);
+  });
+
+  await openMore();
+
+  const moreText = (await page.getByRole("menu").textContent()) ?? "";
+
+  await page.keyboard.press("Escape");
+  await page.getByRole("menu").waitFor({ state: "detached" });
+  expectSame(
+    "the ⋯ menu shows no Space key either",
+    moreText.includes("Space"),
+    false
+  );
+
+  await rows.nth(bIndex).focus();
+  await takeCalls();
+  await page.keyboard.press(" ");
+  await page.waitForTimeout(400);
+  expectSame(
+    "Space on focused row B with no menu open marks B done and moves on to the next row",
+    { calls: await takeCalls(), focus: await focused() },
+    { calls: [`setDone:${b}:true`], focus: ids[bIndex + 1] }
+  );
+
+  await context.close();
+
+  return failures;
+};
+
+/**
+ * Round 5's copy gate: every way to copy capture A asks main's gate, which
+ * has the page save A's typing first. While saves fail nothing is copied and
+ * the page says so; once they work, each way copies A.
+ */
+const checkCopyGate = async (
+  browser: Browser,
+  origin: string,
+  captures: readonly Capture[],
+  platform: Platform
+): Promise<string[]> => {
+  const { expectSame, failures } = makeReport(platform);
+  const a = uuid(1);
+
+  const { context, page } = await openLibrary(
+    browser,
+    origin,
+    { captures: structuredClone(captures), page: "library" },
+    platform,
+    `/captures/${a}`
+  );
+
+  const rows = page.locator(ROW);
+
+  const listed = await rows.evaluateAll((elements: HTMLElement[]) =>
+    elements.map((element) => element.dataset.captureId ?? "")
+  );
+
+  const aIndex = listed.indexOf(a);
+
+  const m = mod(platform);
+  const title = page.getByTestId("title-field");
+
+  const take = async () =>
+    await page.evaluate(() => {
+      const asked = globalThis.__asked ?? [];
+
+      const copies = (globalThis.__calls ?? []).filter((call) =>
+        call.startsWith("copy")
+      );
+
+      globalThis.__asked = [];
+      globalThis.__calls = [];
+
+      return { asked, copies };
+    });
+
+  const openRowMenu = async (): Promise<void> => {
+    await rows.nth(aIndex).click({ button: "right" });
+    await page.getByRole("menu").waitFor();
+    await page.waitForTimeout(150);
+  };
+
+  const openMore = async (): Promise<void> => {
+    await page.getByTestId("more").click();
+    await page.getByRole("menu").waitFor();
+    await page.waitForTimeout(150);
+  };
+
+  const focusRow = async (): Promise<void> => {
+    await rows.nth(aIndex).focus();
+  };
+
+  const focusPage = async (): Promise<void> => {
+    await page.getByTestId("more").focus();
+  };
+
+  const focusTitle = async (): Promise<void> => {
+    await title.focus();
+  };
+
+  const press = (key: string) => async (): Promise<void> => {
+    await page.keyboard.press(key);
+  };
+
+  const pick = (name: RegExp) => async (): Promise<void> => {
+    await page.getByRole("menuitem", { name }).click();
+  };
+
+  const command = (name: string) => async (): Promise<void> => {
+    await page.evaluate((sent) => {
+      globalThis.__emit?.("command", sent);
+    }, name);
+  };
+
+  const onMac = platform === "macos";
+
+  const ways: readonly {
+    readonly way: string;
+    readonly copies: "copyText" | "copyDetails" | "copyImage";
+    readonly prepare: () => Promise<void>;
+    readonly act: () => Promise<void>;
+  }[] = [
+    {
+      act: press(`${m}+c`),
+      copies: "copyText",
+      prepare: openRowMenu,
+      way: `${m}+c in A's row menu`,
+    },
+    {
+      act: press(`${m}+Alt+c`),
+      copies: "copyDetails",
+      prepare: openRowMenu,
+      way: `${m}+Alt+c in A's row menu`,
+    },
+    {
+      act: press(`${m}+Shift+c`),
+      copies: "copyImage",
+      prepare: openRowMenu,
+      way: `${m}+Shift+c in A's row menu`,
+    },
+    {
+      act: pick(/^Copy Text/u),
+      copies: "copyText",
+      prepare: openRowMenu,
+      way: "Copy Text in A's row menu",
+    },
+    {
+      act: pick(/Copy with Details/u),
+      copies: "copyDetails",
+      prepare: openRowMenu,
+      way: "Copy with Details in A's row menu",
+    },
+    {
+      act: pick(/^Copy Image/u),
+      copies: "copyImage",
+      prepare: openRowMenu,
+      way: "Copy Image in A's row menu",
+    },
+    {
+      act: press(`${m}+Alt+c`),
+      copies: "copyDetails",
+      prepare: focusRow,
+      way: `${m}+Alt+c on A's row`,
+    },
+    {
+      act: press(`${m}+Shift+c`),
+      copies: "copyImage",
+      prepare: focusRow,
+      way: `${m}+Shift+c on A's row`,
+    },
+    {
+      act: press(`${m}+c`),
+      copies: "copyText",
+      prepare: openMore,
+      way: `${m}+c in the ⋯ menu`,
+    },
+    {
+      act: press(`${m}+Alt+c`),
+      copies: "copyDetails",
+      prepare: openMore,
+      way: `${m}+Alt+c in the ⋯ menu`,
+    },
+    {
+      act: press(`${m}+Shift+c`),
+      copies: "copyImage",
+      prepare: openMore,
+      way: `${m}+Shift+c in the ⋯ menu`,
+    },
+    {
+      act: pick(/^Copy Text/u),
+      copies: "copyText",
+      prepare: openMore,
+      way: "Copy Text in the ⋯ menu",
+    },
+    {
+      act: pick(/Copy with Details/u),
+      copies: "copyDetails",
+      prepare: openMore,
+      way: "Copy with Details in the ⋯ menu",
+    },
+    {
+      act: pick(/^Copy Image/u),
+      copies: "copyImage",
+      prepare: openMore,
+      way: "Copy Image in the ⋯ menu",
+    },
+    {
+      act: press(`${m}+Alt+c`),
+      copies: "copyDetails",
+      prepare: focusPage,
+      way: `${m}+Alt+c on the page`,
+    },
+    {
+      act: press(`${m}+Shift+c`),
+      copies: "copyImage",
+      prepare: focusPage,
+      way: `${m}+Shift+c on the page`,
+    },
+    {
+      act: press(`${m}+Alt+c`),
+      copies: "copyDetails",
+      prepare: focusTitle,
+      way: `${m}+Alt+c in the title field`,
+    },
+    {
+      act: async () => {
+        await page
+          .getByRole("button", { name: "Copy image with pins" })
+          .click();
+      },
+      copies: "copyImage",
+      prepare: ready,
+      way: "the image's Copy button",
+    },
+    {
+      act: command("copyText"),
+      copies: "copyText",
+      prepare: ready,
+      way: "Copy Text from the app menu",
+    },
+    {
+      act: command("copyDetails"),
+      copies: "copyDetails",
+      prepare: ready,
+      way: "Copy with Details from the app menu",
+    },
+    {
+      act: command("copyImage"),
+      copies: "copyImage",
+      prepare: ready,
+      way: "Copy Image from the app menu",
+    },
+    // Plain ⌘C arrives as the copy event, which Chromium raises only on a Mac.
+    ...(onMac
+      ? [
+          {
+            act: press("Meta+c"),
+            copies: "copyText" as const,
+            prepare: focusRow,
+            way: "Meta+c on A's row",
+          },
+          {
+            act: press("Meta+c"),
+            copies: "copyText" as const,
+            prepare: focusPage,
+            way: "Meta+c on the page",
+          },
+        ]
+      : []),
+  ];
+
+  interface CopyOutcome {
+    readonly asked: readonly string[];
+    readonly copies: readonly string[];
+    readonly notice: { readonly failed: boolean; readonly text: string };
+  }
+
+  const tryWay = async ({
+    act,
+    prepare,
+  }: (typeof ways)[number]): Promise<CopyOutcome> => {
+    await prepare();
+    await take();
+    await act();
+    await page.waitForTimeout(300);
+
+    const notice = await page.getByTestId("notice").evaluate((element) => ({
+      failed: element.getAttribute("role") === "alert",
+      text: element.textContent ?? "",
+    }));
+
+    const outcome = { ...(await take()), notice };
+
+    if (await page.getByRole("menu").isVisible()) {
+      await page.keyboard.press("Escape");
+    }
+
+    return outcome;
+  };
+
+  const tryEach = async (): Promise<Record<string, CopyOutcome>> => {
+    const seen = new Map<string, CopyOutcome>();
+
+    for (const one of ways) {
+      // Sequential on purpose: one clipboard, one copy at a time.
+      // oxlint-disable-next-line no-await-in-loop
+      seen.set(one.way, await tryWay(one));
+    }
+
+    return Object.fromEntries(seen);
+  };
+
+  await title.evaluate((field: HTMLInputElement | HTMLTextAreaElement) => {
+    field.focus();
+    field.setSelectionRange(field.value.length, field.value.length);
+  });
+  await page.keyboard.type(" (typed)");
+  await page.evaluate(() => {
+    globalThis.__failSaves = true;
+  });
+
+  const refused = {
+    failed: true,
+    text: "Couldn’t save your changes, so nothing was copied. The disk is full.",
+  };
+
+  expectSame(
+    "while saves fail, every way to copy A asks the gate, copies nothing and says why",
+    await tryEach(),
+    Object.fromEntries(
+      ways.map(({ copies, way }) => [
+        way,
+        { asked: [`${copies}:${a}`], copies: [], notice: refused },
+      ])
+    )
+  );
+
+  await page.evaluate(() => {
+    globalThis.__failSaves = false;
+  });
+
+  const said = {
+    copyDetails: "Copied with details",
+    copyImage: "Image copied with its pins",
+    copyText: "Copied",
+  } as const;
+
+  expectSame(
+    "once saves work, every way to copy A copies A",
+    await tryEach(),
+    Object.fromEntries(
+      ways.map(({ copies, way }) => [
+        way,
+        {
+          asked: [`${copies}:${a}`],
+          copies: [`${copies}:${a}`],
+          notice: { failed: false, text: said[copies] },
+        },
+      ])
+    )
+  );
+
+  await context.close();
+
+  return failures;
+};
+
+/** The floating window's Copy image: a refused copy says why and never shows Copied. */
+const checkFloatCopy = async (
+  browser: Browser,
+  origin: string,
+  captures: readonly Capture[],
+  platform: Platform
+): Promise<string[]> => {
+  const { expectSame, failures } = makeReport(platform);
+
+  const context = await browser.newContext({
+    userAgent: USER_AGENT[platform],
+    viewport: SIZES.pin,
+  });
+
+  const page = await context.newPage();
+
+  const input: BridgeInput = { capture: captures[0], page: "pin" };
+
+  await page.addInitScript(installBridge, input);
+  await page.goto(`${origin}/pin.html`);
+  await page.getByRole("img").first().waitFor();
+
+  const state = async () =>
+    await page.evaluate(() => {
+      const calls = globalThis.__calls ?? [];
+
+      globalThis.__calls = [];
+
+      return {
+        alert:
+          document.querySelector("[data-testid='copy-failed']")?.textContent ??
+          null,
+        calls,
+        // Close, the copy button, then Show in library.
+        copyButton:
+          document.querySelectorAll("button")[1]?.getAttribute("aria-label") ??
+          null,
+      };
+    });
+
+  await page.evaluate(() => {
+    globalThis.__failSaves = true;
+  });
+  await page.getByRole("button", { name: "Copy image" }).click();
+  await page.waitForTimeout(200);
+  expectSame("a refused copy in the floating window says why", await state(), {
+    alert:
+      "Couldn’t save your changes, so nothing was copied. The disk is full.",
+    calls: [],
+    copyButton: "Couldn’t copy",
+  });
+
+  await page.evaluate(() => {
+    globalThis.__failSaves = false;
+  });
+  await page.getByRole("button", { name: "Couldn’t copy" }).click();
+  await page.waitForTimeout(200);
+  expectSame("then a copy that works says Copied", await state(), {
+    alert: null,
+    calls: ["copyImage:pin"],
+    copyButton: "Copied",
+  });
 
   await context.close();
 
@@ -1489,13 +2113,87 @@ const checkSidebarWidths = async (
   return failures;
 };
 
+/** The capture panel's Add… menu: the keys it shows pick their field; other shortcuts stay in the menu. */
+const checkAddMenu = async (
+  browser: Browser,
+  origin: string,
+  desktop: Targets,
+  platform: Platform
+): Promise<string[]> => {
+  const { expectSame, failures } = makeReport(platform);
+  const m = mod(platform);
+
+  const context = await browser.newContext({
+    userAgent: USER_AGENT[platform],
+    viewport: SIZES.capture,
+  });
+
+  const page = await context.newPage();
+
+  const input: BridgeInput = {
+    page: "capture",
+    view: draftView(desktop, { title: "Chairs are CHF 280 over the cap" }),
+  };
+
+  await page.addInitScript(installBridge, input);
+  await page.goto(`${origin}/capture.html`);
+  await page.getByTestId("add-menu").waitFor();
+
+  const pressInAddMenu = async (key: string) => {
+    await page.getByTestId("add-menu").click();
+    await page.getByRole("menu").waitFor();
+    await page.waitForTimeout(150);
+    await page.keyboard.press(key);
+    await page.waitForTimeout(300);
+
+    const state = await page.evaluate(() => ({
+      descriptionFocused:
+        (document.activeElement?.closest("[data-testid='description-field']") ??
+          null) !== null,
+      dialogs: document.querySelectorAll(
+        '[role="dialog"], [data-slot="popover-content"]'
+      ).length,
+      menuOpen: document.querySelector('[role="menu"]') !== null,
+    }));
+
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(200);
+
+    return state;
+  };
+
+  expectSame(
+    `${m}+/ in the open Add… menu stays in it`,
+    await pressInAddMenu(`${m}+/`),
+    { descriptionFocused: false, dialogs: 0, menuOpen: true }
+  );
+  expectSame(
+    `${m}+Shift+d in the open Add… menu opens the Due picker`,
+    await pressInAddMenu(`${m}+Shift+d`),
+    { descriptionFocused: false, dialogs: 1, menuOpen: false }
+  );
+  expectSame(
+    `${m}+d in the open Add… menu adds the description and focuses it`,
+    await pressInAddMenu(`${m}+d`),
+    { descriptionFocused: true, dialogs: 0, menuOpen: false }
+  );
+
+  await context.close();
+
+  return failures;
+};
+
 const runChecks = async (
   browser: Browser,
   origin: string,
-  captures: readonly Capture[]
+  captures: readonly Capture[],
+  desktop: Targets
 ): Promise<string[]> => {
   const onPlatform = async (platform: Platform): Promise<string[]> => [
+    ...(await checkAddMenu(browser, origin, desktop, platform)),
     ...(await checkRowMenu(browser, origin, captures, platform)),
+    ...(await checkCopyGate(browser, origin, captures, platform)),
+    ...(await checkFloatCopy(browser, origin, captures, platform)),
     ...(await checkSidebarWidths(browser, origin, captures, platform)),
   ];
 
@@ -1580,7 +2278,7 @@ const main = async () => {
   );
 
   const { origin, server } = await serve();
-  const checkFailures = await runChecks(browser, origin, captures);
+  const checkFailures = await runChecks(browser, origin, captures, desktop);
 
   if (process.env.SCREENS_ONLY !== "checks") {
     const { failed, taken } = await shootEach(browser, origin, shots);

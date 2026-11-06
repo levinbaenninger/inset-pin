@@ -1,5 +1,4 @@
 import type { CaptureId } from "@shared/capture-record";
-import type { ActionResult } from "@shared/contracts";
 import { BrowserWindow, Menu, screen } from "electron";
 import type { WebContents } from "electron";
 
@@ -56,8 +55,8 @@ export const createPinWindows = (options: {
   readonly store: CaptureStore;
   readonly preload: string;
   readonly url: string;
-  /** The pin's right-click menu on Windows. */
-  readonly copyImage: (id: CaptureId) => Promise<ActionResult>;
+  /** The pin's right-click menu on Windows, which says a failed copy itself. */
+  readonly copyImage: (id: CaptureId) => void;
   readonly showInLibrary: (id: CaptureId) => void;
 }): PinWindows => {
   const windows = new Map<CaptureId, BrowserWindow>();
@@ -85,7 +84,7 @@ export const createPinWindows = (options: {
       Menu.buildFromTemplate([
         {
           click: () => {
-            void options.copyImage(id);
+            options.copyImage(id);
           },
           label: "Copy image",
         },

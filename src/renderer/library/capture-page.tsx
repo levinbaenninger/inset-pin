@@ -113,7 +113,7 @@ const Unavailable = ({
 /** The capture on screen, edited in place: every field saves itself. */
 const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
   const { now } = useLibraryState();
-  const { commands, dialog, entries } = useCaptureCommands(capture, "page");
+  const { commands, dialog, entries } = useCaptureCommands(capture);
   const saver = useMemo(() => new InlineSaver(capture.id, api), [capture.id]);
 
   const { failure, fields } = useSyncExternalStore(
@@ -410,7 +410,7 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
           <DropdownMenuContent
             align="end"
             className="min-w-56"
-            onKeyDown={onMenuKey}
+            onKeyDownCapture={onMenuKey}
           >
             <MenuEntries entries={entries} kind="dropdown" />
           </DropdownMenuContent>

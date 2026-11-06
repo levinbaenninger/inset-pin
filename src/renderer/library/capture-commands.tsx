@@ -19,7 +19,6 @@ import {
   useRouter,
 } from "@tanstack/react-router";
 import { useState } from "react";
-import type { KeyboardEvent } from "react";
 
 import {
   AlertDialog,
@@ -43,6 +42,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { libraryBridge } from "@/shared/bridge";
 import type { Icon } from "@/shared/icon-button";
+import { pickShownItem } from "@/shared/menu-keys";
 import { isMac } from "@/shared/platform";
 
 import { useLibraryState } from "./library-state";
@@ -56,7 +56,7 @@ const KEYS = keyLabels(isMac);
 
 interface MenuItem {
   readonly kind: "item";
-  readonly action: MenuKeyAction;
+  readonly action: MenuKeyAction | "done";
   readonly label: string;
   readonly icon: Icon;
   readonly keys?: string;
@@ -92,14 +92,10 @@ export interface RowFocus {
 /**
  * Everything that can be done to one capture, once: the right-click menu in
  * the sidebar, the capture's ⋯ menu and its keys all use these. Delete asks
- * first, in the dialog this returns. `from` says whose menu it is: Space marks
- * done only on a focused row, so only a row's menu shows it.
+ * first, in the dialog this returns. Copies go through main's copy gate,
+ * which saves what is typed first and copies nothing when that fails.
  */
-export const useCaptureCommands = (
-  capture: SavedCapture,
-  from: "row" | "page",
-  focus?: RowFocus
-) => {
+export const useCaptureCommands = (capture: SavedCapture, focus?: RowFocus) => {
   const navigate = useNavigate();
   const router = useRouter();
   const captures = rootRoute.useLoaderData();
@@ -127,32 +123,11 @@ export const useCaptureCommands = (
     });
   };
 
-  /** Saves what is typed first, so the output is what the page shows; after a failed save nothing stale goes out. */
-  const whenSaved = async (
-    then: () => Promise<void> | void,
-    skipped: string
-  ): Promise<void> => {
-    const saved = await settleEdits(capture.id);
-
-    if (!saved.ok) {
-      say({
-        failed: true,
-        text: `Couldn’t save your changes, so ${skipped}. ${saved.message}`,
-      });
-
-      return;
-    }
-
-    await then();
-  };
-
-  const afterSaving = async (
+  const copy = async (
     call: () => Promise<ActionResult>,
     text: string
   ): Promise<void> => {
-    await whenSaved(async () => {
-      report(await settle(call), text);
-    }, "nothing was copied");
+    report(await settle(call), text);
   };
 
   const remove = async (): Promise<void> => {
@@ -183,10 +158,19 @@ export const useCaptureCommands = (
 
   // The floating window reads the saved capture, so it opens once the typing is saved.
   const floatAfterSaving = async (): Promise<void> => {
-    await whenSaved(() => {
-      api.floatOnTop(capture.id);
-      say({ text: "Floating on top of other apps" });
-    }, "it didn’t float");
+    const saved = await settleEdits(capture.id);
+
+    if (!saved.ok) {
+      say({
+        failed: true,
+        text: `Couldn’t save your changes, so it didn’t float. ${saved.message}`,
+      });
+
+      return;
+    }
+
+    api.floatOnTop(capture.id);
+    say({ text: "Floating on top of other apps" });
   };
 
   const commands = {
@@ -194,19 +178,19 @@ export const useCaptureCommands = (
       setConfirming(true);
     },
     copyDetails: () => {
-      void afterSaving(
+      void copy(
         async () => await api.copyDetails(capture.id),
         "Copied with details"
       );
     },
     copyImage: () => {
-      void afterSaving(
+      void copy(
         async () => await api.copyImage(capture.id),
         "Image copied with its pins"
       );
     },
     copyText: () => {
-      void afterSaving(async () => await api.copyText(capture.id), "Copied");
+      void copy(async () => await api.copyText(capture.id), "Copied");
     },
     float: () => {
       void floatAfterSaving();
@@ -251,10 +235,10 @@ export const useCaptureCommands = (
       run: commands.float,
     },
     { id: "status", kind: "separator" },
+    // Space marks a focused row done; inside a menu it picks the highlighted item, so the menu shows no key here.
     {
       action: "done",
       icon: done ? Undo02Icon : CheckmarkCircle02Icon,
-      keys: from === "row" ? KEYS.done : undefined,
       kind: "item",
       label: done ? "Mark as Not Done" : "Mark as Done",
       run: commands.toggleDone,
@@ -324,32 +308,11 @@ const PARTS = {
 } as const;
 
 /**
- * A key an open menu shows picks that item, as a click would: the menu
- * closes and the command runs on the menu's own capture. Handled here, so the
- * page never sees the key and never acts on the capture that is open.
+ * A capture menu's keys: each key it shows runs that item for the menu's own
+ * capture, before the menu or the page sees the key, so the capture that is
+ * open is never the one acted on.
  */
-export const onMenuKey = (event: KeyboardEvent<HTMLElement>): void => {
-  if (event.defaultPrevented || event.nativeEvent.isComposing) {
-    return;
-  }
-
-  const action = menuKeyAction(event, isMac);
-
-  const item =
-    action === null
-      ? null
-      : event.currentTarget.querySelector<HTMLElement>(
-          `[data-key-action="${action}"]`
-        );
-
-  if (item !== null) {
-    event.preventDefault();
-
-    if (!event.repeat) {
-      item.click();
-    }
-  }
-};
+export const onMenuKey = pickShownItem((event) => menuKeyAction(event, isMac));
 
 /** The entries as items of a right-click menu or of the ⋯ dropdown; the two take the same shape. */
 export const MenuEntries = ({

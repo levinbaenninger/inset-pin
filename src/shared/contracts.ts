@@ -169,6 +169,17 @@ export type ActionResult =
   | { readonly ok: true }
   | { readonly ok: false; readonly message: string };
 
+const ActionResultSchema = z.union([
+  z.object({ ok: z.literal(true) }),
+  z.object({ message: z.string().max(2000), ok: z.literal(false) }),
+]);
+
+/** Main asks the library to save what is typed: into one capture before copying it, or into every one (null) before the window closes. */
+export interface FlushRequest {
+  readonly token: string;
+  readonly id: CaptureId | null;
+}
+
 export const captureContract = defineContract({
   events: { view: event<CaptureView>() },
   global: "insetCapture",
@@ -195,8 +206,8 @@ export const libraryContract = defineContract({
   events: {
     changed: event<null>(),
     command: event<LibraryCommand>(),
-    /** Asked before the window closes or the app quits: save what is typed, then answer `flushed` with the same token. */
-    flush: event<string>(),
+    /** Asked before a copy, a close or a quit: save what is typed, then answer `flushed` with the same token and how the save went. */
+    flush: event<FlushRequest>(),
     /** Asked from the tray or the Dock menu to show one capture. */
     show: event<CaptureId>(),
   },
@@ -207,8 +218,10 @@ export const libraryContract = defineContract({
     copyDetails: invoke(CaptureIdSchema, out<ActionResult>()),
     copyImage: invoke(CaptureIdSchema, out<ActionResult>()),
     copyText: invoke(CaptureIdSchema, out<ActionResult>()),
-    /** The answer to a `flush` event: every edit is saved, or failed and was reported on the page. */
-    flushed: send(z.string().max(100)),
+    /** The answer to a `flush` event: the edits reached the disk, or why not. */
+    flushed: send(
+      z.object({ result: ActionResultSchema, token: z.string().max(100) })
+    ),
     /** Keeps the capture in a small window above every other app. */
     floatOnTop: send(CaptureIdSchema),
     get: invoke(CaptureIdSchema, out<CaptureDetail | null>()),

@@ -1,3 +1,5 @@
+import { once } from "node:events";
+
 import { captureContract } from "@shared/contracts";
 import type { CaptureContract, DraftContent } from "@shared/contracts";
 import { methodChannel } from "@shared/ipc";
@@ -38,7 +40,8 @@ const content = {
 };
 
 const setup = (
-  target: () => typeof panel | readonly (typeof panel)[] | null = () => panel
+  target: () => typeof panel | readonly (typeof panel)[] | null = () => panel,
+  overrides: Partial<Handlers<CaptureContract>> = {}
 ) => {
   const sends = new Map<string, SendListener>();
   const invokes = new Map<string, InvokeListener>();
@@ -69,6 +72,7 @@ const setup = (
     save: (input, sender) => {
       saved.push({ ...input, from: sender.id });
     },
+    ...overrides,
   };
 
   serveContract(captureContract, handlers, {
@@ -165,6 +169,28 @@ describe(serveContract, () => {
     const { invoke } = setup();
 
     await expect(invoke("getView", fromPanel)).resolves.toBe('{"kind":"none"}');
+  });
+
+  it("takes a send from a window while that window's invoke is still waiting on it", async () => {
+    // As a library copy does: the copy's invoke waits for the page's `flushed` send.
+    const page = new EventTarget();
+
+    const { invoke, send } = setup(() => panel, {
+      getView: async () => {
+        await once(page, "answered");
+
+        return { kind: "none" };
+      },
+      save: () => {
+        page.dispatchEvent(new Event("answered"));
+      },
+    });
+
+    const pending = invoke("getView", fromPanel);
+
+    send("save", fromPanel, { content, id: ID });
+
+    await expect(pending).resolves.toBe('{"kind":"none"}');
   });
 
   it("accepts any of several windows of a kind, tells the handler which, and nothing once they are gone", () => {

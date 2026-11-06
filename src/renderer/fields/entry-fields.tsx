@@ -8,7 +8,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { DESCRIPTION_MAX, TITLE_MAX } from "@shared/capture-record";
 import type { Step } from "@shared/capture-record";
 import type { DueDate } from "@shared/due";
-import { keyLabels } from "@shared/shortcuts";
+import { fieldKeyAction, keyLabels } from "@shared/shortcuts";
 import type { FieldKeyAction } from "@shared/shortcuts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode, RefObject } from "react";
@@ -22,6 +22,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import { pickShownItem } from "@/shared/menu-keys";
 import { isMac } from "@/shared/platform";
 
 import { DueField, DuePicker } from "./due";
@@ -167,6 +168,13 @@ const ADD_ITEMS: readonly {
 
 const keyOf = (field: Field): string => keyLabels(isMac)[field];
 
+/** ⌘D, ⇧⌘S and ⇧⌘D in the open Add… menu pick the field they show beside. */
+const onAddKey = pickShownItem((event) => {
+  const field = fieldKeyAction(event, isMac);
+
+  return field !== null && isFieldAction(field) ? field : null;
+});
+
 /** The narrow editors' one Add… button; a field already shown is focused instead. */
 const AddMenu = ({
   disabled,
@@ -201,9 +209,11 @@ const AddMenu = ({
             event.preventDefault();
           }
         }}
+        onKeyDownCapture={onAddKey}
       >
         {ADD_ITEMS.map((item) => (
           <DropdownMenuItem
+            data-key-action={item.field}
             key={item.field}
             onSelect={() => {
               chose.current = true;

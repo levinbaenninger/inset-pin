@@ -3,12 +3,13 @@ import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 
 import { CaptureIdSchema } from "@shared/capture-record";
-import type { PointVia } from "@shared/capture-record";
+import type { CaptureId, PointVia } from "@shared/capture-record";
 import {
   captureContract,
   pinContract,
   settingsContract,
 } from "@shared/contracts";
+import type { ActionResult } from "@shared/contracts";
 import type { IconPlace, SettingsView } from "@shared/settings";
 import {
   CAPTURE_ACCELERATOR,
@@ -31,7 +32,8 @@ import electronUpdater from "electron-updater";
 import { appMenuTemplate, HELP_URL } from "./app-menu";
 import type { AppMenuActions, AppMenuState } from "./app-menu";
 import { captureDisplay, sampleAnchor } from "./capture";
-import { createCaptureExport } from "./capture-export";
+import { createPinnedImage } from "./capture-export";
+import { createCopyGate, electronClipboard } from "./copy-gate";
 import { createDraftController } from "./draft";
 import { e2eLog } from "./e2e-log";
 import { serveContract } from "./ipc-kit";
@@ -150,7 +152,29 @@ const start = async (): Promise<void> => {
   );
 
   const settings = await openSettingsStore(dataDir, nodeSettingsFs);
-  const exporter = createCaptureExport(store);
+  const pinnedImage = createPinnedImage(store);
+
+  // The library saves its typing before every copy; it is created further down, and has nothing typed until then.
+  const libraryEdits = {
+    save: async (_id: CaptureId): Promise<ActionResult> =>
+      await Promise.resolve({ ok: true as const }),
+  };
+
+  const copy = createCopyGate({
+    clipboard: electronClipboard,
+    pinnedImage,
+    saveEdits: async (id) => await libraryEdits.save(id),
+    store,
+  });
+
+  // A floating capture's own menu on Windows has no page to say a failed copy on.
+  const copyAndSay = async (id: CaptureId): Promise<void> => {
+    const copied = await copy(id, "image");
+
+    if (!copied.ok) {
+      showNotification(copied.message);
+    }
+  };
 
   let shortcutRegistered = false;
   let countdown: NodeJS.Timeout | null = null;
@@ -176,7 +200,9 @@ const start = async (): Promise<void> => {
   });
 
   const pins = createPinWindows({
-    copyImage: exporter.copyImage,
+    copyImage: (id) => {
+      void copyAndSay(id);
+    },
     preload: preloadPath("pin"),
     showInLibrary: (id) => {
       openLibrary(id);
@@ -189,7 +215,7 @@ const start = async (): Promise<void> => {
     captureSoon: () => {
       startCapture.soon();
     },
-    exporter,
+    copy,
     onClosed: () => {
       e2eLog("libraryClosed");
       menus.refresh();
@@ -206,6 +232,7 @@ const start = async (): Promise<void> => {
       settingsWindow.open();
     },
     floatOnTop: pins.open,
+    pinnedImage,
     preload: preloadPath("library"),
     status: () => ({
       iconIn: settings.current().iconIn,
@@ -216,6 +243,7 @@ const start = async (): Promise<void> => {
   });
 
   openLibrary = library.open;
+  libraryEdits.save = library.saveEdits;
 
   const surface = createCaptureSurface({
     // The panel never activates the app, so the app in front keeps the keyboard without app.hide().
@@ -244,7 +272,7 @@ const start = async (): Promise<void> => {
       e2eLog(result.ok ? "saved" : "saveFailed", { draftId: record.id });
 
       if (result.ok && settings.current().copyAfterSave) {
-        const copied = await exporter.copyBoth(record.id);
+        const copied = await copy(record.id, "imageAndDetails");
 
         if (!copied.ok) {
           showNotification(`Saved, but not copied. ${copied.message}`);
@@ -330,7 +358,7 @@ const start = async (): Promise<void> => {
 
         return id === null
           ? { message: "This pin has no capture.", ok: false }
-          : await exporter.copyImage(id);
+          : await copy(id, "image");
       },
       get: (_input, sender) => {
         const id = pins.captureOf(sender.id);

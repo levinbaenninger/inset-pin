@@ -200,22 +200,30 @@ const menuKeys = (isMac: boolean, held: Partial<KeyPress>) => [
   menuKeyAction(press("C", { ...held, shiftKey: true }), isMac),
   menuKeyAction(press("f", { ...held, altKey: true, code: "KeyF" }), isMac),
   menuKeyAction(press(isMac ? "Backspace" : "Delete"), isMac),
-  menuKeyAction(press(" "), isMac),
 ];
 
 describe(menuKeyAction, () => {
   it("takes every key a capture menu shows, ⌘C included, on macOS and Windows", () => {
-    const shown = [
-      "copyText",
-      "copyDetails",
-      "copyImage",
-      "float",
-      "delete",
-      "done",
-    ];
+    const shown = ["copyText", "copyDetails", "copyImage", "float", "delete"];
 
     expect(menuKeys(true, mac)).toStrictEqual(shown);
     expect(menuKeys(false, win)).toStrictEqual(shown);
+  });
+
+  it("leaves Space and Return to the menu, which picks the highlighted item with them", () => {
+    expect([
+      menuKeyAction(press(" "), true),
+      menuKeyAction(press(" "), false),
+      menuKeyAction(press("Enter"), true),
+      menuKeyAction(press("Enter"), false),
+    ]).toStrictEqual([null, null, null, null]);
+  });
+
+  it("still marks a focused row done with Space when no menu is open", () => {
+    expect([
+      rowKeyAction(press(" "), true),
+      rowKeyAction(press(" "), false),
+    ]).toStrictEqual(["done", "done"]);
   });
 
   it("reads Ctrl+Alt+C as Copy with Details, and C without the platform's own key as nothing", () => {

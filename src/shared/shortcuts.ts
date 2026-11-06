@@ -261,19 +261,25 @@ export const rowKeyAction = (
     : null;
 };
 
-export type MenuKeyAction = RowKeyAction | "copyText";
+export type MenuKeyAction = Exclude<RowKeyAction, "done"> | "copyText";
 
 /**
  * The keys an open capture menu shows. Inside a menu, ⌘C is a key like the
- * others: it picks Copy Text instead of arriving as the copy event.
+ * others: it picks Copy Text instead of arriving as the copy event. Space and
+ * Return are the menu's own: they pick the highlighted item, as in every menu.
  */
 export const menuKeyAction = (
   press: KeyPress,
   isMac: boolean
-): MenuKeyAction | null =>
-  letter(press, "c") && command(press, isMac) && !press.shiftKey
-    ? "copyText"
-    : rowKeyAction(press, isMac);
+): MenuKeyAction | null => {
+  if (letter(press, "c") && command(press, isMac) && !press.shiftKey) {
+    return "copyText";
+  }
+
+  const action = rowKeyAction(press, isMac);
+
+  return action === "done" ? null : action;
+};
 
 /** Tighten and widen in the capture panel: ⌘= shows less, ⌘− shows more. */
 export const zoomKeyAction = (

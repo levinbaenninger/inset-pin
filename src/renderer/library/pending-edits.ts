@@ -23,11 +23,13 @@ export const trackEdits = (id: CaptureId, saver: InlineSaver): (() => void) => {
 export const settleEdits = async (id: CaptureId): Promise<ActionResult> =>
   (await savers.get(id)?.settle()) ?? OK;
 
-/** Every open capture's edits, before the window closes or the app quits. */
-export const settleAllEdits = async (): Promise<void> => {
-  await Promise.all(
+/** Every open capture's edits, before the window closes or the app quits; the first failure, if any. */
+export const settleAllEdits = async (): Promise<ActionResult> => {
+  const results = await Promise.all(
     [...savers.values()].map(async (saver) => await saver.settle())
   );
+
+  return results.find((result) => !result.ok) ?? OK;
 };
 
 /** The fields on screen, which a drag carries since it can't wait for a save. */

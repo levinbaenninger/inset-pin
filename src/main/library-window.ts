@@ -11,7 +11,8 @@ import type {
 } from "@shared/contracts";
 import { app, BrowserWindow, ipcMain, nativeTheme } from "electron";
 
-import type { CaptureExport } from "./capture-export";
+import type { PinnedImageOf } from "./capture-export";
+import type { CopyGate } from "./copy-gate";
 import { serveContract } from "./ipc-kit";
 import { toDetail, toSummary } from "./library-view";
 import type { CaptureStore } from "./store";
@@ -52,6 +53,9 @@ const titleBarOverlay = (): Electron.TitleBarOverlayOptions => {
 /** How long a close or a quit waits for the page to save what is typed. */
 const FLUSH_TIMEOUT_MS = 1000;
 
+/** A copy waits longer: it copies nothing unless the save is known to have reached the disk. */
+const COPY_FLUSH_TIMEOUT_MS = 5000;
+
 export interface LibraryWindow {
   /** Opens the library, on one capture when an id is given. */
   readonly open: (id?: CaptureId) => void;
@@ -68,13 +72,16 @@ export interface LibraryWindow {
   readonly whenLoaded: (run: () => void) => void;
   /** Asks the page to save what is typed, and waits for it, at most a second. */
   readonly flushEdits: () => Promise<void>;
+  /** Asks the page to save what is typed into one capture, for a copy; fails when that save fails or doesn't finish. */
+  readonly saveEdits: (id: CaptureId) => Promise<ActionResult>;
   /** For a quit that already saved the edits: the window closes without asking again. */
   readonly allowClose: () => void;
 }
 
 export interface LibraryOptions {
   readonly store: CaptureStore;
-  readonly exporter: CaptureExport;
+  readonly pinnedImage: PinnedImageOf;
+  readonly copy: CopyGate;
   readonly preload: string;
   readonly url: string;
   readonly onOpened: () => void;
@@ -96,12 +103,13 @@ const fail = (message: string): ActionResult => ({ message, ok: false });
 const TRAFFIC_LIGHTS = { x: 18, y: 18 };
 
 export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
-  const { exporter, store } = options;
+  const { copy, store } = options;
   let window: BrowserWindow | null = null;
   let floatOnTop = false;
   let shownDone: boolean | null = null;
   let quitting = false;
-  /** The page's answers to `flush`, by token. */
+  /** The page's answers to `flush`, by token; null while one is awaited. */
+  const answers = new Map<string, ActionResult | null>();
   const flushed = new EventTarget();
   let flushCount = 0;
 
@@ -121,12 +129,15 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
     libraryContract,
     {
       captureSoon: options.captureSoon,
-      copyDetails: exporter.copyDetails,
-      copyImage: exporter.copyImage,
-      copyText: exporter.copyText,
+      copyDetails: async (id) => await copy(id, "details"),
+      copyImage: async (id) => await copy(id, "image"),
+      copyText: async (id) => await copy(id, "text"),
       floatOnTop: options.floatOnTop,
-      flushed: (token) => {
-        flushed.dispatchEvent(new Event(token));
+      flushed: ({ result, token }) => {
+        if (answers.has(token)) {
+          answers.set(token, result);
+          flushed.dispatchEvent(new Event(token));
+        }
       },
       get: (id) => {
         const entry = store.get(id);
@@ -157,7 +168,7 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
       },
       status: options.status,
       startImageDrag: ({ id, pins, title }) => {
-        const pinned = exporter.pinnedImage(id, { pins, title });
+        const pinned = options.pinnedImage(id, { pins, title });
 
         if (window === null || pinned === null) {
           return;
@@ -192,26 +203,42 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
     server.emit("changed", null);
   });
 
-  const flushEdits = async (): Promise<void> => {
+  /** A page that is closed or still loading has nothing typed to save. */
+  const askToSave = async (
+    id: CaptureId | null,
+    timeoutMs: number
+  ): Promise<ActionResult> => {
     if (window === null || window.webContents.isLoading()) {
-      return;
+      return OK;
     }
 
     flushCount += 1;
 
     const token = String(flushCount);
+    const tooLong = fail("Saving took too long.");
+
+    answers.set(token, null);
 
     const answer = once(flushed, token, {
-      signal: AbortSignal.timeout(FLUSH_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
 
-    server.emit("flush", token);
+    server.emit("flush", { id, token });
 
     try {
       await answer;
+
+      return answers.get(token) ?? tooLong;
     } catch {
-      // A page that doesn't answer in time keeps what its pagehide save manages.
+      return tooLong;
+    } finally {
+      answers.delete(token);
     }
+  };
+
+  // A page that doesn't answer in time keeps what its pagehide save manages.
+  const flushEdits = async (): Promise<void> => {
+    await askToSave(null, FLUSH_TIMEOUT_MS);
   };
 
   const open = (id?: CaptureId): void => {
@@ -329,6 +356,7 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
     },
     flushEdits,
     isFloating: () => floatOnTop,
+    saveEdits: async (id) => await askToSave(id, COPY_FLUSH_TIMEOUT_MS),
     shownDone: () => shownDone,
     whenLoaded: (run) => {
       if (window === null) {

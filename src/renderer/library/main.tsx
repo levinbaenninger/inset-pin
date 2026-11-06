@@ -1,6 +1,7 @@
 import "@/shared/zod-jitless";
 import "@/styles.css";
 import { CaptureIdSchema } from "@shared/capture-record";
+import type { FlushRequest } from "@shared/contracts";
 import { RouterProvider } from "@tanstack/react-router";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
@@ -11,7 +12,7 @@ import { markPlatform } from "@/shared/platform";
 import { followSystemTheme } from "@/shared/theme";
 
 import { startCommandBus } from "./command-bus";
-import { settleAllEdits } from "./pending-edits";
+import { settleAllEdits, settleEdits } from "./pending-edits";
 import { router } from "./router";
 
 followSystemTheme();
@@ -24,14 +25,15 @@ libraryBridge().on("changed", () => {
   void router.invalidate();
 });
 
-// Before the window closes or the app quits, main waits for what is typed to be saved.
-const answerFlush = async (token: string): Promise<void> => {
-  await settleAllEdits();
-  libraryBridge().flushed(token);
+// Before a copy, a close or a quit, main waits for what is typed to be saved, and hears how it went.
+const answerFlush = async ({ id, token }: FlushRequest): Promise<void> => {
+  const result = await (id === null ? settleAllEdits() : settleEdits(id));
+
+  libraryBridge().flushed({ result, token });
 };
 
-libraryBridge().on("flush", (token) => {
-  void answerFlush(token);
+libraryBridge().on("flush", (request) => {
+  void answerFlush(request);
 });
 
 // A capture chosen from the tray or the Dock menu.

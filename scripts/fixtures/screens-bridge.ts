@@ -12,8 +12,12 @@ declare global {
   var __fitted: number | undefined;
   /** The library calls that act on a capture, as `name:id`, for the checks in scripts/screens.ts to read. */
   var __calls: string[] | undefined;
+  /** Every copy the page asked for, as `name:id`, whether or not it was made. */
+  var __asked: string[] | undefined;
   /** While true, saving a capture's typing fails, as a full disk would. */
   var __failSaves: boolean | undefined;
+  /** Sends the page an event as main would, such as a command from the app menu. */
+  var __emit: ((name: string, payload: Payload) => void) | undefined;
 }
 
 /** A capture as the fake bridge keeps it; a read-only entry has no status. */
@@ -31,13 +35,22 @@ export interface BridgeInput {
   readonly commands?: readonly string[];
 }
 
-/** The events a page waits on here: the library's "changed", and a command name. */
-type Listener = (payload: string | null) => void;
+/** What the page's events carry here: nothing for "changed", a command name, or a flush request. */
+type Payload = string | null | { readonly id: string; readonly token: string };
+
+type Listener = (payload: Payload) => void;
+
+type Result =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly message: string };
 
 export const installBridge = (input: BridgeInput): void => {
   const OK = { ok: true } as const;
   const listeners = new Map<string, Listener[]>();
   const captures = [...(input.captures ?? [])];
+  /** The page's answers to a flush, by token, as main waits for them. */
+  const answers = new Map<string, (result: Result) => void>();
+  let flushes = 0;
 
   const on = (name: string, listener: Listener): (() => void) => {
     listeners.set(name, [...(listeners.get(name) ?? []), listener]);
@@ -58,7 +71,15 @@ export const installBridge = (input: BridgeInput): void => {
 
   const nothing = (): undefined => undefined;
 
-  const resolve = async <T>(value: T): Promise<T> =>
+  const emit = (name: string, payload: Payload): void => {
+    for (const listener of listeners.get(name) ?? []) {
+      listener(payload);
+    }
+  };
+
+  globalThis.__emit = emit;
+
+  const respond = async <T>(value: T): Promise<T> =>
     await Promise.resolve(value);
 
   const find = (id: string): FixtureCapture | undefined =>
@@ -77,7 +98,41 @@ export const installBridge = (input: BridgeInput): void => {
     async (id: string): Promise<typeof OK> => {
       record(`${name}:${id}`);
 
-      return await resolve(OK);
+      return await respond(OK);
+    };
+
+  const refusal = (message: string): Result => ({
+    message: `Couldn’t save your changes, so nothing was copied. ${message}`,
+    ok: false,
+  });
+
+  /** As main's copy gate: the page saves the capture's typing first, and nothing is copied unless that worked. */
+  const gated =
+    (name: string) =>
+    async (id: string): Promise<Result> => {
+      globalThis.__asked = [...(globalThis.__asked ?? []), `${name}:${id}`];
+      flushes += 1;
+
+      const token = `flush-${flushes}`;
+
+      // oxlint-disable-next-line promise/avoid-new -- the page answers on another channel, so this waits on its callback.
+      const answer = new Promise<Result>((resolve) => {
+        answers.set(token, resolve);
+      });
+
+      emit("flush", { id, token });
+
+      const saved = await answer;
+
+      answers.delete(token);
+
+      if (!saved.ok) {
+        return refusal(saved.message);
+      }
+
+      record(`${name}:${id}`);
+
+      return OK;
     };
 
   const apis = {
@@ -86,7 +141,7 @@ export const installBridge = (input: BridgeInput): void => {
       discard: nothing,
       dismiss: nothing,
       edit: nothing,
-      getView: async () => await resolve(input.view),
+      getView: async () => await respond(input.view),
       on,
       openScreenSettings: nothing,
       relaunch: nothing,
@@ -97,17 +152,21 @@ export const installBridge = (input: BridgeInput): void => {
     },
     library: {
       captureSoon: nothing,
-      copyDetails: recorded("copyDetails"),
-      copyImage: recorded("copyImage"),
-      copyText: recorded("copyText"),
+      copyDetails: gated("copyDetails"),
+      copyImage: gated("copyImage"),
+      copyText: gated("copyText"),
       floatOnTop: (id: string) => {
         record(`floatOnTop:${id}`);
       },
-      flushed: nothing,
-      get: async (id: string) => await resolve(find(id) ?? null),
-      list: async () => await resolve(captures),
+      flushed: ({ result, token }: { result: Result; token: string }) => {
+        answers.get(token)?.(result);
+      },
+      get: async (id: string) => await respond(find(id) ?? null),
+      list: async () => await respond(captures),
       on,
-      openSettings: nothing,
+      openSettings: () => {
+        record("openSettings");
+      },
       remove: recorded("remove"),
       reportShown: nothing,
       setDone: async ({ done, id }: { done: boolean; id: string }) => {
@@ -121,15 +180,13 @@ export const installBridge = (input: BridgeInput): void => {
             : { kind: "active" };
         }
 
-        for (const listener of listeners.get("changed") ?? []) {
-          listener(null);
-        }
+        emit("changed", null);
 
-        return await resolve(OK);
+        return await respond(OK);
       },
       startImageDrag: nothing,
       status: async () =>
-        await resolve({ iconIn: "dockAndMenuBar", shortcutRegistered: true }),
+        await respond({ iconIn: "dockAndMenuBar", shortcutRegistered: true }),
       update: async ({
         fields,
         id,
@@ -142,26 +199,35 @@ export const installBridge = (input: BridgeInput): void => {
         record(`update:${id}:${fields.title ?? ""}`);
 
         if (globalThis.__failSaves === true) {
-          return await resolve({ message: "The disk is full.", ok: false });
+          return await respond({ message: "The disk is full.", ok: false });
         }
 
         if (found !== undefined) {
           Object.assign(found, fields);
         }
 
-        return await resolve(OK);
+        return await respond(OK);
       },
     },
     pin: {
       close: nothing,
-      copyImage: async () => await resolve(OK),
-      get: async () => await resolve(input.capture),
+      // The floating window has no typing of its own; its copy fails when main's gate can't save the library's.
+      copyImage: async (): Promise<Result> => {
+        if (globalThis.__failSaves === true) {
+          return await respond(refusal("The disk is full."));
+        }
+
+        record("copyImage:pin");
+
+        return await respond(OK);
+      },
+      get: async () => await respond(input.capture),
       on,
       openInLibrary: nothing,
     },
     settings: {
       fitHeight,
-      getView: async () => await resolve(input.view),
+      getView: async () => await respond(input.view),
       on,
       setOpenAtLogin: nothing,
       update: nothing,

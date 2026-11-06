@@ -21,6 +21,7 @@ import { Link } from "@tanstack/react-router";
 import { Fragment, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
+import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -179,11 +180,7 @@ const CaptureRow = ({
     },
   };
 
-  const { commands, dialog, entries } = useCaptureCommands(
-    capture,
-    "row",
-    focus
-  );
+  const { commands, dialog, entries } = useCaptureCommands(capture, focus);
 
   const snippet = matchSnippet(capture, parsed.terms);
   const { chipRef, columnRef, fits } = useChipFits();
@@ -279,7 +276,7 @@ const CaptureRow = ({
             event.preventDefault();
             focus.land();
           }}
-          onKeyDown={onMenuKey}
+          onKeyDownCapture={onMenuKey}
         >
           <MenuEntries entries={entries} kind="context" />
         </ContextMenuContent>
@@ -418,34 +415,29 @@ const DueSuggestions = () => {
   }
 
   return (
-    <ul
-      aria-label="Due filters"
-      className="bg-popover text-popover-foreground ring-foreground/10 mt-1.5 flex flex-col rounded-lg p-1 shadow-md ring-1"
-      data-testid="due-suggestions"
-    >
+    <fieldset className="mt-1 flex flex-col" data-testid="due-suggestions">
+      <legend className="sr-only">Due filters</legend>
       {suggestions.map((filter, index) => (
-        <li key={filter}>
-          <button
-            aria-label={`${DUE_FILTER_LABELS[filter]} (due:${filter})`}
-            className={cn(
-              "hover:bg-accent focus-visible:bg-accent flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-xs font-medium outline-none",
-              index === 0 && "bg-accent"
-            )}
-            onClick={() => {
-              setQuery(withDueFilter(query, filter));
-              searchRef.current?.focus();
-            }}
-            title={index === 0 ? "Return picks this one" : undefined}
-            type="button"
-          >
-            due:{filter}
-            <span className="text-muted-foreground ml-auto truncate font-normal">
-              {DUE_FILTER_LABELS[filter]}
-            </span>
-          </button>
-        </li>
+        <Button
+          aria-label={`${DUE_FILTER_LABELS[filter]} (due:${filter})`}
+          className="justify-between"
+          key={filter}
+          onClick={() => {
+            setQuery(withDueFilter(query, filter));
+            searchRef.current?.focus();
+          }}
+          size="xs"
+          title={index === 0 ? "Return picks this one" : undefined}
+          type="button"
+          variant={index === 0 ? "secondary" : "ghost"}
+        >
+          due:{filter}
+          <span className="text-muted-foreground truncate font-normal">
+            {DUE_FILTER_LABELS[filter]}
+          </span>
+        </Button>
       ))}
-    </ul>
+    </fieldset>
   );
 };
 
