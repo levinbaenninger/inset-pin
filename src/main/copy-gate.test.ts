@@ -142,7 +142,14 @@ describe(createCopyGate, () => {
 
     // The library's draft store, talking to the real store as main does over IPC.
     drafts = new DraftStore({
-      update: async ({ fields, id }): Promise<ActionResult> => {
+      discard: async ({ id, tag }): Promise<ActionResult> => {
+        const result = await store.discard(id, tag);
+
+        return result.ok
+          ? { ok: true }
+          : { message: result.message, ok: false };
+      },
+      update: async ({ fields, id, tag }): Promise<ActionResult> => {
         if (held !== null) {
           const waiting = held;
 
@@ -152,7 +159,7 @@ describe(createCopyGate, () => {
           });
         }
 
-        const result = await store.update(id, fields);
+        const result = await store.update(id, fields, tag);
 
         return result.ok
           ? { ok: true }

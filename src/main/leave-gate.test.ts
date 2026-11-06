@@ -314,6 +314,108 @@ describe(createLeaveGate, () => {
   });
 });
 
+/** A gate whose page answers only when the test says, and whose dialog answers in turn. */
+const waitingGate = (unsaved: number, choices: Unconfirmed[] = []) => {
+  const calls: string[] = [];
+  const page = { answer: (_answer: SavedEdits | null): void => undefined };
+
+  const gate = createLeaveGate({
+    ask: async (leaving: Leaving) => {
+      calls.push(`ask:${leaving}`);
+
+      // oxlint-disable-next-line promise/avoid-new -- the test answers for the page later, through this callback.
+      return await new Promise<SavedEdits | null>((resolve) => {
+        page.answer = resolve;
+      });
+    },
+    confirm: async (leaving, count) => {
+      calls.push(`confirm:${leaving}:${String(count)}`);
+
+      return await Promise.resolve(choices.shift() ?? "cancel");
+    },
+    promptWithinMs: PROMPT_WITHIN_MS,
+    surface: () => {
+      calls.push("surface");
+    },
+    unsaved: () => unsaved,
+    written: async () => await Promise.resolve(true),
+  });
+
+  return { calls, gate, page };
+};
+
+describe("a page that crashed or navigated away while main waits (SPEC round 8)", () => {
+  it("asks natively at once when the page goes while main waits for its answer, and once only though its answer times out later", async () => {
+    const { calls, gate, page } = waitingGate(1);
+
+    void gate.leave("quit", () => {
+      calls.push("quit");
+    });
+    await tick();
+    gate.pageGone();
+    await tick();
+    page.answer(null);
+    await tick();
+
+    expect(calls).toStrictEqual(["ask:quit", "surface", "confirm:quit:1"]);
+  });
+
+  it("asks natively when the page goes while its own prompt is on screen", async () => {
+    const { calls, gate, page } = waitingGate(2);
+
+    void gate.leave("close", () => {
+      calls.push("close");
+    });
+    await tick();
+    page.answer(HELD);
+    gate.shown();
+    await delay(PROMPT_WITHIN_MS * 2);
+    gate.pageGone();
+    await tick();
+
+    expect(calls).toStrictEqual([
+      "ask:close",
+      "surface",
+      "surface",
+      "confirm:close:2",
+    ]);
+  });
+
+  it("goes on when the page that went had nothing unsaved, and ignores a page going once nothing waits on it", async () => {
+    const { calls, gate } = waitingGate(0);
+
+    void gate.leave("quit", () => {
+      calls.push("quit");
+    });
+    await tick();
+    gate.pageGone();
+    await tick();
+    gate.pageGone();
+    await tick();
+
+    expect(calls).toStrictEqual(["ask:quit", "quit"]);
+  });
+
+  it("asks the page again on Wait, and never asks twice while its dialog is open", async () => {
+    const { calls, gate } = waitingGate(1, ["wait"]);
+
+    void gate.leave("quit", () => {
+      calls.push("quit");
+    });
+    await tick();
+    gate.pageGone();
+    gate.pageGone();
+    await tick();
+
+    expect(calls).toStrictEqual([
+      "ask:quit",
+      "surface",
+      "confirm:quit:1",
+      "ask:quit",
+    ]);
+  });
+});
+
 describe("the gate and the library's hold together", () => {
   it("quits at once when the only change was typed back to what is saved", async () => {
     const id = CaptureIdSchema.parse("3f1c2b9e-4a7d-4e21-9b0c-5d8e6f7a1b2c");
@@ -329,6 +431,7 @@ describe("the gate and the library's hold together", () => {
     const calls: string[] = [];
 
     const drafts = new DraftStore({
+      discard: async () => await Promise.resolve({ ok: true }),
       update: async ({ fields }) => {
         calls.push(`save:${fields.title}`);
 

@@ -1,4 +1,3 @@
-import { once } from "node:events";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
@@ -20,8 +19,8 @@ import { app, BrowserWindow, dialog, ipcMain, nativeTheme } from "electron";
 import type { PinnedImageOf } from "./capture-export";
 import type { CopyGate } from "./copy-gate";
 import { serveContract } from "./ipc-kit";
-import { createLeaveGate } from "./leave-gate";
 import type { Unconfirmed } from "./leave-gate";
+import { createLibraryLink } from "./library-link";
 import { toDetail, toSummary } from "./library-view";
 import { trackMenuOpen } from "./menu-open";
 import type { MenuOpen } from "./menu-open";
@@ -152,14 +151,14 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
   /** The page let this window close: its typing is saved or discarded. */
   let mayClose = false;
   let menu: MenuOpen | null = null;
-  /** How many captures the page last said hold unsaved changes; a page that reloads or crashes holds none. */
-  let unsaved = 0;
-  /** The page's answers to `flush`, by token; null while one is awaited. */
-  const answers = new Map<string, SavedEdits | null>();
-  const flushed = new EventTarget();
-  let flushCount = 0;
-  // The page's prompt reaches the gate that held the close through this; the gate needs the server first.
-  const held = { resume: (): void => undefined, shown: (): void => undefined };
+
+  // The page reaches main's link to it through this; the link needs the server first.
+  const page = {
+    answered: (_token: string, _result: SavedEdits): void => undefined,
+    reported: (_count: number): void => undefined,
+    resume: (): void => undefined,
+    shown: (): void => undefined,
+  };
 
   // Dragged copies wait here for the drop; a drop can finish after startDrag returns, so they are cleared on delete and at launch.
   const dragStaging = path.join(app.getPath("temp"), "Inset Context Pin");
@@ -194,12 +193,14 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
       copyDetails: async (id) => await copy(id, "details"),
       copyImage: async (id) => await copy(id, "image"),
       copyText: async (id) => await copy(id, "text"),
+      discard: async ({ id, tag }) => {
+        const result = await store.discard(id, tag);
+
+        return result.ok ? OK : fail(result.message);
+      },
       floatOnTop: options.floatOnTop,
       flushed: ({ result, token }) => {
-        if (answers.has(token)) {
-          answers.set(token, result);
-          flushed.dispatchEvent(new Event(token));
-        }
+        page.answered(token, result);
       },
       get: (id) => {
         const entry = store.get(id);
@@ -207,7 +208,7 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
         return entry === undefined ? null : toDetail(entry);
       },
       leavePromptShown: () => {
-        held.shown();
+        page.shown();
       },
       list: () => store.list().map(toSummary),
       menuOpen: (open) => {
@@ -219,7 +220,7 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
         options.onFocusChange();
       },
       resumeLeaving: () => {
-        held.resume();
+        page.resume();
       },
       remove: async (id) => {
         const result = await store.remove(id);
@@ -239,7 +240,7 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
       },
       status: options.status,
       unsavedCount: (count) => {
-        unsaved = count;
+        page.reported(count);
       },
       startImageDrag: ({ id, pins, title }) => {
         const pinned = options.pinnedImage(id, { pins, title });
@@ -259,8 +260,8 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
           icon: pinned.image.resize({ width: DRAG_ICON_WIDTH }),
         });
       },
-      update: async ({ fields, id }) => {
-        const result = await store.update(id, fields);
+      update: async ({ fields, id, tag }) => {
+        const result = await store.update(id, fields, tag);
 
         return result.ok ? OK : fail(result.message);
       },
@@ -277,54 +278,7 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
     server.emit("changed", null);
   });
 
-  /** The page's answer, or null when it doesn't answer in time. A page that is closed or still loading has nothing typed to save. */
-  const askToSave = async (
-    request:
-      | { readonly id: CaptureId; readonly retry: boolean }
-      | { readonly id: null; readonly leaving: Leaving }
-  ): Promise<SavedEdits | null> => {
-    if (window === null || window.webContents.isLoading()) {
-      return { fields: null, ok: true };
-    }
-
-    flushCount += 1;
-
-    const token = String(flushCount);
-
-    answers.set(token, null);
-
-    const answer = once(flushed, token, {
-      signal: AbortSignal.timeout(LEAVE_SAVE_WAIT_MS),
-    });
-
-    server.emit("flush", { ...request, token });
-
-    try {
-      await answer;
-
-      return answers.get(token) ?? null;
-    } catch {
-      return null;
-    } finally {
-      answers.delete(token);
-    }
-  };
-
   const TOO_SLOW: SavedEdits = { message: SAVE_TOO_SLOW, ok: false };
-
-  /** A page that reloads or crashes has lost its drafts, so it holds nothing unsaved. */
-  const forgetUnsaved = (): void => {
-    unsaved = 0;
-  };
-
-  const saveEdits = async (id: CaptureId): Promise<SavedEdits> =>
-    (await askToSave({ id, retry: false })) ?? TOO_SLOW;
-
-  const retryEdits = async (id: CaptureId): Promise<ActionResult> => {
-    const saved = (await askToSave({ id, retry: true })) ?? TOO_SLOW;
-
-    return saved.ok ? OK : fail(saved.message);
-  };
 
   /** Asked when the page can't be: it doesn't answer, or the disk is slow to write what it sent. */
   const confirmUnsaved = async (
@@ -344,7 +298,7 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
       detail:
         count === null
           ? "Saving is taking longer than it should. Wait gives it more time."
-          : `${changes} may not be saved yet. Wait gives the library more time to answer.`,
+          : `The library window stopped responding, so ${changes} may not be saved. Wait gives it more time to answer.`,
       message: "Inset Context Pin couldn’t confirm your changes were saved",
       type: "warning",
     };
@@ -357,18 +311,32 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
     return CHOICES[response] ?? "cancel";
   };
 
-  const leaveGate = createLeaveGate({
-    ask: async (leaving) => await askToSave({ id: null, leaving }),
+  const link = createLibraryLink({
     confirm: confirmUnsaved,
     // The page's own wait comes first, then as long again to show its prompt.
     promptWithinMs: LEAVE_SAVE_WAIT_MS * 2,
+    send: (request) => {
+      server.emit("flush", request);
+    },
     surface,
-    unsaved: () => unsaved,
+    waitMs: LEAVE_SAVE_WAIT_MS,
+    windowOpen: () => window !== null && !window.webContents.isDestroyed(),
     written: async () => await withinLimit(store.settled),
   });
 
-  held.resume = leaveGate.resume;
-  held.shown = leaveGate.shown;
+  page.answered = link.answered;
+  page.reported = link.reported;
+  page.resume = link.resume;
+  page.shown = link.shown;
+
+  const saveEdits = async (id: CaptureId): Promise<SavedEdits> =>
+    (await link.ask({ id, retry: false })) ?? TOO_SLOW;
+
+  const retryEdits = async (id: CaptureId): Promise<ActionResult> => {
+    const saved = (await link.ask({ id, retry: true })) ?? TOO_SLOW;
+
+    return saved.ok ? OK : fail(saved.message);
+  };
 
   const open = (id?: CaptureId): void => {
     if (window !== null) {
@@ -398,10 +366,12 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
     });
 
     window = created;
+    link.gone();
     menu = trackMenuOpen({ contents: created.webContents, window: created });
 
-    created.webContents.on("did-navigate", forgetUnsaved);
-    created.webContents.on("render-process-gone", forgetUnsaved);
+    // The page main asked is gone with whatever it held; its count stays until a fresh page reports.
+    created.webContents.on("did-navigate", link.gone);
+    created.webContents.on("render-process-gone", link.gone);
 
     if (floatOnTop) {
       created.setAlwaysOnTop(true, "floating");
@@ -443,7 +413,7 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
       }
 
       event.preventDefault();
-      void leaveGate.leave("close", closeNow);
+      void link.leave("close", closeNow);
     });
     created.on("focus", options.onFocusChange);
     created.on("blur", options.onFocusChange);
@@ -451,7 +421,7 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
       nativeTheme.off("updated", followTheme);
       window = null;
       menu = null;
-      unsaved = 0;
+      link.gone();
       mayClose = false;
       shownDone = null;
       options.onClosed();
@@ -484,7 +454,7 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
     },
     isFloating: () => floatOnTop,
     leave: (leaving, then) => {
-      void leaveGate.leave(leaving, then);
+      void link.leave(leaving, then);
     },
     retryEdits,
     saveEdits,

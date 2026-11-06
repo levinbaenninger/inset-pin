@@ -17,3 +17,7 @@ export const layerOpen = (): boolean =>
   document.querySelector(
     '[role="dialog"], [role="alertdialog"], [role="menu"], [data-slot="popover-content"]'
   ) !== null;
+
+/** A prompt (an alert dialog) is open: it owns the keys, so no field opens or changes under it (SPEC round 8). */
+export const promptOpen = (): boolean =>
+  document.querySelector('[role="alertdialog"]') !== null;

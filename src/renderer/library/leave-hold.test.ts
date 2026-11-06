@@ -35,6 +35,11 @@ const setup = () => {
   const log: string[] = [];
 
   const drafts = new DraftStore({
+    discard: async ({ tag }) => {
+      log.push(`discard:${String(tag.seq)}`);
+
+      return await Promise.resolve({ ok: true });
+    },
     update: async ({ fields }) => {
       log.push(`save:${fields.title}`);
 
@@ -216,7 +221,7 @@ describe(createLeaveHold, () => {
     ]);
   });
 
-  it("discards at once while a save is on its way, writes the saved values after it before going on, and the late save revives nothing", async () => {
+  it("discards at once while a save is on its way, tells main to drop that save, writes nothing to undo it, and the late save revives nothing", async () => {
     const { answer, drafts, hold, take } = setup();
 
     drafts.edit(A, titled("Typed, then discarded"), STORED);
@@ -232,27 +237,20 @@ describe(createLeaveHold, () => {
 
     await answer();
 
-    const afterLateSave = drafts.get(A)?.values.title;
-
-    await answer();
-
     expect({
-      afterLateSave,
+      afterLateSave: drafts.get(A)?.values.title ?? null,
       atDiscard,
-      end: [drafts.get(A), hold.get(), take()],
+      end: [drafts.get(A), drafts.saved(A), hold.get(), take()],
     }).toStrictEqual({
-      afterLateSave: "Total is off",
+      afterLateSave: null,
       atDiscard: {
-        log: [
-          "save:Typed, then discarded",
-          "shown",
-          "save:Total is off",
-          "resume",
-        ],
+        // Main hears the discard before the resume, so its wait for the disk already skips the dropped save.
+        log: ["save:Typed, then discarded", "shown", "discard:1", "resume"],
         prompt: null,
-        shown: "Total is off",
+        shown: undefined,
       },
-      end: [undefined, null, []],
+      // What was saved before the discarded save stays the baseline.
+      end: [undefined, STORED, null, []],
     });
   });
 

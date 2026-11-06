@@ -30,7 +30,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { libraryBridge } from "@/shared/bridge";
 import { IconButton, SHORTCUTS_ICON } from "@/shared/icon-button";
-import { inLayer, isTextField } from "@/shared/key-targets";
+import { inLayer, isTextField, promptOpen } from "@/shared/key-targets";
 import { isMac } from "@/shared/platform";
 import { ShortcutSheet } from "@/shared/shortcut-sheet";
 
@@ -143,7 +143,8 @@ const useLibraryKeys = (
   });
 
   const onKeyDown = useEffectEvent((event: KeyboardEvent) => {
-    if (event.defaultPrevented || event.isComposing) {
+    // A prompt owns the window (SPEC round 8): no sheet, search or other capture opens under it.
+    if (event.defaultPrevented || event.isComposing || promptOpen()) {
       return;
     }
 

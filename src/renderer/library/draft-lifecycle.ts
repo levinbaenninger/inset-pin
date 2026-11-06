@@ -58,16 +58,6 @@ export interface InFlight {
   readonly payload: EditableFields;
 }
 
-/**
- * A save that Discard changes wrote the saved values over. `landed` is
- * whether it reached the disk, null until main answers it.
- */
-export interface Discarded {
-  readonly rev: number;
-  readonly payload: EditableFields;
-  readonly landed: boolean | null;
-}
-
 interface DraftBase {
   /** Counts this draft's edits; a higher rev is a later edit. */
   readonly rev: number;
@@ -83,10 +73,12 @@ interface DraftBase {
  * nothing to save), or when the user discards it.
  *
  * - dirty: edited since the last save was sent; an older save may still be on its way.
- * - saving: the latest rev is on its way to the disk. After Discard changes
- *   it writes the saved values over the discarded save, `discarded`.
+ * - saving: the latest rev is on its way to the disk.
  * - failed: the latest rev's save failed; only Retry sends it again, and
  *   Discard changes or a new edit end it.
+ *
+ * Discard changes ends the draft at once. Main drops or undoes the save on
+ * its way (SPEC round 8), and that save's answer never reaches this draft.
  *
  * `error` stays from a failed save until a save succeeds, so the failure
  * stays on screen while the user types on or retries.
@@ -101,7 +93,6 @@ export type Draft =
       readonly kind: "saving";
       readonly inFlight: InFlight;
       readonly error: string | null;
-      readonly discarded: Discarded | null;
     })
   | (DraftBase & { readonly kind: "failed"; readonly error: string });
 
@@ -179,7 +170,6 @@ const send = (draft: Draft | null, retry: boolean): Draft | null => {
 
   return {
     confirmed: draft.confirmed,
-    discarded: null,
     error: draft.error,
     inFlight: { payload, rev: draft.rev },
     kind: "saving",
@@ -193,20 +183,11 @@ const answered = (
   rev: number,
   result: ActionResult
 ): Draft | null => {
-  if (draft === null || draft.kind === "failed") {
-    return draft;
-  }
-
-  // The discarded save: until the saved values land after it, the disk holds whatever it wrote.
-  if (draft.kind === "saving" && draft.discarded?.rev === rev) {
-    return {
-      ...draft,
-      confirmed: result.ok ? draft.discarded.payload : draft.confirmed,
-      discarded: { ...draft.discarded, landed: result.ok },
-    };
-  }
-
-  if (draft.inFlight?.rev !== rev) {
+  if (
+    draft === null ||
+    draft.kind === "failed" ||
+    draft.inFlight?.rev !== rev
+  ) {
     return draft;
   }
 
@@ -225,44 +206,12 @@ const answered = (
     return { ...draft, error: result.message, inFlight: null };
   }
 
-  // Writing the saved values back failed, but the discarded save never reached the disk either.
-  return draft.discarded?.landed === false
-    ? null
-    : {
-        confirmed: draft.confirmed,
-        error: result.message,
-        kind: "failed",
-        rev: draft.rev,
-        values: draft.values,
-      };
-};
-
-/**
- * Discard changes while a save is on its way: that save may still write the
- * discarded text, so what the disk held before is written after it, and the
- * capture shows that meanwhile. Saves reach main in order, so this one lands
- * last, and the answer to the discarded save is ignored.
- */
-const revert = (draft: Draft): Draft => {
-  // Already writing the saved values back: there is nothing new to discard.
-  if (draft.kind === "failed" || draft.inFlight === null) {
-    return draft;
-  }
-
-  if (draft.kind === "saving" && draft.discarded !== null) {
-    return draft;
-  }
-
-  const rev = draft.rev + 1;
-
   return {
     confirmed: draft.confirmed,
-    discarded: { ...draft.inFlight, landed: null },
-    error: null,
-    inFlight: { payload: draft.confirmed, rev },
-    kind: "saving",
-    rev,
-    values: draft.confirmed,
+    error: result.message,
+    kind: "failed",
+    rev: draft.rev,
+    values: draft.values,
   };
 };
 
@@ -289,7 +238,7 @@ export const reduceDraft = (
     }
 
     case "discard": {
-      return draft !== null && isWriting(draft) ? revert(draft) : null;
+      return null;
     }
 
     case "overdue": {

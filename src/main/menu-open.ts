@@ -8,7 +8,8 @@ export interface MenuOpenTarget {
     readonly isFocused: () => boolean;
   };
   readonly contents: {
-    readonly on: On<"did-navigate"> &
+    readonly on: On<"did-start-loading"> &
+      On<"did-navigate"> &
       On<"render-process-gone"> &
       On<"destroyed">;
     readonly isDestroyed: () => boolean;
@@ -26,8 +27,8 @@ export interface MenuOpen {
 /**
  * Whether a menu is open in one page (SPEC round 6). While it is, the app
  * menu's own keys stand aside, so a key shown in the page's menu never acts
- * on the page underneath. A blur, a navigation, a crash or a closed page
- * clears it, so it can never stay stuck; the page reports again when the
+ * on the page underneath. A blur, a reload or navigation starting, a crash or
+ * a closed page clears it, as in Shelf and Window Links, so it can never stay stuck; the page reports again when the
  * window comes back with the menu still open.
  */
 export const trackMenuOpen = ({
@@ -53,6 +54,7 @@ export const trackMenuOpen = ({
   };
 
   window.on("blur", clear);
+  contents.on("did-start-loading", clear);
   contents.on("did-navigate", clear);
   contents.on("render-process-gone", clear);
   contents.on("destroyed", clear);

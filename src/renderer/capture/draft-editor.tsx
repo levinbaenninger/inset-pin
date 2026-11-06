@@ -121,19 +121,19 @@ const QuitQuestion = ({
   readonly write: WriteStatus;
 }) => {
   const firstRef = useRef<HTMLButtonElement>(null);
-  const saving = write.kind === "saving";
+  // A save that failed or didn't finish in time is tried again, as Retry in the library's prompt.
+  const action = write.kind === "editing" ? "Save" : "Retry";
 
   let detail = "Add a title to save it.";
 
-  if (saving) {
+  if (write.kind === "saving") {
     detail = SAVE_TOO_SLOW;
   } else if (savable) {
     detail = "This capture isn’t saved yet.";
   }
 
-  if (write.kind === "failed") {
-    detail = `${detail} ${write.message}`;
-  }
+  // One line each, so the error reads on its own instead of a ragged balanced block.
+  const lines = write.kind === "failed" ? [detail, write.message] : [detail];
 
   return (
     <AlertDialog
@@ -164,7 +164,13 @@ const QuitQuestion = ({
       >
         <AlertDialogHeader>
           <AlertDialogTitle>Save before quitting?</AlertDialogTitle>
-          <AlertDialogDescription>{detail}</AlertDialogDescription>
+          <AlertDialogDescription>
+            {lines.map((line) => (
+              <span className="block" key={line}>
+                {line}
+              </span>
+            ))}
+          </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <Button
@@ -193,11 +199,10 @@ const QuitQuestion = ({
               answer("save");
             }}
             ref={savable ? firstRef : undefined}
-            title={`Save and quit (${KEYS.save})`}
+            title={`${action} and quit (${KEYS.save})`}
             type="button"
           >
-            {saving ? <Spinner data-icon="inline-start" /> : null}
-            Save
+            {action}
           </Button>
         </AlertDialogFooter>
       </AlertDialogContent>

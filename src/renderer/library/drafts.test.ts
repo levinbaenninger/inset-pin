@@ -1,6 +1,6 @@
 import { CaptureIdSchema } from "@shared/capture-record";
 import type { CaptureId, EditableFields } from "@shared/capture-record";
-import type { ActionResult } from "@shared/contracts";
+import type { ActionResult, SaveTag } from "@shared/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DraftStore, SAVE_AFTER_MS } from "./drafts";
@@ -23,15 +23,22 @@ const titled = (title: string): EditableFields => ({ ...STORED, title });
 const heldDisk = () => {
   const sent: { id: CaptureId; title: string }[] = [];
   const pending: ((result: ActionResult) => void)[] = [];
+  /** Each save's tag, by the title it carries. */
+  const tags: { title: string; tag: SaveTag }[] = [];
+  /** The saves Discard told main to drop, by the title they carry. */
+  const undone: string[] = [];
 
   const update = async ({
     fields,
     id,
+    tag,
   }: {
     readonly id: CaptureId;
     readonly fields: EditableFields;
+    readonly tag: SaveTag;
   }): Promise<ActionResult> => {
     sent.push({ id, title: fields.title });
+    tags.push({ tag, title: fields.title });
 
     // oxlint-disable-next-line promise/avoid-new -- the test answers the save later, through this callback.
     return await new Promise<ActionResult>((resolve) => {
@@ -45,7 +52,27 @@ const heldDisk = () => {
     await vi.advanceTimersByTimeAsync(0);
   };
 
-  return { answer, drafts: new DraftStore({ update }), sent };
+  const discard = async ({
+    tag,
+  }: {
+    readonly id: CaptureId;
+    readonly tag: SaveTag;
+  }): Promise<ActionResult> => {
+    undone.push(
+      tags.find((one) => one.tag.seq === tag.seq && one.tag.epoch === tag.epoch)
+        ?.title ?? "?"
+    );
+
+    return await Promise.resolve({ ok: true });
+  };
+
+  return {
+    answer,
+    drafts: new DraftStore({ discard, update }),
+    sent,
+    tags,
+    undone,
+  };
 };
 
 const FULL: ActionResult = { message: "The disk is full.", ok: false };
@@ -185,8 +212,8 @@ describe(DraftStore, () => {
     });
   });
 
-  it("discards at once while a retry is on its way: shows what is saved, writes it after the retry, and the retry answers that it was discarded", async () => {
-    const { answer, drafts, sent } = heldDisk();
+  it("discards at once while a retry is on its way: shows what is saved, tells main to drop the retry, writes nothing to undo it, and the retry answers that it was discarded", async () => {
+    const { answer, drafts, sent, undone } = heldDisk();
 
     drafts.edit(A, titled("Typed"), STORED, { now: true });
     await answer(FULL);
@@ -196,34 +223,108 @@ describe(DraftStore, () => {
 
     drafts.discard(A);
 
-    const shown = drafts.get(A)?.values.title;
-
     await expect(Promise.all([retry, copy])).resolves.toStrictEqual([
       { message: "The changes were discarded.", ok: false },
       // The error still showed while the retry was on its way, so the copy was refused at once.
       { message: "The disk is full.", ok: false },
     ]);
 
-    // The retry lands after all; the saved values written after it win.
+    // Main says the retry landed: main put back what it replaced, and the library never takes it as saved.
     await answer();
 
-    const afterRetry = drafts.get(A)?.values.title;
+    expect({
+      discards: drafts.discards(A),
+      end: drafts.get(A),
+      saved: drafts.saved(A),
+      sent: sent.map(({ title }) => title),
+      undone,
+    }).toStrictEqual({
+      discards: 1,
+      end: undefined,
+      // What was saved before the discarded save stays the baseline.
+      saved: STORED,
+      sent: ["Typed", "Typed"],
+      undone: ["Typed"],
+    });
+  });
+
+  it("never takes a discarded save as saved, so a new edit starts from what was saved before it, under a new epoch", async () => {
+    const { answer, drafts, sent, tags } = heldDisk();
+
+    drafts.edit(A, titled("Discard me"), STORED, { now: true });
+    drafts.discard(A);
+    drafts.edit(A, titled("Kept"), STORED, { now: true });
+
+    // The new edit doesn't wait for the discarded save: main runs them in order.
+    expect(sent.map(({ title }) => title)).toStrictEqual([
+      "Discard me",
+      "Kept",
+    ]);
+
+    await answer();
+
+    const afterDiscarded = drafts.get(A);
 
     await answer();
 
     expect({
-      afterRetry,
-      discards: drafts.discards(A),
+      afterDiscarded: afterDiscarded?.confirmed,
       end: drafts.get(A),
-      sent: sent.map(({ title }) => title),
-      shown,
+      epochs: tags[0]?.tag.epoch === tags[1]?.tag.epoch,
+      saved: drafts.saved(A)?.title,
     }).toStrictEqual({
-      afterRetry: "Total is off",
-      discards: 1,
+      afterDiscarded: STORED,
       end: undefined,
-      sent: ["Typed", "Typed", "Total is off"],
-      shown: "Total is off",
+      epochs: false,
+      saved: "Kept",
     });
+  });
+
+  it("shows what main holds and says why when main couldn't put back what a discarded save replaced", async () => {
+    const said: string[] = [];
+
+    const drafts = new DraftStore({
+      discard: async () =>
+        await Promise.resolve({
+          message: "Inset can’t write to its data folder.",
+          ok: false,
+        }),
+      update: async () => await Promise.resolve({ ok: true }),
+    });
+
+    drafts.onUndoFailed((message) => {
+      said.push(message);
+    });
+    drafts.edit(A, titled("Saved first"), STORED, { now: true });
+    await vi.advanceTimersByTimeAsync(0);
+    drafts.edit(A, titled("Discard me"), STORED, { now: true });
+    drafts.discard(A);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect({
+      discards: drafts.discards(A),
+      said,
+      saved: drafts.saved(A),
+    }).toStrictEqual({
+      discards: 2,
+      said: ["Inset can’t write to its data folder."],
+      saved: undefined,
+    });
+  });
+
+  it("names only a save on its way, never one main already confirmed", async () => {
+    const { answer, drafts, undone } = heldDisk();
+
+    drafts.edit(A, titled("Confirmed"), STORED, { now: true });
+    await answer();
+    drafts.edit(A, titled("Not sent yet"), STORED);
+    drafts.discard(A);
+
+    expect([undone, drafts.saved(A)?.title, drafts.get(A)]).toStrictEqual([
+      [],
+      "Confirmed",
+      undefined,
+    ]);
   });
 
   it("sends nothing when only a trailing space was typed, and copies the stored capture", async () => {
@@ -305,7 +406,7 @@ describe(DraftStore, () => {
   });
 
   it("discards back to the last save that landed, though the page still passes what it loaded before that save", async () => {
-    const { answer, drafts, sent } = heldDisk();
+    const { answer, drafts, sent, undone } = heldDisk();
 
     drafts.edit(A, titled("Saved first"), STORED, { now: true });
     await answer();
@@ -316,21 +417,18 @@ describe(DraftStore, () => {
     void drafts.retry(A);
     drafts.discard(A);
 
-    const shown = drafts.get(A)?.values.title;
-
-    await answer();
     await answer();
 
     expect({
       after: drafts.saved(A)?.title,
       draft: drafts.get(A),
       sent: sent.map(({ title }) => title),
-      shown,
+      undone,
     }).toStrictEqual({
       after: "Saved first",
       draft: undefined,
-      sent: ["Saved first", "Discard me", "Discard me", "Saved first"],
-      shown: "Saved first",
+      sent: ["Saved first", "Discard me", "Discard me"],
+      undone: ["Discard me"],
     });
   });
 

@@ -1,6 +1,6 @@
 import type { CaptureId, EditableFields } from "@shared/capture-record";
 import { LEAVE_SAVE_WAIT_MS, SAVE_TOO_SLOW } from "@shared/contracts";
-import type { ActionResult, SavedEdits } from "@shared/contracts";
+import type { ActionResult, SavedEdits, SaveTag } from "@shared/contracts";
 
 import { reduceDraft, snapshotOf } from "./draft-lifecycle";
 import type { Draft, DraftEvent, InFlight } from "./draft-lifecycle";
@@ -11,6 +11,12 @@ export interface FieldStore {
   readonly update: (input: {
     readonly id: CaptureId;
     readonly fields: EditableFields;
+    readonly tag: SaveTag;
+  }) => Promise<ActionResult>;
+  /** Discard changes while this save is on its way: main drops it, or puts back what it replaced. */
+  readonly discard: (input: {
+    readonly id: CaptureId;
+    readonly tag: SaveTag;
   }) => Promise<ActionResult>;
 }
 
@@ -84,8 +90,12 @@ const quiet = (drafts: Iterable<Draft>): boolean =>
  * Every capture's unsaved edits, kept above the pages, so a draft outlives
  * leaving its capture, closing the detail pane and coming back. Typing saves
  * a while after the last change; other changes and leaving save at once.
- * Saves of one capture reach main one at a time, in order, except the one
- * Discard changes writes over a save already on its way.
+ * Saves of one capture reach main one at a time, in order.
+ *
+ * Each save carries its capture's epoch (SPEC round 8). Discard changes ends
+ * the epoch: main drops the save on its way, or renames back what it
+ * replaced, and its answer is ignored here, so a discarded save never
+ * becomes what this library takes as saved.
  */
 export class DraftStore {
   readonly #store: FieldStore;
@@ -93,9 +103,18 @@ export class DraftStore {
   readonly #timers = new Map<CaptureId, ReturnType<typeof setTimeout>>();
   readonly #waiters = new Map<CaptureId, Waiter[]>();
   readonly #discards = new Map<CaptureId, number>();
-  /** What the last save that landed wrote. Saves land in order, so this is what the disk holds. */
+  /** The saved baseline: what the last save main confirmed in the current epoch wrote, or what a discarded draft last knew was saved. Saves land in order, so this is what the disk holds. */
   readonly #saved = new Map<CaptureId, EditableFields>();
   readonly #listeners = new Set<() => void>();
+  /** Tells this page's epochs from a page loaded before it, whose epochs main may have ended. */
+  readonly #page = crypto.randomUUID();
+  #epochCount = 0;
+  #seq = 0;
+  /** Per capture, the run of edits its saves belong to; Discard changes starts a new one. */
+  readonly #epochs = new Map<CaptureId, string>();
+  /** Per capture, the save on its way. */
+  readonly #sending = new Map<CaptureId, SaveTag>();
+  readonly #undoFailures = new Set<(message: string) => void>();
 
   constructor(store: FieldStore) {
     this.#store = store;
@@ -105,9 +124,10 @@ export class DraftStore {
   readonly get = (id: CaptureId): Draft | undefined => this.#drafts.get(id);
 
   /**
-   * What the disk holds since this library last saved the capture, in
-   * stored form; undefined before its first save. The capture a page loaded
-   * can be older until its reload answers.
+   * What the disk holds since this library last saved or discarded changes
+   * to the capture, in stored form; undefined before either. The capture a
+   * page loaded can be older until its reload answers, or newer while it
+   * shows a save that was then discarded.
    */
   readonly saved = (id: CaptureId): EditableFields | undefined =>
     this.#saved.get(id);
@@ -184,28 +204,43 @@ export class DraftStore {
   }
 
   /**
-   * Discard changes: the capture shows what is on disk again, at once. A
-   * save already on its way is answered by writing the saved values after it.
+   * Discard changes: the capture shows what is saved again, at once. A save
+   * already on its way belongs to the epoch this ends: main drops it, or
+   * renames back the file it replaced. Nothing is written to undo it.
    */
   discard(id: CaptureId): void {
-    if (!this.#drafts.has(id)) {
+    const draft = this.#drafts.get(id);
+
+    if (draft === undefined) {
       return;
     }
 
+    const sending = this.#sending.get(id);
+
+    // What main puts back is what the draft last knew was saved; a reload may already show the discarded save.
+    this.#saved.set(id, draft.confirmed);
     this.#stopTimer(id);
     this.#discards.set(id, this.discards(id) + 1);
     this.#resolve(id, () => true, DISCARDED);
-
-    const before = this.#drafts.get(id);
-
+    this.#sending.delete(id);
+    this.#epochs.delete(id);
     this.#apply(id, { kind: "discard" });
 
-    const after = this.#drafts.get(id);
-
-    if (after !== undefined && after !== before && after.kind === "saving") {
-      void this.#write(id, after.inFlight);
+    if (sending !== undefined) {
+      void this.#undo(id, sending);
     }
   }
+
+  /** Called when main couldn't put back what a discarded save replaced; the capture then shows what is on disk. */
+  readonly onUndoFailed = (
+    listener: (message: string) => void
+  ): (() => void) => {
+    this.#undoFailures.add(listener);
+
+    return () => {
+      this.#undoFailures.delete(listener);
+    };
+  };
 
   /**
    * For a copy: takes what the capture shows now, saves it and waits for the
@@ -301,7 +336,47 @@ export class DraftStore {
   forget(id: CaptureId): void {
     this.#stopTimer(id);
     this.#saved.delete(id);
+    this.#sending.delete(id);
+    this.#epochs.delete(id);
     this.#apply(id, { kind: "removed" });
+  }
+
+  #epoch(id: CaptureId): string {
+    const known = this.#epochs.get(id);
+
+    if (known !== undefined) {
+      return known;
+    }
+
+    this.#epochCount += 1;
+
+    const epoch = `${this.#page}.${String(this.#epochCount)}`;
+
+    this.#epochs.set(id, epoch);
+
+    return epoch;
+  }
+
+  async #undo(id: CaptureId, tag: SaveTag): Promise<void> {
+    const result = await settle(
+      async () => await this.#store.discard({ id, tag })
+    );
+
+    if (result.ok) {
+      return;
+    }
+
+    // The discarded save stays on disk, so the capture shows what main holds rather than a baseline the disk lacks.
+    this.#saved.delete(id);
+    this.#discards.set(id, this.discards(id) + 1);
+
+    for (const listener of this.#listeners) {
+      listener();
+    }
+
+    for (const listener of this.#undoFailures) {
+      listener(result.message);
+    }
   }
 
   #send(id: CaptureId, kind: "send" | "retry"): void {
@@ -319,12 +394,25 @@ export class DraftStore {
   }
 
   async #write(id: CaptureId, inFlight: InFlight): Promise<void> {
+    this.#seq += 1;
+
+    const tag: SaveTag = { epoch: this.#epoch(id), seq: this.#seq };
+
+    this.#sending.set(id, tag);
+
     const result = await settle(
-      async () => await this.#store.update({ fields: inFlight.payload, id })
+      async () =>
+        await this.#store.update({ fields: inFlight.payload, id, tag })
     );
 
-    // A deleted capture has no draft left, and nothing saved to remember.
-    if (result.ok && this.#drafts.has(id)) {
+    // Discarded, or deleted, while on its way: the answer belongs to no draft, and a discarded save never becomes what is saved.
+    if (this.#sending.get(id) !== tag) {
+      return;
+    }
+
+    this.#sending.delete(id);
+
+    if (result.ok) {
       this.#saved.set(id, inFlight.payload);
     }
 

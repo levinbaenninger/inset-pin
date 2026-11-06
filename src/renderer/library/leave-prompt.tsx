@@ -1,5 +1,5 @@
 import type { Leaving } from "@shared/contracts";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   AlertDialog,
@@ -12,7 +12,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 
-import { leaveHold, useLeavePrompt } from "./library-drafts";
+import { drafts, leaveHold, useLeavePrompt } from "./library-drafts";
+import { useNotice } from "./notice";
 
 const DISCARD: Record<Leaving, string> = {
   close: "Discard and close",
@@ -33,6 +34,20 @@ const titleOf = (count: number): string =>
  */
 export const LeavePrompt = () => {
   const prompt = useLeavePrompt();
+  const say = useNotice();
+
+  // Discard changes renames back what a save on its way replaced; when even that fails, the capture shows what is on disk, and this says why.
+  useEffect(
+    () =>
+      drafts.onUndoFailed((message) => {
+        say({
+          failed: true,
+          text: `Couldn’t undo the save, so it stays as saved. ${message}`,
+        });
+      }),
+    [say]
+  );
+
   const retryRef = useRef<HTMLButtonElement>(null);
   const returnRef = useRef<HTMLElement | null>(null);
   // The last prompt stays on screen while the dialog fades out after Cancel.

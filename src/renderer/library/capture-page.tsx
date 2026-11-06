@@ -33,7 +33,7 @@ import { EntryFields, isFieldAction, useFieldsUi } from "@/fields/entry-fields";
 import type { FieldsValue } from "@/fields/entry-fields";
 import { libraryBridge } from "@/shared/bridge";
 import { IconButton } from "@/shared/icon-button";
-import { inLayer, isTextField } from "@/shared/key-targets";
+import { inLayer, isTextField, promptOpen } from "@/shared/key-targets";
 import { isMac } from "@/shared/platform";
 import { usePinKeys } from "@/shared/use-pin-keys";
 
@@ -282,7 +282,7 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
   };
 
   const onKeyDown = useEffectEvent((event: KeyboardEvent) => {
-    if (event.defaultPrevented || event.isComposing) {
+    if (event.defaultPrevented || event.isComposing || promptOpen()) {
       return;
     }
 

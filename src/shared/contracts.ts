@@ -166,6 +166,18 @@ export type LibraryCommand =
   | "toggleSidebar"
   | "showDone";
 
+/**
+ * One library save of one capture (SPEC round 8). `epoch` is the run of
+ * edits it belongs to, which Discard changes ends; `seq` tells this save
+ * from every other the page sent, so Discard can name the one on its way.
+ */
+export const SaveTagSchema = z.object({
+  epoch: z.string().min(1).max(100),
+  seq: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+});
+
+export type SaveTag = z.output<typeof SaveTagSchema>;
+
 export type ActionResult =
   | { readonly ok: true }
   | { readonly ok: false; readonly message: string };
@@ -265,6 +277,15 @@ export const libraryContract = defineContract({
     copyDetails: invoke(CaptureIdSchema, out<CopyResult>()),
     copyImage: invoke(CaptureIdSchema, out<CopyResult>()),
     copyText: invoke(CaptureIdSchema, out<CopyResult>()),
+    /**
+     * Discard changes while this save is on its way: main ends its epoch at
+     * once, so it is dropped before it replaces capture.json, or, if it
+     * already did, main renames the file it moved aside back into place.
+     */
+    discard: invoke(
+      z.object({ id: CaptureIdSchema, tag: SaveTagSchema }),
+      out<ActionResult>()
+    ),
     /** The answer to a `flush` event: the edits reached the disk, with what a copy carries, or why not. */
     flushed: send(
       z.object({ result: SavedEditsSchema, token: z.string().max(100) })
@@ -303,7 +324,11 @@ export const libraryContract = defineContract({
     /** How many captures hold changes that aren't saved, sent whenever it changes, so main knows without asking a page that may not answer. */
     unsavedCount: send(z.number().int().min(0).max(100_000)),
     update: invoke(
-      z.object({ fields: EditableFieldsSchema, id: CaptureIdSchema }),
+      z.object({
+        fields: EditableFieldsSchema,
+        id: CaptureIdSchema,
+        tag: SaveTagSchema,
+      }),
       out<ActionResult>()
     ),
   },

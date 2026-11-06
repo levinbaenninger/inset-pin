@@ -55,8 +55,13 @@ const fieldsOf = (record: CaptureRecord): EditableFields => ({
 /** The library's draft store, talking to the real store as main does over IPC. */
 const openDrafts = (): DraftStore =>
   new DraftStore({
-    update: async ({ fields, id }) => {
-      const result = await store.update(id, fields);
+    discard: async ({ id, tag }) => {
+      const result = await store.discard(id, tag);
+
+      return result.ok ? { ok: true } : { message: result.message, ok: false };
+    },
+    update: async ({ fields, id, tag }) => {
+      const result = await store.update(id, fields, tag);
 
       return result.ok ? { ok: true } : { message: result.message, ok: false };
     },

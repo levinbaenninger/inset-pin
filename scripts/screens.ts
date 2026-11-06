@@ -2274,7 +2274,7 @@ const checkDrafts = async (
     const bTitle = captures.find((one) => one.id === b)?.title ?? "";
 
     const set = async (
-      name: "__failSaves" | "__holdSaves",
+      name: "__failSaves" | "__holdSaves" | "__holdAnswers",
       on: boolean
     ): Promise<void> => {
       await page.evaluate(
@@ -2301,7 +2301,9 @@ const checkDrafts = async (
           asked: globalThis.__asked ?? [],
           clipboard: globalThis.__clipboard ?? [],
           copies: calls.filter((call) => call.startsWith("copy")),
-          saves: calls.filter((call) => call.startsWith("update")),
+          saves: calls.filter(
+            (call) => call.startsWith("update") || call.startsWith("discard")
+          ),
         };
 
         globalThis.__asked = [];
@@ -2709,6 +2711,238 @@ const checkDrafts = async (
     }
   );
 
+  // Round 8: a prompt owns the keys, so no field shortcut or pin key changes the capture underneath it.
+  await attempt("keys under the unsaved-changes prompt", async () => {
+    const s = await session();
+    const { page } = s;
+
+    try {
+      await failTypingInTitle(page);
+
+      const before = await s.fields();
+
+      void askToLeave(page, "quit");
+      await page.getByTestId("leave-prompt").waitFor();
+      await page.waitForTimeout(150);
+
+      for (const key of [
+        `${m}+Shift+d`,
+        `${m}+d`,
+        `${m}+Shift+s`,
+        "Shift+p",
+        "p",
+        "1",
+      ]) {
+        // Sequential on purpose: each key lands on the prompt in turn.
+        // oxlint-disable-next-line no-await-in-loop
+        await page.keyboard.press(key);
+        // oxlint-disable-next-line no-await-in-loop
+        await page.waitForTimeout(80);
+      }
+
+      const underPrompt = await page.evaluate(() => ({
+        layers: document.querySelectorAll("[data-slot='popover-content']")
+          .length,
+        pinMode:
+          document.querySelector(
+            "[data-testid='pin-tool'][aria-pressed='true']"
+          ) !== null,
+        prompt: document.querySelector("[data-testid='leave-prompt']") !== null,
+      }));
+
+      const during = await s.fields();
+
+      expectSame(
+        "with the unsaved-changes prompt open, ⇧⌘D, ⌘D, ⇧⌘S, ⇧P, P and 1 change nothing in the capture underneath",
+        { during, underPrompt },
+        {
+          during: before,
+          underPrompt: { layers: 0, pinMode: false, prompt: true },
+        }
+      );
+
+      // The app menu, the tray and Windows' main-side keys arrive as commands, not keys: none acts under the prompt either.
+      await s.take();
+
+      const look = async () =>
+        await page.evaluate(() => ({
+          dialogs: document.querySelectorAll("[role='dialog']").length,
+          focusInPrompt:
+            document.activeElement?.closest("[role='alertdialog']") !== null,
+          hash: location.hash,
+          layers: document.querySelectorAll("[data-slot='popover-content']")
+            .length,
+          list:
+            document.querySelector("aside[aria-label='Captures']")
+              ?.textContent ?? null,
+          pinMode:
+            document.querySelector(
+              "[data-testid='pin-tool'][aria-pressed='true']"
+            ) !== null,
+          prompts: document.querySelectorAll("[role='alertdialog']").length,
+          sidebar:
+            document.querySelector<HTMLElement>("aside[aria-label='Captures']")
+              ?.dataset.collapsed ?? null,
+        }));
+
+      const screenBefore = await look();
+
+      for (const command of [
+        "copyText",
+        "copyDetails",
+        "copyImage",
+        "edit",
+        "delete",
+        "float",
+        "done",
+        "description",
+        "due",
+        "steps",
+        "pinTool",
+        "find",
+        "shortcuts",
+        "toggleSidebar",
+        "showDone",
+      ]) {
+        // Sequential on purpose: each command lands on the page in turn.
+        // oxlint-disable-next-line no-await-in-loop
+        await page.evaluate((name) => {
+          globalThis.__emit?.("command", name);
+        }, command);
+        // oxlint-disable-next-line no-await-in-loop
+        await page.waitForTimeout(60);
+      }
+
+      // Round 8 red team: the window's own shortcuts and a capture chosen from the tray skip the command bus, and must not act under the prompt either.
+      for (const key of [
+        `${m}+/`,
+        `${m}+f`,
+        ...(platform === "windows" ? ["Control+,"] : []),
+      ]) {
+        // Sequential on purpose: each key lands on the prompt in turn.
+        // oxlint-disable-next-line no-await-in-loop
+        await page.keyboard.press(key);
+        // oxlint-disable-next-line no-await-in-loop
+        await page.waitForTimeout(80);
+      }
+
+      await page.evaluate((id) => {
+        globalThis.__emit?.("show", id);
+      }, s.b);
+      await page.waitForTimeout(200);
+
+      const others = await page.evaluate(() =>
+        (globalThis.__calls ?? []).filter(
+          (call) =>
+            call.startsWith("setDone") ||
+            call.startsWith("remove") ||
+            call.startsWith("floatOnTop") ||
+            call === "openSettings"
+        )
+      );
+
+      const seen = await s.take();
+
+      expectSame(
+        "with the unsaved-changes prompt open, no app-menu or tray command, window shortcut or capture chosen from the tray changes the capture, the list or the store, or opens anything under it",
+        {
+          calls: [...seen.asked, ...seen.copies, ...seen.saves],
+          fields: await s.fields(),
+          others,
+          screen: await look(),
+        },
+        { calls: [], fields: before, others: [], screen: screenBefore }
+      );
+    } finally {
+      await s.context.close();
+    }
+  });
+
+  // Round 8: autosave never locks the fields, because typing during a save is kept and saved next, never ignored.
+  await attempt("typing while a save is on its way", async () => {
+    const s = await session();
+    const { page } = s;
+
+    try {
+      await s.set("__holdSaves", true);
+      await typeInTitle(page, " one");
+      await page.getByTestId("more").focus();
+      await page.waitForTimeout(150);
+      await typeInTitle(page, " two");
+
+      const { title: typed } = await s.shown();
+
+      await s.set("__holdSaves", false);
+      await s.release();
+      await page.getByTestId("more").focus();
+      await page.waitForFunction(
+        (id) => globalThis.__storedTitle?.(id)?.endsWith(" one two") === true,
+        a,
+        { timeout: 3000 }
+      );
+
+      const { saves } = await s.take();
+
+      expectSame(
+        "the title takes typing while its save is on its way, and that typing is saved next",
+        { saves, typed },
+        {
+          saves: [`update:${a}:${aTitle} one`, `update:${a}:${aTitle} one two`],
+          typed: `${aTitle} one two`,
+        }
+      );
+    } finally {
+      await s.context.close();
+    }
+  });
+
+  // Round 8: Discard ends the epoch, so an edit typed right after it saves at once and the dropped save never lands.
+  await attempt("an edit right after Discard", async () => {
+    const s = await session();
+    const { page } = s;
+    const bar = page.getByTestId("save-failure");
+
+    try {
+      await failTypingInTitle(page);
+      await s.set("__failSaves", false);
+      await s.set("__holdSaves", true);
+      await bar.getByRole("button", { name: "Retry" }).click();
+      await bar.getByRole("button", { name: "Discard changes" }).click();
+      await typeInTitle(page, " kept");
+      await page.getByTestId("more").focus();
+      await page.waitForTimeout(150);
+      await s.set("__holdSaves", false);
+      await s.release();
+      await page.waitForTimeout(300);
+
+      const { saves } = await s.take();
+
+      expectSame(
+        "an edit typed right after Discard saves, the save Discard dropped never lands, and the capture shows and keeps the new edit",
+        {
+          disk: await page.evaluate(
+            (id) => globalThis.__storedTitle?.(id) ?? null,
+            a
+          ),
+          saves,
+          shown: await s.shown(),
+        },
+        {
+          disk: `${aTitle} kept`,
+          saves: [
+            `update:${a}:${aTitle} (typed)`,
+            `update:${a}:${aTitle} (typed)`,
+            `discard:${a}:${aTitle} (typed)`,
+            `update:${a}:${aTitle} kept`,
+          ],
+          shown: { failure: null, title: `${aTitle} kept` },
+        }
+      );
+    } finally {
+      await s.context.close();
+    }
+  });
+
   // Round 7 red team: Discard goes back to the last save that landed, though the capture's reload after that save hasn't answered yet.
   await attempt(
     "Discard after a save whose reload hasn't answered",
@@ -2761,6 +2995,66 @@ const checkDrafts = async (
             atOnce: "A newly saved title",
             disk: "A newly saved title",
             shown: { failure: null, title: "A newly saved title" },
+          }
+        );
+      } finally {
+        await s.context.close();
+      }
+    }
+  );
+
+  // Round 8 red team: a save main wrote but hasn't confirmed, then a reload showing it, never becomes what Discard puts back.
+  await attempt(
+    "Discard after a save main wrote but hasn't confirmed",
+    async () => {
+      const s = await session();
+      const { page } = s;
+
+      try {
+        const bar = page.getByTestId("save-failure");
+
+        await failTypingInTitle(page);
+        await s.set("__failSaves", false);
+        await s.set("__holdAnswers", true);
+        await typeInTitle(page, " more");
+        await page.getByTestId("more").focus();
+        await page.waitForFunction(
+          (want) => globalThis.__storedTitle?.(want.id) === want.title,
+          { id: a, title: `${aTitle} (typed) more` }
+        );
+        await page.waitForTimeout(300);
+        await page.evaluate(() => {
+          globalThis.__holdGets = true;
+        });
+        await bar.getByRole("button", { name: "Discard changes" }).click();
+
+        const atOnce = await s.shown();
+
+        await typeInTitle(page, "!");
+        await page.getByTestId("more").focus();
+        await page.waitForTimeout(150);
+        await s.set("__holdAnswers", false);
+        await s.release();
+        await page.evaluate(() => {
+          globalThis.__holdGets = false;
+          globalThis.__releaseGets?.();
+        });
+        await page.waitForTimeout(300);
+
+        expectSame(
+          "Discard shows what was saved before the save main hadn't confirmed, though the capture reloaded with it, and the next edit builds on that",
+          {
+            atOnce,
+            disk: await page.evaluate(
+              (id) => globalThis.__storedTitle?.(id) ?? null,
+              a
+            ),
+            shown: await s.shown(),
+          },
+          {
+            atOnce: { failure: null, title: aTitle },
+            disk: `${aTitle}!`,
+            shown: { failure: null, title: `${aTitle}!` },
           }
         );
       } finally {
@@ -3006,7 +3300,8 @@ const checkDrafts = async (
             resumed: [],
             shown: { failure, title: `${aTitle} (typed)` },
           },
-          counts: [1, 0],
+          // The page reports at once when it loads, so main never goes by a count a crashed or reloaded page left.
+          counts: [0, 1, 0],
           nothingTyped: { fields: null, ok: true },
           retried: {
             resumed: ["resumeLeaving"],
@@ -3177,7 +3472,8 @@ const checkDrafts = async (
         },
         {
           again: { fields: null, ok: true },
-          counts: [1, 0],
+          // The page reports at once when it loads, so main never goes by a count a crashed or reloaded page left.
+          counts: [0, 1, 0],
           escape: kept,
           spaceOnCancel: kept,
           spaceOnDiscard: {
@@ -3339,7 +3635,7 @@ const checkDrafts = async (
       const { saves: heldSaves } = await s.take();
 
       expectSame(
-        "Discard and quit works at once while a save is on its way: the quit goes on, the saved title shows, the late save and the saved values written after it never show the discarded title, and the disk ends with the saved title",
+        "Discard and quit works at once while a save is on its way: the quit goes on, the saved title shows, main is told to drop that save and nothing is written to undo it, the late save never shows the discarded title, and the disk keeps the saved title",
         {
           asked,
           atOnce,
@@ -3353,7 +3649,10 @@ const checkDrafts = async (
             resumed: ["resumeLeaving"],
             shown: { failure: null, title: aTitle },
           },
-          saves: [`update:${a}:${aTitle} (held)`, `update:${a}:${aTitle}`],
+          saves: [
+            `update:${a}:${aTitle} (held)`,
+            `discard:${a}:${aTitle} (held)`,
+          ],
           seenAfterDiscard: [`${aTitle} | ${aTitle}`],
           stored: aTitle,
         }
@@ -3838,13 +4137,13 @@ const checkCaptureQuit = async (
   await slow.context.close();
 
   expectSame(
-    "a quit whose save didn't finish in 3 s asks in the panel, and Cancel, Discard and Save all answer while the save is on its way",
+    "a quit whose save didn't finish in 3 s asks in the panel with Retry, as the library does, and Cancel, Discard and Retry all answer while the save is on its way",
     { discarded, timedOut },
     {
       discarded: ["answerQuit:discard"],
       timedOut: {
         detail: "Saving didn’t finish in time.",
-        enabled: ["Cancel", "Discard", "Save"],
+        enabled: ["Cancel", "Discard", "Retry"],
       },
     }
   );
@@ -3852,18 +4151,41 @@ const checkCaptureQuit = async (
   // The dialog covers the panel's own error, so it says why the save failed.
   const failed = await open({ kind: "failed", message: "The disk is full." });
 
-  const failedDetail = await failed.page
-    .locator(
-      "[data-testid='quit-prompt'] [data-slot='alert-dialog-description']"
-    )
-    .textContent();
+  // Each sentence on a line of its own, never a ragged block balanced at half the dialog's width.
+  const failedDetail = await failed.page.evaluate(() => {
+    const shown = document.querySelector("[data-testid='quit-prompt']");
+
+    const lines = [
+      ...(shown?.querySelectorAll(
+        "[data-slot='alert-dialog-description'] > span"
+      ) ?? []),
+    ].map((line) => ({
+      rows: Math.round(
+        line.getBoundingClientRect().height /
+          Number(getComputedStyle(line).lineHeight.replace("px", ""))
+      ),
+      text: line.textContent,
+    }));
+
+    return {
+      action:
+        shown?.querySelector("[data-default-action]")?.textContent ?? null,
+      lines,
+    };
+  });
 
   await failed.context.close();
 
   expectSame(
-    "a quit after the capture's save failed says why in the prompt",
+    "a quit after the capture's save failed says why on a line of its own, and offers Retry",
     failedDetail,
-    "This capture isn’t saved yet. The disk is full."
+    {
+      action: "Retry",
+      lines: [
+        { rows: 1, text: "This capture isn’t saved yet." },
+        { rows: 1, text: "The disk is full." },
+      ],
+    }
   );
 
   return failures;

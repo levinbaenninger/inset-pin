@@ -1,6 +1,7 @@
 import type { LibraryCommand } from "@shared/contracts";
 
 import { libraryBridge } from "@/shared/bridge";
+import { promptOpen } from "@/shared/key-targets";
 
 type Listener = (command: LibraryCommand) => void;
 
@@ -9,9 +10,18 @@ const listeners = new Set<Listener>();
 /** A command that arrived before anything listened, such as the sheet asked for while the window opened. */
 let waiting: LibraryCommand[] = [];
 
-/** Listens once for the app menu's and the tray's commands, from the moment the page loads. */
+/**
+ * Listens once for the app menu's and the tray's commands, from the moment
+ * the page loads. While a prompt is open it owns the window, so a command
+ * is dropped rather than acting on the capture or the list behind it (SPEC
+ * round 8).
+ */
 export const startCommandBus = (): void => {
   libraryBridge().on("command", (command) => {
+    if (promptOpen()) {
+      return;
+    }
+
     if (listeners.size === 0) {
       waiting.push(command);
     }

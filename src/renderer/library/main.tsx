@@ -7,6 +7,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import { libraryBridge } from "@/shared/bridge";
+import { promptOpen } from "@/shared/key-targets";
 import { handleMenuKeys } from "@/shared/keys";
 import { reportMenusTo } from "@/shared/menu-keys";
 import { markPlatform } from "@/shared/platform";
@@ -44,8 +45,10 @@ const answerFlush = async (request: FlushRequest): Promise<SavedEdits> => {
     : await drafts.settle(request.id);
 };
 
-// Main asks a page that may not answer, so it keeps the count it last heard.
-let reported = 0;
+// Main asks a page that may not answer, so it keeps the count it last heard. A fresh page reports at once: until it does, main keeps the count a crashed or reloaded page left.
+let reported = drafts.unsaved()?.count ?? 0;
+
+libraryBridge().unsavedCount(reported);
 
 drafts.subscribe(() => {
   const count = drafts.unsaved()?.count ?? 0;
@@ -65,11 +68,11 @@ libraryBridge().on("flush", (request) => {
   })();
 });
 
-// A capture chosen from the tray or the Dock menu.
+// A capture chosen from the tray or the Dock menu; while a prompt is open, the capture behind it stays.
 libraryBridge().on("show", (id) => {
   const parsed = CaptureIdSchema.safeParse(id);
 
-  if (parsed.success) {
+  if (parsed.success && !promptOpen()) {
     void router.navigate({
       params: { captureId: parsed.data },
       to: "/captures/$captureId",
@@ -79,7 +82,9 @@ libraryBridge().on("show", (id) => {
 
 handleMenuKeys({
   ",": () => {
-    libraryBridge().openSettings();
+    if (!promptOpen()) {
+      libraryBridge().openSettings();
+    }
   },
 });
 

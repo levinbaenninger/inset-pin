@@ -15,7 +15,7 @@ const SENTENCES = new Map([
  */
 export const saveErrorText = (
   cause: unknown,
-  action: "save" | "delete" = "save"
+  action: "save" | "delete" | "undo" = "save"
 ): string => {
   const parsed = CodeSchema.safeParse(cause);
 

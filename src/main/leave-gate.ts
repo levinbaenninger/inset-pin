@@ -32,6 +32,11 @@ export interface LeaveGate {
   readonly resume: () => void;
   /** The page's prompt is on screen, so the user answers there. */
   readonly shown: () => void;
+  /**
+   * The page crashed or navigated away (SPEC round 8): a close or quit
+   * waiting on it asks natively at once, unless nothing was unsaved.
+   */
+  readonly pageGone: () => void;
 }
 
 /**
@@ -46,6 +51,8 @@ export interface LeaveGate {
 export const createLeaveGate = (deps: LeaveGateDeps): LeaveGate => {
   let turn = 0;
   let held: (() => void) | null = null;
+  /** The waiting turn's way to ask natively once its page is gone; null while nothing waits on the page. */
+  let orphaned: (() => void) | null = null;
   let deadline: ReturnType<typeof setTimeout> | undefined;
   /** The turn whose prompt the page last showed; a prompt already on screen may say so before the page answers. */
   let shownTurn = 0;
@@ -53,6 +60,10 @@ export const createLeaveGate = (deps: LeaveGateDeps): LeaveGate => {
   const clearDeadline = (): void => {
     clearTimeout(deadline);
     deadline = undefined;
+  };
+
+  const pageGone = (): void => {
+    orphaned?.();
   };
 
   const leave = async (leaving: Leaving, then: () => void): Promise<void> => {
@@ -63,14 +74,23 @@ export const createLeaveGate = (deps: LeaveGateDeps): LeaveGate => {
     let settled = false;
     const current = (): boolean => !settled && mine === turn;
 
+    /** Each ask of the page; an answer to an older one, after the page went, is ignored. */
+    let asks = 0;
+    let dialogOpen = false;
+
     const stop = (): void => {
       settled = true;
       held = null;
+      orphaned = null;
       clearDeadline();
     };
 
-    /** The disk is slow: go on once it has written, or as the user says. */
-    const goOnce = async (): Promise<void> => {
+    /**
+     * The disk is slow: go on once it has written, or as the user says.
+     * `known` is the unsaved count main went on with: one the page's answer
+     * stood for, or one the user chose to leave behind.
+     */
+    const goOnce = async (known = deps.unsaved()): Promise<void> => {
       if (!current()) {
         return;
       }
@@ -83,10 +103,30 @@ export const createLeaveGate = (deps: LeaveGateDeps): LeaveGate => {
         return;
       }
 
+      let gone = false;
+
+      // The page still takes typing, and may crash, while the disk writes.
+      orphaned = () => {
+        gone = true;
+      };
+
       const written = await deps.written();
 
       // A newer close or quit took over while the disk wrote: it decides now.
       if (mine !== turn) {
+        return;
+      }
+
+      orphaned = null;
+
+      // Typing reported meanwhile makes the page's answer out of date: a fresh turn asks the page again, or natively at once when it is gone (SPEC round 8).
+      if (deps.unsaved() > known) {
+        void leave(leaving, then);
+
+        if (gone) {
+          pageGone();
+        }
+
         return;
       }
 
@@ -108,7 +148,7 @@ export const createLeaveGate = (deps: LeaveGateDeps): LeaveGate => {
         then();
       } else if (choice === "wait") {
         settled = false;
-        await goOnce();
+        await goOnce(known);
       }
     };
 
@@ -130,9 +170,19 @@ export const createLeaveGate = (deps: LeaveGateDeps): LeaveGate => {
         return;
       }
 
+      // Asked already: the page going away meanwhile changes nothing.
+      if (dialogOpen) {
+        return;
+      }
+
+      asks += 1;
+      clearDeadline();
       deps.surface();
+      dialogOpen = true;
 
       const choice = await deps.confirm(leaving, count);
+
+      dialogOpen = false;
 
       if (!current()) {
         return;
@@ -148,9 +198,12 @@ export const createLeaveGate = (deps: LeaveGateDeps): LeaveGate => {
     };
 
     const askPage = async (): Promise<void> => {
+      asks += 1;
+
+      const ask = asks;
       const answer = await deps.ask(leaving);
 
-      if (!current()) {
+      if (!current() || ask !== asks) {
         return;
       }
 
@@ -174,11 +227,19 @@ export const createLeaveGate = (deps: LeaveGateDeps): LeaveGate => {
     };
 
     held = null;
+
+    orphaned = () => {
+      if (current()) {
+        void unanswered(askPage);
+      }
+    };
+
     await askPage();
   };
 
   return {
     leave,
+    pageGone,
     resume: () => {
       held?.();
     },

@@ -18,6 +18,8 @@ declare global {
   var __failSaves: boolean | undefined;
   /** While true, saves wait for `__releaseSaves`, as a slow disk would. */
   var __holdSaves: boolean | undefined;
+  /** While true, a save is written and then its answer waits for `__releaseSaves`, as an acknowledgement main is slow to send would. */
+  var __holdAnswers: boolean | undefined;
   /** Answers every held save, each failing or not as `__failSaves` says then. */
   var __releaseSaves: (() => void) | undefined;
   /** Answers only the oldest held save, so a check can look between two saves landing. */
@@ -94,6 +96,22 @@ export const installBridge = (input: BridgeInput): void => {
   let held: (() => void)[] = [];
   /** Reads waiting for `__releaseGets`. */
   let heldGets: (() => void)[] = [];
+
+  interface Tag {
+    readonly epoch: string;
+    readonly seq: number;
+  }
+
+  /** As main's store (SPEC round 8): the epochs Discard ended, and per capture the last save that landed with what it replaced. */
+  const ended = new Set<string>();
+  const titles = new Map<string, string>();
+
+  const undo = new Map<
+    string,
+    { readonly tag: Tag; readonly previous: object }
+  >();
+
+  const tagKey = (tag: Tag): string => `${tag.epoch}#${String(tag.seq)}`;
 
   globalThis.__releaseGets = () => {
     const waiting = heldGets;
@@ -244,6 +262,26 @@ export const installBridge = (input: BridgeInput): void => {
     library: {
       captureSoon: nothing,
       copyDetails: gated("copyDetails"),
+      // As main: the save on its way is dropped, or what it replaced is renamed back; nothing is written.
+      discard: async ({ id, tag }: { id: string; tag: Tag }) => {
+        record(`discard:${id}:${titles.get(tagKey(tag)) ?? "?"}`);
+        ended.add(tag.epoch);
+
+        const slot = undo.get(id);
+        const found = find(id);
+
+        if (slot !== undefined && tagKey(slot.tag) === tagKey(tag)) {
+          undo.delete(id);
+
+          if (found !== undefined) {
+            Object.assign(found, slot.previous);
+          }
+
+          emit("changed", null);
+        }
+
+        return await respond(OK);
+      },
       copyImage: gated("copyImage"),
       copyText: gated("copyText"),
       floatOnTop: (id: string) => {
@@ -307,13 +345,16 @@ export const installBridge = (input: BridgeInput): void => {
       update: async ({
         fields,
         id,
+        tag,
       }: {
         fields: { readonly title?: string };
         id: string;
+        tag: Tag;
       }) => {
         const found = find(id);
 
         record(`update:${id}:${fields.title ?? ""}`);
+        titles.set(tagKey(tag), fields.title ?? "");
 
         if (globalThis.__holdSaves === true) {
           // oxlint-disable-next-line promise/avoid-new -- __releaseSaves answers the held save through this callback.
@@ -322,16 +363,34 @@ export const installBridge = (input: BridgeInput): void => {
           });
         }
 
+        // Discarded while held: dropped before it replaces anything.
+        if (ended.has(tag.epoch)) {
+          return await respond({
+            message: "The changes were discarded.",
+            ok: false,
+          });
+        }
+
         if (globalThis.__failSaves === true) {
           return await respond({ message: "The disk is full.", ok: false });
         }
 
         if (found !== undefined) {
+          const previous = structuredClone({ ...found });
+
+          undo.set(id, { previous, tag });
           Object.assign(found, structuredClone(fields));
         }
 
         // As main: the store tells every page once the capture is written.
         emit("changed", null);
+
+        if (globalThis.__holdAnswers === true) {
+          // oxlint-disable-next-line promise/avoid-new -- __releaseSaves answers the held save through this callback.
+          await new Promise<void>((resolve) => {
+            held.push(resolve);
+          });
+        }
 
         return await respond(OK);
       },

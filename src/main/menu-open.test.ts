@@ -81,7 +81,7 @@ describe(trackMenuOpen, () => {
     expect(menu.holdsKeys()).toBeTruthy();
   });
 
-  it("clears when the page navigates or its renderer goes away", () => {
+  it("clears when the page starts reloading, navigates or its renderer goes away", () => {
     const { contents, menu } = library();
 
     const after = (event: string): boolean => {
@@ -92,8 +92,10 @@ describe(trackMenuOpen, () => {
     };
 
     expect(
-      ["did-navigate", "render-process-gone"].map((event) => after(event))
-    ).toStrictEqual([false, false]);
+      ["did-start-loading", "did-navigate", "render-process-gone"].map(
+        (event) => after(event)
+      )
+    ).toStrictEqual([false, false, false]);
   });
 
   it("doesn't touch a destroyed page", () => {
