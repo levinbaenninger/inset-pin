@@ -1,7 +1,7 @@
 import { canSaveTitle } from "@shared/capture-record";
 import type { EditableFields } from "@shared/capture-record";
 import { SAVE_TOO_SLOW } from "@shared/contracts";
-import type { ActionResult } from "@shared/contracts";
+import type { ActionResult, SaveTag } from "@shared/contracts";
 
 /**
  * What main stores: a trimmed title, steps and pin labels, no blank steps, no
@@ -58,13 +58,25 @@ export interface InFlight {
   readonly payload: EditableFields;
 }
 
+/** Why a draft's changes aren't where the user left them: a save failed, or Discard changes couldn't put back what is saved. */
+export interface DraftError {
+  readonly message: string;
+  readonly during: "save" | "discard";
+}
+
 interface DraftBase {
   /** Counts this draft's edits; a higher rev is a later edit. */
   readonly rev: number;
   /** The fields as typed, which the capture shows while the draft lasts. */
   readonly values: EditableFields;
-  /** What the disk holds, as far as the library knows, in stored form. */
+  /** What the disk holds, as far as the library knows, in stored form; after a Discard main couldn't finish, what it still puts back. */
   readonly confirmed: EditableFields;
+  /**
+   * A save main wrote that Discard changes couldn't take back. The next
+   * Discard asks main again; a save of this draft keeps what it writes
+   * instead, even when that is what `confirmed` holds.
+   */
+  readonly undo: SaveTag | null;
 }
 
 /**
@@ -74,11 +86,15 @@ interface DraftBase {
  *
  * - dirty: edited since the last save was sent; an older save may still be on its way.
  * - saving: the latest rev is on its way to the disk.
- * - failed: the latest rev's save failed; only Retry sends it again, and
- *   Discard changes or a new edit end it.
+ * - failed: the latest rev's save failed, or Discard changes couldn't put
+ *   back what is saved. Only Retry (Keep changes) sends it again. A failed
+ *   save ends with Discard changes or a new edit; a failed Discard only with
+ *   Keep changes or Discard again, and typing just updates it.
  *
  * Discard changes ends the draft at once. Main drops or undoes the save on
  * its way (SPEC round 8), and that save's answer never reaches this draft.
+ * If main can't put back what is saved, the draft comes back failed, with
+ * `undo` naming the save main still holds (SPEC round 9).
  *
  * `error` stays from a failed save until a save succeeds, so the failure
  * stays on screen while the user types on or retries.
@@ -87,14 +103,14 @@ export type Draft =
   | (DraftBase & {
       readonly kind: "dirty";
       readonly inFlight: InFlight | null;
-      readonly error: string | null;
+      readonly error: DraftError | null;
     })
   | (DraftBase & {
       readonly kind: "saving";
       readonly inFlight: InFlight;
-      readonly error: string | null;
+      readonly error: DraftError | null;
     })
-  | (DraftBase & { readonly kind: "failed"; readonly error: string });
+  | (DraftBase & { readonly kind: "failed"; readonly error: DraftError });
 
 export type DraftEvent =
   /** The user changed a field. `stored` is the capture as loaded, which a new draft starts from. */
@@ -105,7 +121,7 @@ export type DraftEvent =
     }
   /** Save the latest rev now: after a pause in typing, on leaving, or for a copy. A failed draft waits for Retry. */
   | { readonly kind: "send" }
-  /** The user asked to save again: Retry beside the error, in the prompt, or on a refused copy. */
+  /** The user asked to save again: Retry or Keep changes beside the error, in the prompt, or on a refused copy. */
   | { readonly kind: "retry" }
   /** Main answered the save of this rev. */
   | {
@@ -114,6 +130,13 @@ export type DraftEvent =
       readonly result: ActionResult;
     }
   | { readonly kind: "discard" }
+  /** Main couldn't put back what was saved before `draft` was discarded, and still holds save `tag`. */
+  | {
+      readonly kind: "undiscarded";
+      readonly draft: Draft;
+      readonly tag: SaveTag;
+      readonly message: string;
+    }
   /** A Retry's wait ran out while its save is still on its way: the capture says so, and Retry may wait again. */
   | { readonly kind: "overdue" }
   /** The capture was deleted; a save on its way has nothing left to write into. */
@@ -133,8 +156,14 @@ const edit = (
           inFlight: null,
           kind: "dirty",
           rev: 1,
+          undo: null,
           values,
         };
+  }
+
+  // Typing doesn't answer a Discard main couldn't finish: only Keep changes or Discard again does.
+  if (draft.kind === "failed" && draft.error.during === "discard") {
+    return { ...draft, rev: draft.rev + 1, values };
   }
 
   return {
@@ -143,6 +172,7 @@ const edit = (
     inFlight: draft.kind === "failed" ? null : draft.inFlight,
     kind: "dirty",
     rev: draft.rev + 1,
+    undo: draft.undo,
     values,
   };
 };
@@ -164,7 +194,8 @@ const send = (draft: Draft | null, retry: boolean): Draft | null => {
 
   const payload = savable(draft.values, draft.confirmed);
 
-  if (equal(payload, draft.confirmed)) {
+  // While main still holds a discarded save, even the saved fields must reach it, so it keeps them.
+  if (draft.undo === null && equal(payload, draft.confirmed)) {
     return null;
   }
 
@@ -174,6 +205,7 @@ const send = (draft: Draft | null, retry: boolean): Draft | null => {
     inFlight: { payload, rev: draft.rev },
     kind: "saving",
     rev: draft.rev,
+    undo: draft.undo,
     values: draft.values,
   };
 };
@@ -199,21 +231,43 @@ const answered = (
           confirmed: draft.inFlight.payload,
           error: null,
           inFlight: null,
+          undo: null,
         };
   }
 
+  const error: DraftError = { during: "save", message: result.message };
+
   if (draft.kind === "dirty") {
-    return { ...draft, error: result.message, inFlight: null };
+    return { ...draft, error, inFlight: null };
   }
 
   return {
     confirmed: draft.confirmed,
-    error: result.message,
+    error,
     kind: "failed",
     rev: draft.rev,
+    undo: draft.undo,
     values: draft.values,
   };
 };
+
+/** The discarded changes come back as not discarded, unless newer ones were typed since: their save keeps them instead. */
+const undiscarded = (
+  draft: Draft | null,
+  discarded: Draft,
+  tag: SaveTag,
+  message: string
+): Draft =>
+  draft === null
+    ? {
+        confirmed: discarded.confirmed,
+        error: { during: "discard", message },
+        kind: "failed",
+        rev: discarded.rev,
+        undo: tag,
+        values: discarded.values,
+      }
+    : { ...draft, undo: tag };
 
 /** The draft lifecycle, the same for every capture; null is clean. */
 export const reduceDraft = (
@@ -241,9 +295,13 @@ export const reduceDraft = (
       return null;
     }
 
+    case "undiscarded": {
+      return undiscarded(draft, event.draft, event.tag, event.message);
+    }
+
     case "overdue": {
       return draft !== null && isWriting(draft)
-        ? { ...draft, error: SAVE_TOO_SLOW }
+        ? { ...draft, error: { during: "save", message: SAVE_TOO_SLOW } }
         : draft;
     }
 

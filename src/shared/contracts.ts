@@ -194,11 +194,16 @@ const FailureSchema = z.object({
  */
 export type SavedEdits =
   | { readonly ok: true; readonly fields: EditableFields | null }
-  | { readonly ok: false; readonly message: string };
+  | {
+      readonly ok: false;
+      readonly message: string;
+      /** What failed: saving the changes (the default), or Discard changes putting back what is saved. */
+      readonly during?: "save" | "discard";
+    };
 
 const SavedEditsSchema = z.union([
   z.object({ fields: EditableFieldsSchema.nullable(), ok: z.literal(true) }),
-  FailureSchema,
+  FailureSchema.extend({ during: z.enum(["save", "discard"]).optional() }),
 ]);
 
 /** What main is about to do once the library's typing is saved: close the window, quit, or quit to install an update. */

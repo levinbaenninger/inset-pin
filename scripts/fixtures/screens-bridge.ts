@@ -20,6 +20,8 @@ declare global {
   var __holdSaves: boolean | undefined;
   /** While true, a save is written and then its answer waits for `__releaseSaves`, as an acknowledgement main is slow to send would. */
   var __holdAnswers: boolean | undefined;
+  /** While true, Discard can't put back what a save replaced, as a lock on capture.json.prev would. */
+  var __failDiscards: boolean | undefined;
   /** Answers every held save, each failing or not as `__failSaves` says then. */
   var __releaseSaves: (() => void) | undefined;
   /** Answers only the oldest held save, so a check can look between two saves landing. */
@@ -83,7 +85,11 @@ type Result =
 /** The page's answer to a flush: the fields a copy carries, or null when nothing is typed. */
 type Saved =
   | { readonly ok: true; readonly fields: { readonly title: string } | null }
-  | { readonly ok: false; readonly message: string };
+  | {
+      readonly ok: false;
+      readonly message: string;
+      readonly during?: "save" | "discard";
+    };
 
 export const installBridge = (input: BridgeInput): void => {
   const OK = { ok: true } as const;
@@ -102,13 +108,13 @@ export const installBridge = (input: BridgeInput): void => {
     readonly seq: number;
   }
 
-  /** As main's store (SPEC round 8): the epochs Discard ended, and per capture the last save that landed with what it replaced. */
+  /** As main's store (SPEC round 8): the epochs Discard ended, and per capture the last save that landed with what it replaced, owed once a Discard of it failed. */
   const ended = new Set<string>();
   const titles = new Map<string, string>();
 
   const undo = new Map<
     string,
-    { readonly tag: Tag; readonly previous: object }
+    { readonly tag: Tag; readonly previous: object; readonly owed: boolean }
   >();
 
   const tagKey = (tag: Tag): string => `${tag.epoch}#${String(tag.seq)}`;
@@ -188,8 +194,11 @@ export const installBridge = (input: BridgeInput): void => {
       return await respond(OK);
     };
 
-  const refusal = (message: string) => ({
-    message: `Couldn’t save your changes, so nothing was copied. ${message}`,
+  const refusal = (message: string, during = "save") => ({
+    message:
+      during === "discard"
+        ? `Couldn’t discard your changes, so nothing was copied. ${message}`
+        : `Couldn’t save your changes, so nothing was copied. ${message}`,
     ok: false as const,
     retry: true,
   });
@@ -227,7 +236,7 @@ export const installBridge = (input: BridgeInput): void => {
     const saved = await askPage({ id, retry: false });
 
     if (!saved.ok) {
-      return refusal(saved.message);
+      return refusal(saved.message, saved.during);
     }
 
     record(`${name}:${id}`);
@@ -262,7 +271,7 @@ export const installBridge = (input: BridgeInput): void => {
     library: {
       captureSoon: nothing,
       copyDetails: gated("copyDetails"),
-      // As main: the save on its way is dropped, or what it replaced is renamed back; nothing is written.
+      // As main: the save on its way is dropped, or what it replaced is renamed back; nothing is written. One that can't be stays owed.
       discard: async ({ id, tag }: { id: string; tag: Tag }) => {
         record(`discard:${id}:${titles.get(tagKey(tag)) ?? "?"}`);
         ended.add(tag.epoch);
@@ -270,7 +279,19 @@ export const installBridge = (input: BridgeInput): void => {
         const slot = undo.get(id);
         const found = find(id);
 
-        if (slot !== undefined && tagKey(slot.tag) === tagKey(tag)) {
+        if (
+          slot !== undefined &&
+          (slot.owed || tagKey(slot.tag) === tagKey(tag))
+        ) {
+          if (globalThis.__failDiscards === true) {
+            undo.set(id, { ...slot, owed: true });
+
+            return await respond({
+              message: "Inset can’t write to its data folder.",
+              ok: false,
+            });
+          }
+
           undo.delete(id);
 
           if (found !== undefined) {
@@ -376,9 +397,13 @@ export const installBridge = (input: BridgeInput): void => {
         }
 
         if (found !== undefined) {
-          const previous = structuredClone({ ...found });
+          const owed = undo.get(id);
 
-          undo.set(id, { previous, tag });
+          // As main: while a Discard is owed, what it puts back stays the same, and this save keeps what it writes.
+          const previous =
+            owed?.owed === true ? owed.previous : structuredClone({ ...found });
+
+          undo.set(id, { owed: false, previous, tag });
           Object.assign(found, structuredClone(fields));
         }
 

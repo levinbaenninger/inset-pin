@@ -447,6 +447,44 @@ const failTypingInTitle = async (page: Page): Promise<void> => {
   await page.getByTestId("save-failure").waitFor();
 };
 
+/**
+ * A save main wrote but hasn't confirmed, after one that failed, then a
+ * Discard of it that can't put the saved version back, as a lock on
+ * capture.json.prev would. The held answer is let go, and the page ignores
+ * it as it does any answer to a discarded save.
+ */
+const failDiscard = async (page: Page): Promise<void> => {
+  await failTypingInTitle(page);
+  await page.evaluate(() => {
+    globalThis.__failSaves = false;
+    globalThis.__holdAnswers = true;
+  });
+  await typeInTitle(page, " more");
+  await page.getByTestId("more").focus();
+  await page.waitForFunction(() =>
+    globalThis
+      .__storedTitle?.(location.hash.split("/").at(-1) ?? "")
+      ?.endsWith(" (typed) more")
+  );
+  await page.evaluate(() => {
+    globalThis.__failDiscards = true;
+  });
+  await page
+    .getByTestId("save-failure")
+    .getByRole("button", { name: "Discard changes" })
+    .click();
+  await page.waitForFunction(
+    () =>
+      document
+        .querySelector("[data-testid='save-failure']")
+        ?.textContent?.startsWith("Couldn’t discard") === true
+  );
+  await page.evaluate(() => {
+    globalThis.__holdAnswers = false;
+    globalThis.__releaseSaves?.();
+  });
+};
+
 /** Asks the page as main does before the window closes or the app quits, and hands back its answer. */
 const askToLeave = async (page: Page, leaving: "close" | "quit" | "restart") =>
   await page.evaluate(
@@ -866,6 +904,29 @@ const makeScenes = (
       data: library(),
       hash: `/captures/${uuid(1)}`,
       name: "library-23-save-too-slow",
+      page: "library",
+      platforms: ["macos"],
+    },
+    {
+      // Round 9: a Discard main couldn't finish stays a failed draft with Keep changes and Discard again.
+      act: async (page) => {
+        await failDiscard(page);
+      },
+      data: library(),
+      hash: `/captures/${uuid(1)}`,
+      name: "library-24-discard-failed",
+      page: "library",
+      platforms: ["macos"],
+    },
+    {
+      act: async (page) => {
+        await failDiscard(page);
+        await askToLeave(page, "quit");
+        await page.getByTestId("leave-prompt").waitFor();
+      },
+      data: library(),
+      hash: `/captures/${uuid(1)}`,
+      name: "library-25-discard-failed-quit",
       page: "library",
       platforms: ["macos"],
     },
@@ -3055,6 +3116,212 @@ const checkDrafts = async (
             atOnce: { failure: null, title: aTitle },
             disk: `${aTitle}!`,
             shown: { failure: null, title: `${aTitle}!` },
+          }
+        );
+      } finally {
+        await s.context.close();
+      }
+    }
+  );
+
+  // Round 9: a Discard main couldn't finish stays failed until Discard again or Keep changes settles it.
+  await attempt(
+    "a Discard main couldn't finish, then Discard again",
+    async () => {
+      const s = await session();
+      const { page } = s;
+
+      try {
+        await failDiscard(page);
+        await s.take();
+
+        const failed = await s.shown();
+        const unsaved = await s.unsavedRow(a);
+
+        await page.keyboard.press(`${m}+Alt+c`);
+        await page.getByTestId("notice-action").waitFor();
+
+        const copy = await s.outcome();
+
+        await page.evaluate(() => {
+          globalThis.__failDiscards = false;
+        });
+        await page
+          .getByTestId("save-failure")
+          .getByRole("button", { name: "Discard again" })
+          .click();
+        await page.waitForTimeout(300);
+
+        const { saves } = await s.take();
+
+        expectSame(
+          "it shows the changes failed with Keep changes and Discard again, refuses a copy, and Discard again puts back what was saved",
+          {
+            after: await s.shown(),
+            copy: { clipboard: copy.clipboard, notice: copy.notice },
+            disk: await page.evaluate(
+              (id) => globalThis.__storedTitle?.(id) ?? null,
+              a
+            ),
+            failed,
+            saves,
+            unsaved,
+            unsavedAfter: await s.unsavedRow(a),
+          },
+          {
+            after: { failure: null, title: aTitle },
+            copy: {
+              clipboard: [],
+              notice: {
+                failed: true,
+                text: "Couldn’t discard your changes, so nothing was copied. Inset can’t write to its data folder.Keep changes",
+              },
+            },
+            disk: aTitle,
+            failed: {
+              failure:
+                "Couldn’t discard your changes. Inset can’t write to its data folder.Keep changesDiscard again",
+              title: `${aTitle} (typed) more`,
+            },
+            saves: [`discard:${a}:${aTitle} (typed) more`],
+            unsaved: true,
+            unsavedAfter: false,
+          }
+        );
+      } finally {
+        await s.context.close();
+      }
+    }
+  );
+
+  await attempt(
+    "Keep changes after a Discard main couldn't finish",
+    async () => {
+      const s = await session();
+      const { page } = s;
+
+      try {
+        await failDiscard(page);
+        await s.take();
+        await page
+          .getByTestId("save-failure")
+          .getByRole("button", { name: "Keep changes" })
+          .click();
+        await page.waitForTimeout(300);
+
+        const { saves } = await s.take();
+
+        expectSame(
+          "Keep changes keeps the changes the Discard couldn't take back, and the capture is saved",
+          {
+            disk: await page.evaluate(
+              (id) => globalThis.__storedTitle?.(id) ?? null,
+              a
+            ),
+            saves,
+            shown: await s.shown(),
+            unsaved: await s.unsavedRow(a),
+          },
+          {
+            disk: `${aTitle} (typed) more`,
+            saves: [`update:${a}:${aTitle} (typed) more`],
+            shown: { failure: null, title: `${aTitle} (typed) more` },
+            unsaved: false,
+          }
+        );
+      } finally {
+        await s.context.close();
+      }
+    }
+  );
+
+  // Round 9 red team: typing after a failed Discard decides nothing; the quit prompt asks, Discard again holds it until main puts back what is saved, and Return keeps the changes.
+  await attempt(
+    "typing after a failed Discard, then the quit prompt",
+    async () => {
+      const s = await session();
+      const { page } = s;
+
+      try {
+        await failDiscard(page);
+        await s.take();
+        await typeInTitle(page, " later");
+        await page.waitForTimeout(900);
+
+        const typedSaves = await s.take();
+        const typed = { saves: typedSaves.saves, shown: await s.shown() };
+        const answered = await askToLeave(page, "quit");
+
+        await page.getByTestId("leave-prompt").waitFor();
+        await page.waitForTimeout(150);
+
+        const asked = await leavePrompt(page);
+
+        await page
+          .getByTestId("leave-prompt")
+          .getByRole("button", { name: "Discard again" })
+          .click();
+        await page.waitForTimeout(300);
+
+        const discardResumed = await resumes(page);
+        const discardSaves = await s.take();
+
+        const discardFailed = {
+          ...(await leavePrompt(page)),
+          resumed: discardResumed,
+          saves: discardSaves.saves,
+        };
+
+        await page.keyboard.press("Enter");
+        await page.getByTestId("leave-prompt").waitFor({ state: "detached" });
+        await page.waitForTimeout(150);
+
+        const keptResumed = await resumes(page);
+        const keptSaves = await s.take();
+
+        expectSame(
+          "typing saves nothing and keeps the failed Discard; the prompt offers Discard again and Keep changes with Keep changes focused; a failed Discard again keeps it held; Return on Discard again keeps the changes and goes on",
+          {
+            answered,
+            asked,
+            discardFailed,
+            kept: {
+              disk: await page.evaluate(
+                (id) => globalThis.__storedTitle?.(id) ?? null,
+                a
+              ),
+              resumed: keptResumed,
+              saves: keptSaves.saves,
+            },
+            typed,
+          },
+          {
+            answered: HELD,
+            asked: {
+              focus: "Keep changes",
+              prompt:
+                "1 change couldn’t be discardedInset can’t write to its data folder.CancelDiscard againKeep changes",
+            },
+            discardFailed: {
+              focus: "Discard again",
+              prompt:
+                "1 change couldn’t be discardedInset can’t write to its data folder.CancelDiscard againKeep changes",
+              resumed: [],
+              saves: [`discard:${a}:${aTitle} (typed) more`],
+            },
+            kept: {
+              disk: `${aTitle} (typed) more later`,
+              resumed: ["resumeLeaving"],
+              saves: [`update:${a}:${aTitle} (typed) more later`],
+            },
+            typed: {
+              saves: [],
+              shown: {
+                failure:
+                  "Couldn’t discard your changes. Inset can’t write to its data folder.Keep changesDiscard again",
+                title: `${aTitle} (typed) more later`,
+              },
+            },
           }
         );
       } finally {

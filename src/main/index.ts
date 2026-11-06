@@ -273,7 +273,7 @@ const start = async (): Promise<void> => {
 
       const shown = draft.view();
 
-      // A capture discarded while its save was on its way is removed after it, so it isn't copied either.
+      // A capture discarded while its save was on its way is withdrawn, so it isn’t copied either.
       if (
         result.ok &&
         settings.current().copyAfterSave &&
@@ -292,8 +292,8 @@ const start = async (): Promise<void> => {
     quit: () => {
       resumeQuit();
     },
-    remove: async (id) => {
-      await store.remove(id);
+    withdraw: async (id) => {
+      await store.withdraw(id);
     },
     surface,
   });

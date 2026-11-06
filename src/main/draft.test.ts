@@ -449,8 +449,11 @@ describe(step, () => {
       // Save is the save on its way: the question stays, and its landing quits.
       { effects: [], state: asking },
       { effects: [{ type: "focus" }], state: savingWhile("none") },
-      // The save may still land, so the capture it writes is removed after it.
-      { effects: [{ id: ID, type: "remove" }, { type: "quit" }], state: IDLE },
+      // The save may still land, so the capture it writes is withdrawn.
+      {
+        effects: [{ id: ID, type: "withdraw" }, { type: "quit" }],
+        state: IDLE,
+      },
     ]);
     expect(
       step(savingWhile("none"), { id: ID, type: "published" })
@@ -601,8 +604,8 @@ const createFakes = (overrides: Partial<DraftDeps> = {}) => {
     quit: () => {
       calls.push("quit");
     },
-    remove: async (id) => {
-      calls.push(`remove ${id}`);
+    withdraw: async (id) => {
+      calls.push(`withdraw ${id}`);
       await Promise.resolve();
     },
     surface: {
@@ -815,8 +818,8 @@ describe("draft and store together", () => {
     const { calls, controller } = createFakes({
       capture: capturing,
       publish: store.publish,
-      remove: async (id) => {
-        await store.remove(id);
+      withdraw: async (id) => {
+        await store.withdraw(id);
       },
     });
 
@@ -882,7 +885,7 @@ describe("draft and store together", () => {
       });
     });
 
-    it("quits at once on Discard, and the save landing later leaves no capture behind", async () => {
+    it("quits at once on Discard, the disk wait before the quit doesn't wait for the held save, and its landing later leaves no capture behind", async () => {
       const { controller, land, quits, shown, store } = await quitWhileSaving();
 
       await vi.advanceTimersByTimeAsync(3000);
@@ -890,16 +893,31 @@ describe("draft and store together", () => {
 
       const atOnce = { quits: quits(), view: shown() };
 
+      const disk = { written: false };
+
+      void store.settled().then(() => {
+        disk.written = true;
+
+        return disk.written;
+      });
+      await vi.waitFor(() => {
+        expect(disk.written).toBeTruthy();
+      });
+
+      const writtenWhileHeld = disk.written;
+
       await land();
 
       expect({
         atOnce,
         quits: quits(),
         saved: store.list().map((entry) => entry.id),
+        writtenWhileHeld,
       }).toStrictEqual({
         atOnce: { quits: 1, view: { kind: "none" } },
         quits: 1,
         saved: [],
+        writtenWhileHeld: true,
       });
     });
 

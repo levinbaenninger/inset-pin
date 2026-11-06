@@ -1,5 +1,5 @@
 import type { Leaving } from "@shared/contracts";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 
 import {
   AlertDialog,
@@ -12,8 +12,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 
-import { drafts, leaveHold, useLeavePrompt } from "./library-drafts";
-import { useNotice } from "./notice";
+import type { LeavePrompt as Prompt } from "./leave-hold";
+import { leaveHold, useLeavePrompt } from "./library-drafts";
 
 const DISCARD: Record<Leaving, string> = {
   close: "Discard and close",
@@ -21,33 +21,31 @@ const DISCARD: Record<Leaving, string> = {
   restart: "Discard and quit",
 };
 
-const titleOf = (count: number): string =>
-  count === 1
-    ? "1 change couldn’t be saved"
-    : `${String(count)} changes couldn’t be saved`;
+const buttonsOf = ({
+  leaving,
+  undiscarded,
+}: Prompt): { readonly retry: string; readonly discard: string } =>
+  undiscarded
+    ? { discard: "Discard again", retry: "Keep changes" }
+    : { discard: DISCARD[leaving], retry: "Retry" };
+
+const titleOf = ({ count, undiscarded }: Prompt): string => {
+  const failed = undiscarded ? "discarded" : "saved";
+
+  return count === 1
+    ? `1 change couldn’t be ${failed}`
+    : `${String(count)} changes couldn’t be ${failed}`;
+};
 
 /**
  * Asked in the library before it closes, or before the app quits, while
- * changes couldn't be saved. Return retries whichever button has the focus,
- * Escape cancels, and Space presses the focused button, so Discard stays a
- * deliberate choice.
+ * changes couldn't be saved, or couldn't be discarded (Keep changes and
+ * Discard again, SPEC round 9). Return retries (keeps) whichever button has
+ * the focus, Escape cancels, and Space presses the focused button, so
+ * Discard stays a deliberate choice.
  */
 export const LeavePrompt = () => {
   const prompt = useLeavePrompt();
-  const say = useNotice();
-
-  // Discard changes renames back what a save on its way replaced; when even that fails, the capture shows what is on disk, and this says why.
-  useEffect(
-    () =>
-      drafts.onUndoFailed((message) => {
-        say({
-          failed: true,
-          text: `Couldn’t undo the save, so it stays as saved. ${message}`,
-        });
-      }),
-    [say]
-  );
-
   const retryRef = useRef<HTMLButtonElement>(null);
   const returnRef = useRef<HTMLElement | null>(null);
   // The last prompt stays on screen while the dialog fades out after Cancel.
@@ -92,7 +90,7 @@ export const LeavePrompt = () => {
           }}
         >
           <AlertDialogHeader>
-            <AlertDialogTitle>{titleOf(shown.count)}</AlertDialogTitle>
+            <AlertDialogTitle>{titleOf(shown)}</AlertDialogTitle>
             <AlertDialogDescription>{shown.message}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -103,7 +101,7 @@ export const LeavePrompt = () => {
               }}
               variant="destructive"
             >
-              {DISCARD[shown.leaving]}
+              {buttonsOf(shown).discard}
             </Button>
             <Button
               data-default-action=""
@@ -112,7 +110,7 @@ export const LeavePrompt = () => {
               }}
               ref={retryRef}
             >
-              Retry
+              {buttonsOf(shown).retry}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>

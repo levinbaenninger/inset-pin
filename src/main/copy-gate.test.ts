@@ -268,11 +268,15 @@ describe(createCopyGate, () => {
 
     const copying = waiting(ID, "details");
 
-    await store.update(ID, {
-      ...fieldsOf(stored()),
-      due: DueDateSchema.parse("2026-11-09"),
-      title: "Renamed during the wait",
-    });
+    await store.update(
+      ID,
+      {
+        ...fieldsOf(stored()),
+        due: DueDateSchema.parse("2026-11-09"),
+        title: "Renamed during the wait",
+      },
+      { epoch: "other-page", seq: 1 }
+    );
     answer();
 
     await expect(copying).resolves.toStrictEqual({ ok: true });

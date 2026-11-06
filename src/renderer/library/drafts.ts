@@ -3,7 +3,12 @@ import { LEAVE_SAVE_WAIT_MS, SAVE_TOO_SLOW } from "@shared/contracts";
 import type { ActionResult, SavedEdits, SaveTag } from "@shared/contracts";
 
 import { reduceDraft, snapshotOf } from "./draft-lifecycle";
-import type { Draft, DraftEvent, InFlight } from "./draft-lifecycle";
+import type {
+  Draft,
+  DraftError,
+  DraftEvent,
+  InFlight,
+} from "./draft-lifecycle";
 
 export const SAVE_AFTER_MS = 600;
 
@@ -48,10 +53,12 @@ const DISCARDED: ActionResult = {
 /** Captures whose typing isn't on disk. */
 export interface Unsaved {
   readonly count: number;
-  /** The first error saving gave; null while no save has failed. */
+  /** The first error saving or discarding gave, in words; null while nothing has failed. */
   readonly error: string | null;
   /** Whether any of it is still being saved, rather than waiting for Retry. */
   readonly pending: boolean;
+  /** Whether all of it is changes main couldn't discard, so leaving asks about discarding rather than saving. */
+  readonly undiscarded: boolean;
 }
 
 /** How the wait before a close or a quit ended. */
@@ -82,9 +89,15 @@ const withinLimit = async (
 
 const nothing = (): void => undefined;
 
-/** What is left once no save is on its way: only failed drafts, which wait for Retry. */
-const quiet = (drafts: Iterable<Draft>): boolean =>
-  [...drafts].every((draft) => draft.kind === "failed");
+/** A Discard main couldn't finish waits for the user: saving it then would keep what they discarded. */
+const waitsForUser = (draft: Draft): boolean =>
+  draft.kind === "failed" && draft.error.during === "discard";
+
+/** A Discard again on its way to main: its answer, and the error the capture showed until then. */
+interface Undoing {
+  readonly answer: Promise<ActionResult>;
+  readonly error: DraftError | null;
+}
 
 /**
  * Every capture's unsaved edits, kept above the pages, so a draft outlives
@@ -114,7 +127,8 @@ export class DraftStore {
   readonly #epochs = new Map<CaptureId, string>();
   /** Per capture, the save on its way. */
   readonly #sending = new Map<CaptureId, SaveTag>();
-  readonly #undoFailures = new Set<(message: string) => void>();
+  /** Per capture, a Discard again on its way: the changes count as unsaved until main has put back what is saved. */
+  readonly #undoing = new Map<CaptureId, Undoing>();
 
   constructor(store: FieldStore) {
     this.#store = store;
@@ -206,16 +220,23 @@ export class DraftStore {
   /**
    * Discard changes: the capture shows what is saved again, at once. A save
    * already on its way belongs to the epoch this ends: main drops it, or
-   * renames back the file it replaced. Nothing is written to undo it.
+   * renames back the file it replaced. Nothing is written to undo it. When
+   * main can't put back what is saved, the changes come back failed, with
+   * Keep changes and Discard again, unless the window is closing or the app
+   * quitting: main's marker then finishes the Discard at the next start.
+   *
+   * Discard again, after a Discard main couldn't finish, counts as unsaved
+   * until main answers, closing or not, and its changes come back whenever
+   * it fails again: leaving never takes that for done.
    */
-  discard(id: CaptureId): void {
+  discard(id: CaptureId, { leaving = false } = {}): void {
     const draft = this.#drafts.get(id);
 
     if (draft === undefined) {
       return;
     }
 
-    const sending = this.#sending.get(id);
+    const held = this.#sending.get(id) ?? draft.undo;
 
     // What main puts back is what the draft last knew was saved; a reload may already show the discarded save.
     this.#saved.set(id, draft.confirmed);
@@ -224,23 +245,25 @@ export class DraftStore {
     this.#resolve(id, () => true, DISCARDED);
     this.#sending.delete(id);
     this.#epochs.delete(id);
-    this.#apply(id, { kind: "discard" });
 
-    if (sending !== undefined) {
-      void this.#undo(id, sending);
+    if (held === null) {
+      this.#apply(id, { kind: "discard" });
+
+      return;
     }
+
+    const answer = settle(
+      async () => await this.#store.discard({ id, tag: held })
+    );
+
+    // Counted before the draft goes, so the capture never reads as saved meanwhile.
+    if (draft.undo !== null) {
+      this.#undoing.set(id, { answer, error: draft.error });
+    }
+
+    this.#apply(id, { kind: "discard" });
+    void this.#undo(id, held, draft, answer, leaving);
   }
-
-  /** Called when main couldn't put back what a discarded save replaced; the capture then shows what is on disk. */
-  readonly onUndoFailed = (
-    listener: (message: string) => void
-  ): (() => void) => {
-    this.#undoFailures.add(listener);
-
-    return () => {
-      this.#undoFailures.delete(listener);
-    };
-  };
 
   /**
    * For a copy: takes what the capture shows now, saves it and waits for the
@@ -254,11 +277,15 @@ export class DraftStore {
     const draft = this.#drafts.get(id);
 
     if (draft === undefined) {
-      return { fields: null, ok: true };
+      return await this.#settleUndoing(id);
     }
 
     if (draft.error !== null) {
-      return { message: draft.error, ok: false };
+      return {
+        during: draft.error.during,
+        message: draft.error.message,
+        ok: false,
+      };
     }
 
     const snapshot = snapshotOf(draft);
@@ -278,9 +305,9 @@ export class DraftStore {
    * one too, and waits at most `withinMs` until no save is on its way.
    */
   async settleAll(withinMs: number): Promise<Settled> {
-    this.retryAll();
+    this.saveAll();
 
-    if (quiet(this.#drafts.values())) {
+    if (this.#quiet()) {
       return "settled";
     }
 
@@ -293,7 +320,7 @@ export class DraftStore {
         resolve("overdue");
       }, withinMs);
       stop = this.subscribe(() => {
-        if (quiet(this.#drafts.values())) {
+        if (this.#quiet()) {
           resolve("settled");
         }
       });
@@ -308,27 +335,43 @@ export class DraftStore {
   /** What closing or quitting now would lose: how many captures, and why; null when everything is saved. */
   readonly unsaved = (): Unsaved | null => {
     const left = [...this.#drafts.values()];
+    const captures = new Set([...this.#drafts.keys(), ...this.#undoing.keys()]);
+    const count = captures.size;
 
-    return left.length === 0
+    const error = [...left, ...this.#undoing.values()].find(
+      (draft) => draft.error !== null
+    )?.error;
+
+    return count === 0
       ? null
       : {
-          count: left.length,
-          error: left.find((draft) => draft.error !== null)?.error ?? null,
-          pending: !quiet(left),
+          count,
+          error: error?.message ?? null,
+          pending: !this.#quiet(),
+          undiscarded: left.every(waitsForUser),
         };
   };
 
-  /** Retry for every capture that holds changes. */
+  /** Retry for every capture that holds changes: the user asked, so a Discard main couldn't finish is kept too (Keep changes). */
   retryAll(): void {
     for (const id of this.#drafts.keys()) {
       this.#send(id, "retry");
     }
   }
 
-  /** Discard changes in every capture. */
+  /** Before a close or a quit: saves every capture's changes, a failed save's too, but leaves a Discard main couldn't finish to the prompt. */
+  saveAll(): void {
+    for (const [id, draft] of this.#drafts) {
+      if (!waitsForUser(draft)) {
+        this.#send(id, "retry");
+      }
+    }
+  }
+
+  /** Discard changes in every capture, as the window closes or the app quits. */
   discardAll(): void {
     for (const id of this.#drafts.keys()) {
-      this.discard(id);
+      this.discard(id, { leaving: true });
     }
   }
 
@@ -357,26 +400,66 @@ export class DraftStore {
     return epoch;
   }
 
-  async #undo(id: CaptureId, tag: SaveTag): Promise<void> {
-    const result = await settle(
-      async () => await this.#store.discard({ id, tag })
+  /** What is left once nothing is on its way: only failed drafts, which wait for the user. */
+  #quiet(): boolean {
+    return (
+      this.#undoing.size === 0 &&
+      [...this.#drafts.values()].every((draft) => draft.kind === "failed")
     );
+  }
 
-    if (result.ok) {
+  /** A copy of a capture whose Discard again is on its way waits for it: it copies what is saved, or is refused once the changes are back. */
+  async #settleUndoing(id: CaptureId): Promise<SavedEdits> {
+    const undoing = this.#undoing.get(id);
+
+    if (undoing === undefined) {
+      return { fields: null, ok: true };
+    }
+
+    await undoing.answer;
+
+    const draft = this.#drafts.get(id);
+
+    if (draft === undefined) {
+      return { fields: this.#saved.get(id) ?? null, ok: true };
+    }
+
+    return await this.settle(id);
+  }
+
+  async #undo(
+    id: CaptureId,
+    tag: SaveTag,
+    discarded: Draft,
+    answer: Promise<ActionResult>,
+    leaving: boolean
+  ): Promise<void> {
+    const result = await answer;
+    const counted = this.#undoing.get(id)?.answer === answer;
+
+    if (counted) {
+      this.#undoing.delete(id);
+    }
+
+    if (result.ok || (leaving && discarded.undo === null)) {
+      if (counted) {
+        this.#changed();
+      }
+
       return;
     }
 
-    // The discarded save stays on disk, so the capture shows what main holds rather than a baseline the disk lacks.
-    this.#saved.delete(id);
-    this.#discards.set(id, this.discards(id) + 1);
-
-    for (const listener of this.#listeners) {
-      listener();
+    // The discarded save stays on disk: its changes show again, failed, until Keep changes keeps them or Discard again gets them back.
+    if (!this.#drafts.has(id)) {
+      this.#discards.set(id, this.discards(id) + 1);
     }
 
-    for (const listener of this.#undoFailures) {
-      listener(result.message);
-    }
+    this.#apply(id, {
+      draft: discarded,
+      kind: "undiscarded",
+      message: result.message,
+      tag,
+    });
   }
 
   #send(id: CaptureId, kind: "send" | "retry"): void {
@@ -482,6 +565,10 @@ export class DraftStore {
       this.#drafts.set(id, after);
     }
 
+    this.#changed();
+  }
+
+  #changed(): void {
     for (const listener of this.#listeners) {
       listener();
     }

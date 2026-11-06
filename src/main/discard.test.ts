@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -9,7 +9,8 @@ import type { ActionResult } from "@shared/contracts";
 import { DueDateSchema } from "@shared/due";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { DraftStore } from "../renderer/library/drafts";
+import { DraftStore, SAVE_AFTER_MS } from "../renderer/library/drafts";
+import { createLeaveHold } from "../renderer/library/leave-hold";
 import { nodeStoreFs, openCaptureStore } from "./store";
 import type { CaptureStore, StoreResult } from "./store";
 
@@ -56,6 +57,12 @@ interface Disk {
   full: boolean;
   /** Renames into capture.json.prev fail, as a backup a Windows lock holds would. */
   backupLocked: boolean;
+  /** Renaming capture.json.prev back into place fails, as a lock on it would. */
+  restoreLocked: boolean;
+  /** Renaming a temp file into capture.json fails, as a lock on capture.json would. */
+  installLocked: boolean;
+  /** Writing the discard marker fails, as a full disk would. */
+  markerFull: boolean;
   held: boolean;
   release: () => void;
   /** Content writes into the capture's folder, in order. */
@@ -64,6 +71,9 @@ interface Disk {
 
 const disk: Disk = {
   backupLocked: false,
+  installLocked: false,
+  markerFull: false,
+  restoreLocked: false,
   full: false,
   held: false,
   hold: null,
@@ -99,6 +109,10 @@ const holdAnswers = () => {
     },
   };
 };
+
+/** The writes that carry content: the discard marker is empty. */
+const contentOf = (writes: readonly string[]): string[] =>
+  writes.filter((data) => data !== "");
 
 const toAction = <T>(result: StoreResult<T>): ActionResult =>
   result.ok ? { ok: true } : { message: result.message, ok: false };
@@ -138,10 +152,70 @@ const settle = async (): Promise<void> => {
   }
 };
 
+/** A save main wrote but hasn't answered yet. */
+const landed = async () => {
+  const answers = holdAnswers();
+
+  const drafts = new DraftStore({
+    discard: async ({ id, tag }) => toAction(await store.discard(id, tag)),
+    update: async ({ fields, id, tag }) => {
+      const result = toAction(await store.update(id, fields, tag));
+
+      await answers.held;
+
+      return result;
+    },
+  });
+
+  drafts.edit(ID, DISCARDED, BASE, { now: true });
+  await vi.waitFor(async () => {
+    const written = await onDisk();
+
+    expect(written.title).toBe(DISCARDED.title);
+  });
+
+  return { answers, drafts };
+};
+
+/** A save main wrote but hasn't answered, and a Discard of it that can't rename capture.json.prev back. */
+const stranded = async () => {
+  const { answers, drafts } = await landed();
+
+  disk.restoreLocked = true;
+  drafts.discard(ID);
+  await vi.waitFor(() => {
+    expect(drafts.get(ID)).toBeDefined();
+  });
+
+  return { answers, drafts };
+};
+
+/** What a start after a quit or a crash right now finds. */
+const restartedRecord = async (): Promise<CaptureRecord | null> => {
+  const copy = await mkdtemp(path.join(tmpdir(), "inset-discard-restart-"));
+
+  await cp(root, copy, { recursive: true });
+
+  const started = await openCaptureStore(copy);
+  const entry = started.get(ID);
+
+  return entry?.kind === "ok" ? entry.record : null;
+};
+
+/** The title a start after a quit or a crash right now finds. */
+const restarted = async (): Promise<string> => {
+  const record = await restartedRecord();
+
+  return record?.title ?? "gone";
+};
+
 describe("Discard changes never writes content to undo a save (SPEC round 8)", () => {
   beforeEach(async () => {
     disk.hold = null;
     disk.backupLocked = false;
+    disk.installLocked = false;
+    disk.markerFull = false;
+    disk.restoreLocked = false;
     disk.full = false;
     disk.held = false;
     disk.release = nothing;
@@ -155,7 +229,23 @@ describe("Discard changes never writes content to undo a save (SPEC round 8)", (
             await holdHere();
           }
 
+          if (
+            disk.installLocked &&
+            from.endsWith(".tmp") &&
+            path.basename(to) === "capture.json"
+          ) {
+            throw Object.assign(new Error("locked"), { code: "EPERM" });
+          }
+
           if (disk.backupLocked && path.basename(to) === "capture.json.prev") {
+            throw Object.assign(new Error("locked"), { code: "EPERM" });
+          }
+
+          if (
+            disk.restoreLocked &&
+            path.basename(from) === "capture.json.prev" &&
+            path.basename(to) === "capture.json"
+          ) {
             throw Object.assign(new Error("locked"), { code: "EPERM" });
           }
 
@@ -168,7 +258,10 @@ describe("Discard changes never writes content to undo a save (SPEC round 8)", (
 
           if (disk.hold === "write") {
             await holdHere();
-          } else if (disk.full) {
+          } else if (
+            disk.full ||
+            (disk.markerFull && target.endsWith("capture.json.discard"))
+          ) {
             throw Object.assign(new Error("full"), { code: "ENOSPC" });
           }
 
@@ -211,7 +304,7 @@ describe("Discard changes never writes content to undo a save (SPEC round 8)", (
         draft: drafts.get(ID),
         saved: drafts.saved(ID) ?? BASE,
         shown: shown(drafts),
-        writesAfterDiscard: disk.writes.slice(writesBefore),
+        writesAfterDiscard: contentOf(disk.writes.slice(writesBefore)),
       }).toStrictEqual({
         disk: BASE,
         draft: undefined,
@@ -246,7 +339,7 @@ describe("Discard changes never writes content to undo a save (SPEC round 8)", (
     expect({
       disk: fieldsOf(await onDisk()),
       shown: shown(drafts),
-      writesAfterDiscard: disk.writes.slice(writesBefore),
+      writesAfterDiscard: contentOf(disk.writes.slice(writesBefore)),
     }).toStrictEqual({ disk: BASE, shown: BASE, writesAfterDiscard: [] });
   });
 
@@ -297,34 +390,14 @@ describe("Discard changes never writes content to undo a save (SPEC round 8)", (
     });
   });
 
-  it("says Discard couldn't undo the save, and keeps the capture done, when its backup couldn't take the Mark as done", async () => {
-    const answers = holdAnswers();
-    const said: string[] = [];
+  it("fails a Mark as done whose backup can't take it, so Discard still puts back every saved field", async () => {
+    const { answers, drafts } = await landed();
 
-    const drafts = new DraftStore({
-      discard: async ({ id, tag }) => toAction(await store.discard(id, tag)),
-      update: async ({ fields, id, tag }) => {
-        const result = toAction(await store.update(id, fields, tag));
-
-        await answers.held;
-
-        return result;
-      },
-    });
-
-    drafts.onUndoFailed((message) => {
-      said.push(message);
-    });
-    drafts.edit(ID, DISCARDED, BASE, { now: true });
-    await vi.waitFor(async () => {
-      const written = await onDisk();
-
-      expect(written.title).toBe(DISCARDED.title);
-    });
     disk.backupLocked = true;
 
     const done = await store.setDone(ID, true);
 
+    disk.backupLocked = false;
     drafts.discard(ID);
     await settle();
     answers.release();
@@ -333,15 +406,48 @@ describe("Discard changes never writes content to undo a save (SPEC round 8)", (
     const after = await onDisk();
 
     expect({
-      disk: [after.title, after.status.kind],
-      done: done.ok,
-      said,
-      saved: drafts.saved(ID),
+      disk: [fieldsOf(after), after.status.kind],
+      done,
+      draft: drafts.get(ID),
+      shown: shown(drafts),
     }).toStrictEqual({
-      disk: [DISCARDED.title, "done"],
-      done: true,
-      said: ["Inset can’t write to its data folder."],
-      saved: undefined,
+      disk: [BASE, "active"],
+      done: {
+        error: "writeFailed",
+        message: "Inset can’t write to its data folder.",
+        ok: false,
+      },
+      draft: undefined,
+      shown: BASE,
+    });
+  });
+
+  it("leaves the backup as it was when a Mark as done can't replace capture.json, so Discard puts back the status too", async () => {
+    const { answers, drafts } = await landed();
+
+    disk.installLocked = true;
+
+    const done = await store.setDone(ID, true);
+
+    disk.installLocked = false;
+    drafts.discard(ID);
+    await settle();
+    answers.release();
+    await settle();
+
+    const after = await onDisk();
+    const reopened = await restartedRecord();
+
+    expect({
+      disk: [fieldsOf(after), after.status.kind],
+      done: done.ok,
+      restart: [reopened?.title, reopened?.status.kind],
+      shown: shown(drafts),
+    }).toStrictEqual({
+      disk: [BASE, "active"],
+      done: false,
+      restart: [BASE.title, "active"],
+      shown: BASE,
     });
   });
 
@@ -374,7 +480,7 @@ describe("Discard changes never writes content to undo a save (SPEC round 8)", (
 
     expect([drafts.get(ID)?.values.due, drafts.get(ID)?.error]).toStrictEqual([
       due,
-      "The disk is full.",
+      { during: "save", message: "The disk is full." },
     ]);
 
     drafts.discard(ID);
@@ -384,5 +490,252 @@ describe("Discard changes never writes content to undo a save (SPEC round 8)", (
       disk: fieldsOf(await onDisk()).due,
       shown: shown(drafts).due,
     }).toStrictEqual({ disk: BASE.due, shown: BASE.due });
+  });
+
+  describe("when Discard can't put the saved version back", () => {
+    it("stays a failed draft with Keep changes and Discard again, refuses copies, and the next start puts the saved version back", async () => {
+      const { answers, drafts } = await stranded();
+
+      answers.release();
+      await settle();
+
+      const written = await onDisk();
+
+      expect({
+        copy: await drafts.settle(ID),
+        disk: written.title,
+        draft: drafts.get(ID)?.kind,
+        error: drafts.get(ID)?.error,
+        restart: await restarted(),
+        shown: shown(drafts).title,
+        unsaved: drafts.unsaved(),
+      }).toStrictEqual({
+        copy: {
+          during: "discard",
+          message: "Inset can’t write to its data folder.",
+          ok: false,
+        },
+        disk: DISCARDED.title,
+        draft: "failed",
+        error: {
+          during: "discard",
+          message: "Inset can’t write to its data folder.",
+        },
+        restart: BASE.title,
+        shown: DISCARDED.title,
+        unsaved: {
+          count: 1,
+          error: "Inset can’t write to its data folder.",
+          pending: false,
+          undiscarded: true,
+        },
+      });
+    });
+
+    it("puts back the version saved before it on Discard again, through more typing and a Keep changes caught on its way", async () => {
+      const { answers, drafts } = await stranded();
+
+      disk.restoreLocked = false;
+      drafts.edit(ID, { ...DISCARDED, title: "Typed on" }, BASE, { now: true });
+      void drafts.retry(ID);
+      await vi.waitFor(async () => {
+        const written = await onDisk();
+
+        expect(written.title).toBe("Typed on");
+      });
+      drafts.discard(ID);
+      answers.release();
+      await settle();
+
+      expect({
+        disk: fieldsOf(await onDisk()),
+        draft: drafts.get(ID),
+        restart: await restarted(),
+        shown: shown(drafts),
+      }).toStrictEqual({
+        disk: BASE,
+        draft: undefined,
+        restart: BASE.title,
+        shown: BASE,
+      });
+    });
+
+    it("keeps the discarded changes on Keep changes, and so does the next start", async () => {
+      const { answers, drafts } = await stranded();
+
+      answers.release();
+      await settle();
+      disk.restoreLocked = false;
+
+      const retried = await drafts.retry(ID);
+
+      await settle();
+
+      expect({
+        disk: fieldsOf(await onDisk()),
+        draft: drafts.get(ID),
+        restart: await restarted(),
+        retried,
+      }).toStrictEqual({
+        disk: DISCARDED,
+        draft: undefined,
+        restart: DISCARDED.title,
+        retried: { ok: true },
+      });
+    });
+
+    it("leaves it to the user before a close or a quit: nothing is saved, and the prompt says why", async () => {
+      const { answers, drafts } = await stranded();
+
+      answers.release();
+      await settle();
+
+      const writes = disk.writes.length;
+      const outcome = await drafts.settleAll(200);
+
+      expect({
+        outcome,
+        unsaved: drafts.unsaved()?.error,
+        writes: disk.writes.length - writes,
+      }).toStrictEqual({
+        outcome: "settled",
+        unsaved: "Inset can’t write to its data folder.",
+        writes: 0,
+      });
+    });
+
+    it("stays failed through more typing: nothing is saved on its own, a close asks, copies are refused, and Discard again still puts the saved version back", async () => {
+      const { answers, drafts } = await stranded();
+
+      answers.release();
+      await settle();
+
+      const writes = disk.writes.length;
+      const heard: string[] = [];
+
+      const hold = createLeaveHold({
+        drafts,
+        resume: () => {
+          heard.push("resume");
+        },
+        shown: () => {
+          heard.push("shown");
+        },
+      });
+
+      drafts.edit(ID, { ...DISCARDED, description: "Typed after" }, BASE);
+
+      const asked = hold.ask("quit");
+
+      await delay(SAVE_AFTER_MS + 100);
+      await settle();
+
+      const typedOn = {
+        asked,
+        copy: await drafts.settle(ID),
+        draft: [drafts.get(ID)?.kind, drafts.get(ID)?.error?.during],
+        heard: [...heard],
+        prompt: hold.get(),
+        restart: await restarted(),
+        writes: contentOf(disk.writes.slice(writes)),
+      };
+
+      hold.cancel();
+      disk.restoreLocked = false;
+      drafts.discard(ID);
+      await settle();
+
+      expect({
+        disk: fieldsOf(await onDisk()),
+        draft: drafts.get(ID),
+        typedOn,
+      }).toStrictEqual({
+        disk: BASE,
+        draft: undefined,
+        typedOn: {
+          asked: {
+            message: "The library holds this to save or ask first.",
+            ok: false,
+          },
+          copy: {
+            during: "discard",
+            message: "Inset can’t write to its data folder.",
+            ok: false,
+          },
+          draft: ["failed", "discard"],
+          heard: ["shown"],
+          prompt: {
+            count: 1,
+            leaving: "quit",
+            message: "Inset can’t write to its data folder.",
+            undiscarded: true,
+          },
+          restart: BASE.title,
+          writes: [],
+        },
+      });
+    });
+
+    it("puts its marker down again on the next Discard after a full disk refused it, and holds a quit until Discard again in the prompt finishes", async () => {
+      disk.markerFull = true;
+
+      const { answers, drafts } = await stranded();
+
+      disk.markerFull = false;
+      answers.release();
+      await settle();
+
+      const heard: string[] = [];
+
+      const hold = createLeaveHold({
+        drafts,
+        resume: () => {
+          heard.push("resume");
+        },
+        shown: () => {
+          heard.push("shown");
+        },
+      });
+
+      hold.ask("quit");
+      await vi.waitFor(() => {
+        expect(hold.get()?.undiscarded).toBeTruthy();
+      });
+      hold.discard();
+      await settle();
+
+      const stillLocked = {
+        draft: drafts.get(ID)?.error,
+        heard: [...heard],
+        prompt: hold.get()?.undiscarded,
+        restart: await restarted(),
+      };
+
+      disk.restoreLocked = false;
+      hold.discard();
+      await settle();
+
+      expect({
+        disk: fieldsOf(await onDisk()),
+        heard,
+        restart: await restarted(),
+        stillLocked,
+        unsaved: drafts.unsaved(),
+      }).toStrictEqual({
+        disk: BASE,
+        heard: ["shown", "resume"],
+        restart: BASE.title,
+        stillLocked: {
+          draft: {
+            during: "discard",
+            message: "Inset can’t write to its data folder.",
+          },
+          heard: ["shown"],
+          prompt: true,
+          restart: BASE.title,
+        },
+        unsaved: null,
+      });
+    });
   });
 });

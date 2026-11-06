@@ -75,7 +75,19 @@ const heldDisk = () => {
   };
 };
 
+/** How main answers Discard changes, which a test changes as the disk heals. */
+interface DiscardAnswer {
+  discard: ActionResult | Promise<ActionResult>;
+}
+
 const FULL: ActionResult = { message: "The disk is full.", ok: false };
+
+const unanswered = (_result: ActionResult): void => undefined;
+
+const DISK_FULL = { during: "save", message: "The disk is full." };
+
+/** A copy refused because a save of the capture failed. */
+const REFUSED = { during: "save", message: "The disk is full.", ok: false };
 
 describe(DraftStore, () => {
   beforeEach(() => {
@@ -140,7 +152,7 @@ describe(DraftStore, () => {
       message: "The disk is full.",
       ok: false,
     });
-    expect(drafts.get(A)?.error).toBe("The disk is full.");
+    expect(drafts.get(A)?.error).toStrictEqual(DISK_FULL);
   });
 
   it("keeps a failed draft with nothing watching it, refuses its copy at once without saving it again, and copies it once Retry works", async () => {
@@ -153,16 +165,13 @@ describe(DraftStore, () => {
     await answer();
 
     expect(drafts.get(A)).toMatchObject({
-      error: "The disk is full.",
+      error: DISK_FULL,
       kind: "failed",
       values: titled("Typed while full"),
     });
 
     // The disk has recovered, but nothing sends A's typing again until Retry.
-    await expect(drafts.settle(A)).resolves.toStrictEqual({
-      message: "The disk is full.",
-      ok: false,
-    });
+    await expect(drafts.settle(A)).resolves.toStrictEqual(REFUSED);
     drafts.flush(A);
 
     const sentBeforeRetry = sent.map(({ title }) => title);
@@ -189,10 +198,7 @@ describe(DraftStore, () => {
     await answer(FULL);
     drafts.edit(A, titled("Typed while full, and more"), STORED);
 
-    await expect(drafts.settle(A)).resolves.toStrictEqual({
-      message: "The disk is full.",
-      ok: false,
-    });
+    await expect(drafts.settle(A)).resolves.toStrictEqual(REFUSED);
     expect([sent.length, drafts.get(A)?.kind]).toStrictEqual([1, "dirty"]);
   });
 
@@ -226,7 +232,7 @@ describe(DraftStore, () => {
     await expect(Promise.all([retry, copy])).resolves.toStrictEqual([
       { message: "The changes were discarded.", ok: false },
       // The error still showed while the retry was on its way, so the copy was refused at once.
-      { message: "The disk is full.", ok: false },
+      REFUSED,
     ]);
 
     // Main says the retry landed: main put back what it replaced, and the library never takes it as saved.
@@ -280,35 +286,202 @@ describe(DraftStore, () => {
     });
   });
 
-  it("shows what main holds and says why when main couldn't put back what a discarded save replaced", async () => {
-    const said: string[] = [];
+  describe("when main can't put back what was saved", () => {
+    const LOCKED: ActionResult = {
+      message: "Inset can’t write to its data folder.",
+      ok: false,
+    };
 
-    const drafts = new DraftStore({
-      discard: async () =>
-        await Promise.resolve({
+    /** Main saves at once; its Discard answers as `disk.discard` says, and records the save each one names. */
+    const lockedDisk = () => {
+      const disk: DiscardAnswer = { discard: LOCKED };
+      const named: SaveTag[] = [];
+      const sent: string[] = [];
+      let seq = 0;
+
+      const drafts = new DraftStore({
+        discard: async ({ tag }) => {
+          named.push(tag);
+
+          return await Promise.resolve(disk.discard);
+        },
+        update: async ({ fields, tag }) => {
+          sent.push(fields.title);
+          ({ seq } = tag);
+
+          return await Promise.resolve({ ok: true });
+        },
+      });
+
+      /** A save main wrote and is slow to answer: Discard then names it. */
+      const landedThenDiscarded = async (title: string): Promise<number> => {
+        drafts.edit(A, titled(title), STORED);
+        drafts.flush(A);
+        drafts.discard(A);
+        await vi.advanceTimersByTimeAsync(0);
+
+        return seq;
+      };
+
+      return { disk, drafts, landedThenDiscarded, named, sent };
+    };
+
+    it("brings the discarded changes back as failed, with Keep changes and Discard again, and refuses copies until one of them works", async () => {
+      const { drafts, landedThenDiscarded } = lockedDisk();
+      const seq = await landedThenDiscarded("Discard me");
+      const draft = drafts.get(A);
+
+      expect({
+        copy: await drafts.settle(A),
+        discards: drafts.discards(A),
+        draft: draft === undefined ? null : { ...draft, undo: draft.undo?.seq },
+        saved: drafts.saved(A),
+        unsaved: drafts.unsaved(),
+      }).toStrictEqual({
+        copy: {
+          during: "discard",
           message: "Inset can’t write to its data folder.",
           ok: false,
-        }),
-      update: async () => await Promise.resolve({ ok: true }),
+        },
+        discards: 2,
+        draft: {
+          confirmed: STORED,
+          error: {
+            during: "discard",
+            message: "Inset can’t write to its data folder.",
+          },
+          kind: "failed",
+          rev: 1,
+          undo: seq,
+          values: titled("Discard me"),
+        },
+        saved: STORED,
+        unsaved: {
+          count: 1,
+          error: "Inset can’t write to its data folder.",
+          pending: false,
+          undiscarded: true,
+        },
+      });
     });
 
-    drafts.onUndoFailed((message) => {
-      said.push(message);
-    });
-    drafts.edit(A, titled("Saved first"), STORED, { now: true });
-    await vi.advanceTimersByTimeAsync(0);
-    drafts.edit(A, titled("Discard me"), STORED, { now: true });
-    drafts.discard(A);
-    await vi.advanceTimersByTimeAsync(0);
+    it("asks main again for the same save on the next Discard, even after more typing, and then shows what was saved", async () => {
+      const { disk, drafts, landedThenDiscarded, named } = lockedDisk();
+      const seq = await landedThenDiscarded("Discard me");
 
-    expect({
-      discards: drafts.discards(A),
-      said,
-      saved: drafts.saved(A),
-    }).toStrictEqual({
-      discards: 2,
-      said: ["Inset can’t write to its data folder."],
-      saved: undefined,
+      drafts.edit(A, titled("Discard me, typed on"), STORED);
+      disk.discard = { ok: true };
+      drafts.discard(A);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect({
+        draft: drafts.get(A),
+        named: named.map((tag) => tag.seq),
+        shown: drafts.get(A)?.values ?? drafts.saved(A),
+      }).toStrictEqual({
+        draft: undefined,
+        named: [seq, seq],
+        shown: STORED,
+      });
+    });
+
+    it("never keeps it on its own, through a close, a quit or more typing: only Keep changes saves it, even when it holds the saved fields", async () => {
+      const { drafts, landedThenDiscarded, sent } = lockedDisk();
+
+      await landedThenDiscarded("Discard me");
+      drafts.saveAll();
+      drafts.edit(A, STORED, STORED);
+      drafts.flush(A);
+      await vi.advanceTimersByTimeAsync(SAVE_AFTER_MS);
+
+      const typed = { draft: drafts.get(A)?.kind, sent: [...sent] };
+
+      void drafts.retry(A);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect({
+        draft: drafts.get(A),
+        sent,
+        typed,
+      }).toStrictEqual({
+        draft: undefined,
+        sent: ["Discard me", STORED.title],
+        typed: { draft: "failed", sent: ["Discard me"] },
+      });
+    });
+
+    it("counts Discard again from a close or a quit as unsaved until main answers, and a copy meanwhile copies what is saved", async () => {
+      const { disk, drafts, landedThenDiscarded } = lockedDisk();
+      let answer = unanswered;
+
+      await landedThenDiscarded("Discard me");
+      // oxlint-disable-next-line promise/avoid-new -- the test answers the Discard later, through this callback.
+      disk.discard = new Promise<ActionResult>((resolve) => {
+        answer = resolve;
+      });
+      drafts.discardAll();
+
+      const copying = drafts.settle(A);
+
+      await vi.advanceTimersByTimeAsync(0);
+
+      const waiting = drafts.unsaved();
+
+      answer({ ok: true });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect({
+        copy: await copying,
+        unsaved: drafts.unsaved(),
+        waiting,
+      }).toStrictEqual({
+        copy: { fields: STORED, ok: true },
+        unsaved: null,
+        waiting: {
+          count: 1,
+          error: "Inset can’t write to its data folder.",
+          pending: true,
+          undiscarded: true,
+        },
+      });
+    });
+
+    it("keeps typing done since the Discard, and names the save main holds when that is discarded too", async () => {
+      const { disk, drafts, named } = lockedDisk();
+
+      drafts.edit(A, titled("Discard me"), STORED);
+      drafts.flush(A);
+      drafts.discard(A);
+      drafts.edit(A, titled("Typed after"), STORED);
+      await vi.advanceTimersByTimeAsync(0);
+
+      const typed = {
+        error: drafts.get(A)?.error,
+        values: drafts.get(A)?.values.title,
+      };
+
+      disk.discard = { ok: true };
+      drafts.discard(A);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect({ named: named.length, typed }).toStrictEqual({
+        named: 2,
+        typed: { error: null, values: "Typed after" },
+      });
+    });
+
+    it("lets a close or a quit go on after Discard and quit: main finishes the Discard at the next start", async () => {
+      const { drafts } = lockedDisk();
+
+      drafts.edit(A, titled("Discard me"), STORED);
+      drafts.flush(A);
+      drafts.discardAll();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect([drafts.get(A), drafts.unsaved()]).toStrictEqual([
+        undefined,
+        null,
+      ]);
     });
   });
 
@@ -362,7 +535,12 @@ describe(DraftStore, () => {
       drafts.get(B)?.kind,
       drafts.get(C)?.kind,
     ]).toStrictEqual([
-      { count: 2, error: "The disk is full.", pending: true },
+      {
+        count: 2,
+        error: "The disk is full.",
+        pending: true,
+        undiscarded: false,
+      },
       "failed",
       "saving",
     ]);
@@ -380,7 +558,12 @@ describe(DraftStore, () => {
 
     await expect(settled).resolves.toBe("settled");
     expect([drafts.unsaved(), sent.length]).toStrictEqual([
-      { count: 1, error: "The disk is full.", pending: false },
+      {
+        count: 1,
+        error: "The disk is full.",
+        pending: false,
+        undiscarded: false,
+      },
       2,
     ]);
   });
@@ -400,7 +583,7 @@ describe(DraftStore, () => {
     await answer();
 
     expect([slow, drafts.unsaved()]).toStrictEqual([
-      { count: 1, error: null, pending: true },
+      { count: 1, error: null, pending: true, undiscarded: false },
       null,
     ]);
   });
@@ -472,10 +655,10 @@ describe(DraftStore, () => {
 
     expect({ after, before, landed: drafts.get(A) }).toStrictEqual({
       after: {
-        error: "Saving didn’t finish in time.",
+        error: { during: "save", message: "Saving didn’t finish in time." },
         result: { message: "Saving didn’t finish in time.", ok: false },
       },
-      before: { error: "The disk is full.", result: null },
+      before: { error: DISK_FULL, result: null },
       landed: undefined,
     });
   });

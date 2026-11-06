@@ -145,7 +145,12 @@ describe(createLeaveHold, () => {
     await answer();
 
     expect([hold.get(), take()]).toStrictEqual([
-      { count: 1, leaving: "quit", message: "The disk is full." },
+      {
+        count: 1,
+        leaving: "quit",
+        message: "The disk is full.",
+        undiscarded: false,
+      },
       ["save:Typed while full", "save:B typed", "shown"],
     ]);
   });
@@ -167,7 +172,7 @@ describe(createLeaveHold, () => {
 
     expect([before, held, hold.get(), take()]).toStrictEqual([
       null,
-      { count: 1, leaving: "restart", message: TOO_SLOW },
+      { count: 1, leaving: "restart", message: TOO_SLOW, undiscarded: false },
       null,
       ["save:A typed", "shown", "resume"],
     ]);
@@ -187,7 +192,12 @@ describe(createLeaveHold, () => {
 
     expect([stillHeld, [hold.get(), take()]]).toStrictEqual([
       [
-        { count: 1, leaving: "quit", message: "The disk is full." },
+        {
+          count: 1,
+          leaving: "quit",
+          message: "The disk is full.",
+          undiscarded: false,
+        },
         [
           "save:Typed while full",
           "save:Typed while full",
@@ -295,5 +305,131 @@ describe(createLeaveHold, () => {
     drafts.forget(A);
 
     expect(hold.ask("close")).toStrictEqual({ ok: true });
+  });
+
+  it("asks about a Discard main couldn't finish rather than saving it on its own, and Keep changes in the prompt keeps it", async () => {
+    const log: string[] = [];
+
+    const drafts = new DraftStore({
+      discard: async ({ tag }) => {
+        log.push(`discard:${String(tag.seq)}`);
+
+        return await Promise.resolve({
+          message: "Inset can’t write to its data folder.",
+          ok: false,
+        });
+      },
+      update: async ({ fields }) => {
+        log.push(`save:${fields.title}`);
+
+        return await Promise.resolve({ ok: true });
+      },
+    });
+
+    const hold = createLeaveHold({
+      drafts,
+      resume: () => {
+        log.push("resume");
+      },
+      shown: () => {
+        log.push("shown");
+      },
+    });
+
+    drafts.edit(A, titled("Discard me"), STORED);
+    drafts.flush(A);
+    drafts.discard(A);
+    await vi.advanceTimersByTimeAsync(0);
+    log.splice(0);
+
+    const answer = hold.ask("quit");
+
+    await vi.advanceTimersByTimeAsync(3000);
+
+    const asked = { answer, heard: log.splice(0), prompt: hold.get() };
+
+    hold.retry();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect({ asked, kept: log.splice(0) }).toStrictEqual({
+      asked: {
+        answer: HELD,
+        heard: ["shown"],
+        prompt: {
+          count: 1,
+          leaving: "quit",
+          message: "Inset can’t write to its data folder.",
+          undiscarded: true,
+        },
+      },
+      kept: ["save:Discard me", "resume"],
+    });
+  });
+
+  it("holds the close on Discard again until main answers, asks again when it fails, and goes on once it works", async () => {
+    const log: string[] = [];
+    const answers: ActionResult[] = [];
+
+    const LOCKED = {
+      message: "Inset can’t write to its data folder.",
+      ok: false,
+    } as const;
+
+    const drafts = new DraftStore({
+      discard: async ({ tag }) => {
+        log.push(`discard:${String(tag.seq)}`);
+
+        return await Promise.resolve(answers.shift() ?? LOCKED);
+      },
+      update: async ({ fields }) => {
+        log.push(`save:${fields.title}`);
+
+        return await Promise.resolve({ ok: true });
+      },
+    });
+
+    const hold = createLeaveHold({
+      drafts,
+      resume: () => {
+        log.push("resume");
+      },
+      shown: () => {
+        log.push("shown");
+      },
+    });
+
+    drafts.edit(A, titled("Discard me"), STORED);
+    drafts.flush(A);
+    drafts.discard(A);
+    await vi.advanceTimersByTimeAsync(0);
+    hold.ask("close");
+    await vi.advanceTimersByTimeAsync(0);
+    log.splice(0);
+
+    hold.discard();
+
+    const sent = { heard: [...log], prompt: hold.get()?.undiscarded };
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    const failedAgain = { heard: log.splice(0), prompt: hold.get() };
+
+    answers.push({ ok: true });
+    hold.discard();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect({ failedAgain, sent, worked: log }).toStrictEqual({
+      failedAgain: {
+        heard: ["discard:1"],
+        prompt: {
+          count: 1,
+          leaving: "close",
+          message: "Inset can’t write to its data folder.",
+          undiscarded: true,
+        },
+      },
+      sent: { heard: ["discard:1"], prompt: true },
+      worked: ["discard:1", "resume"],
+    });
   });
 });

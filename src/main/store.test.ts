@@ -150,6 +150,15 @@ const createFaultFs = () => {
   return { control, fs, log };
 };
 
+let saves = 0;
+
+/** A library save's tag: one page's epoch, a new seq each time. */
+const saveTag = () => {
+  saves += 1;
+
+  return { epoch: "library", seq: saves };
+};
+
 const counterNonce = (): (() => string) => {
   let next = 0;
 
@@ -359,7 +368,9 @@ describe(openCaptureStore, () => {
     expect(store.list()).toStrictEqual([
       { id: FOREIGN_ID, kind: "foreign", schemaVersion: 3 },
     ]);
-    await expect(store.update(FOREIGN_ID, fields())).resolves.toMatchObject({
+    await expect(
+      store.update(FOREIGN_ID, fields(), saveTag())
+    ).resolves.toMatchObject({
       error: "readOnly",
     });
     await expect(store.remove(FOREIGN_ID)).resolves.toMatchObject({
@@ -394,7 +405,7 @@ describe(openCaptureStore, () => {
       updatedAt: "2026-10-21T19:00:00.000Z",
     };
 
-    await expect(store.update(ID, change)).resolves.toStrictEqual({
+    await expect(store.update(ID, change, saveTag())).resolves.toStrictEqual({
       ok: true,
       value: updated,
     });
@@ -444,9 +455,9 @@ describe(openCaptureStore, () => {
 
     await store.publish(record, PNG);
 
-    const first = store.update(ID, fields({ title: "First" }));
+    const first = store.update(ID, fields({ title: "First" }), saveTag());
     const settled = store.settled();
-    const second = store.update(ID, fields({ title: "Second" }));
+    const second = store.update(ID, fields({ title: "Second" }), saveTag());
 
     await settled;
 
@@ -489,7 +500,7 @@ describe(openCaptureStore, () => {
     fault.control.code = "ENOSPC";
 
     await expect(
-      store.update(ID, fields({ title: "Lost?" }))
+      store.update(ID, fields({ title: "Lost?" }), saveTag())
     ).resolves.toStrictEqual({
       error: "writeFailed",
       message: "The disk is full.",
@@ -516,12 +527,12 @@ describe(openCaptureStore, () => {
     await store.publish(record, PNG);
 
     await expect(
-      store.update(ID, fields({ title: "  " }))
+      store.update(ID, fields({ title: "  " }), saveTag())
     ).resolves.toMatchObject({
       error: "invalid",
     });
     await expect(
-      store.update(ID, fields({ pins: [{ x: 960, y: 0 }] }))
+      store.update(ID, fields({ pins: [{ x: 960, y: 0 }] }), saveTag())
     ).resolves.toMatchObject({
       error: "invalid",
     });
@@ -545,7 +556,7 @@ describe(openCaptureStore, () => {
 
     const results = await Promise.all([
       store.publish(record, PNG),
-      store.update(ID, fields({ title: "Edited" })),
+      store.update(ID, fields({ title: "Edited" }), saveTag()),
       store.remove(ID),
     ]);
 
@@ -722,7 +733,7 @@ describe("Discard changes on the store (SPEC round 8)", () => {
     });
   });
 
-  it("undoes a discarded save that already replaced capture.json by renaming the old file back, writing nothing", async () => {
+  it("undoes a discarded save that already replaced capture.json by renaming the old file back, writing only its empty marker", async () => {
     const fault = createFaultFs();
     const store = await open(fault.fs);
 
@@ -738,11 +749,17 @@ describe("Discard changes on the store (SPEC round 8)", () => {
     });
     expect({
       disk: await onDisk(),
-      ops: fault.log,
+      left: await listDir(ID),
+      ops: fault.log.filter((op) => !op.startsWith("sync ")),
       shown: store.get(ID),
     }).toStrictEqual({
       disk: record,
-      ops: [`rename ${ID}/capture.json`],
+      left: ["capture.json", "crop.png"],
+      ops: [
+        `write ${ID}/capture.json.discard`,
+        `rename ${ID}/capture.json`,
+        `rm ${ID}/capture.json.discard`,
+      ],
       shown: { id: ID, kind: "ok", migratedFrom: null, record },
     });
   });
@@ -766,12 +783,12 @@ describe("Discard changes on the store (SPEC round 8)", () => {
     });
   });
 
-  it("refuses to undo a save whose backup couldn't take a later Mark as done, so Discard never undoes the done", async () => {
+  it("fails a Mark as done whose backup can't take it, so Discard still puts back the saved version", async () => {
     const fault = createFaultFs();
     const store = await open(fault.fs);
 
     await store.publish(record, PNG);
-    await store.update(ID, fields({ title: "Kept" }), TAG);
+    await store.update(ID, fields({ title: "Discarded" }), TAG);
     fault.control.code = "EPERM";
     fault.control.failWhen = (op, target) =>
       op === "rename" && target.endsWith("capture.json.prev");
@@ -781,20 +798,21 @@ describe("Discard changes on the store (SPEC round 8)", () => {
     fault.control.failWhen = null;
 
     const discarded = await store.discard(ID, TAG);
-    const disk = await onDisk();
 
     expect({
       discarded,
-      disk: [disk.title, disk.status.kind],
-      done: done.ok,
+      disk: await onDisk(),
+      done,
+      left: await listDir(ID),
     }).toStrictEqual({
-      discarded: {
+      discarded: { ok: true, value: null },
+      disk: record,
+      done: {
         error: "writeFailed",
         message: "Inset can’t write to its data folder.",
         ok: false,
       },
-      disk: ["Kept", "done"],
-      done: true,
+      left: ["capture.json", "crop.png"],
     });
   });
 

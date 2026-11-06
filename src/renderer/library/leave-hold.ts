@@ -8,6 +8,8 @@ export interface LeavePrompt {
   readonly count: number;
   readonly message: string;
   readonly leaving: Leaving;
+  /** Every change it asks about is one main couldn't discard. */
+  readonly undiscarded: boolean;
 }
 
 export interface LeaveHold {
@@ -60,14 +62,17 @@ const same = (a: LeavePrompt | null, b: LeavePrompt | null): boolean =>
     b !== null &&
     a.count === b.count &&
     a.message === b.message &&
-    a.leaving === b.leaving);
+    a.leaving === b.leaving &&
+    a.undiscarded === b.undiscarded);
 
 /**
  * Before the window closes or the app quits, every draft is saved, waiting
- * at most the save limit. Whatever is still unsaved then holds the close, and
- * the prompt asks about it. The close goes on once every save lands (after
- * Retry or by itself), or at once when the user discards the changes. Cancel
- * keeps both the drafts and the window.
+ * at most the save limit, except a Discard main couldn't finish, which only
+ * the user settles. Whatever is still unsaved then holds the close, and the
+ * prompt asks about it. The close goes on once every save lands (after Retry
+ * or by itself), or when the user discards the changes: at once, or, for a
+ * Discard again, once main has put back what is saved. Cancel keeps both the
+ * drafts and the window.
  */
 export const createLeaveHold = ({
   drafts,
@@ -77,6 +82,8 @@ export const createLeaveHold = ({
   let state: State = IDLE;
   let prompt: LeavePrompt | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  /** While Discard hands every capture to main: the close goes on only once all of them are sent. */
+  let discarding = false;
   const listeners = new Set<() => void>();
 
   const publish = (): void => {
@@ -92,6 +99,7 @@ export const createLeaveHold = ({
               unsaved.error === null || (state.overdue && unsaved.pending)
                 ? SAVE_TOO_SLOW
                 : unsaved.error,
+            undiscarded: unsaved.undiscarded,
           };
 
     if (same(prompt, next)) {
@@ -122,7 +130,7 @@ export const createLeaveHold = ({
   };
 
   drafts.subscribe(() => {
-    if (state.kind === "idle") {
+    if (state.kind === "idle" || discarding) {
       return;
     }
 
@@ -151,7 +159,7 @@ export const createLeaveHold = ({
     ask: (leaving) => {
       // Saved first, so a draft with nothing left to write is gone before the answer: a resume sent before main hears "held" would be lost.
       if (state.kind === "idle") {
-        drafts.retryAll();
+        drafts.saveAll();
       }
 
       if (drafts.unsaved() === null) {
@@ -177,15 +185,22 @@ export const createLeaveHold = ({
     cancel: () => {
       become(IDLE);
     },
-    // Idle first, so the drafts it drops don't resume the close a second time.
+    // A Discard again main hasn't answered still holds the close: it goes on once main puts back what is saved, and asks again if it can't.
     discard: () => {
       if (state.kind === "idle") {
         return;
       }
 
-      become(IDLE);
+      discarding = true;
       drafts.discardAll();
-      resume();
+      discarding = false;
+
+      if (drafts.unsaved() === null) {
+        become(IDLE);
+        resume();
+      } else {
+        publish();
+      }
     },
     get: () => prompt,
     retry: () => {

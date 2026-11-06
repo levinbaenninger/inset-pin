@@ -102,8 +102,13 @@ export const createCopyGate =
     const saved = await saveEdits(id);
 
     if (!saved.ok) {
+      const message =
+        saved.during === "discard"
+          ? `Couldn’t discard your changes, so nothing was copied. ${saved.message}`
+          : `Couldn’t save your changes, so nothing was copied. ${saved.message}`;
+
       return {
-        message: `Couldn’t save your changes, so nothing was copied. ${saved.message}`,
+        message,
         ok: false,
         retry: true,
       };

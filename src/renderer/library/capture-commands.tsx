@@ -131,8 +131,10 @@ export const useCaptureCommands = (capture: SavedCapture, focus?: RowFocus) => {
     }
   };
 
-  /** A refusal for unsaved changes: Retry saves them, and the user then copies again. */
+  /** A refusal for unsaved changes: Retry (Keep changes, after a Discard main couldn't finish) saves them, and the user then copies again. */
   const refuseWithRetry = (text: string): void => {
+    const undiscarded = drafts.get(capture.id)?.error?.during === "discard";
+
     const retrySave = async (): Promise<void> => {
       const saved = await drafts.retry(capture.id);
 
@@ -145,7 +147,7 @@ export const useCaptureCommands = (capture: SavedCapture, focus?: RowFocus) => {
 
     say({
       action: {
-        label: "Retry",
+        label: undiscarded ? "Keep changes" : "Retry",
         run: () => {
           void retrySave();
         },
@@ -214,9 +216,11 @@ export const useCaptureCommands = (capture: SavedCapture, focus?: RowFocus) => {
     const saved = await drafts.settle(capture.id);
 
     if (!saved.ok) {
+      const what = saved.during === "discard" ? "discard" : "save";
+
       say({
         failed: true,
-        text: `Couldn’t save your changes, so it didn’t float. ${saved.message}`,
+        text: `Couldn’t ${what} your changes, so it didn’t float. ${saved.message}`,
       });
 
       return;

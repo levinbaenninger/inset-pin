@@ -56,6 +56,7 @@ describe(reduceDraft, () => {
       inFlight: null,
       kind: "dirty",
       rev: 1,
+      undo: null,
       values: titled("Total is wrong"),
     });
   });
@@ -74,6 +75,7 @@ describe(reduceDraft, () => {
       inFlight: { payload: titled("Total is wrong"), rev: 2 },
       kind: "saving",
       rev: 2,
+      undo: null,
       values: titled("Total is wrong"),
     });
     expect(reduceDraft(saving, ok(2))).toBeNull();
@@ -88,6 +90,7 @@ describe(reduceDraft, () => {
       inFlight: { payload: titled("First"), rev: 1 },
       kind: "dirty",
       rev: 2,
+      undo: null,
       values: titled("Second"),
     });
 
@@ -102,6 +105,7 @@ describe(reduceDraft, () => {
       inFlight: null,
       kind: "dirty",
       rev: 2,
+      undo: null,
       values: titled("Second"),
     });
     expect(reduceDraft(afterFirst, SEND)).toMatchObject({
@@ -128,10 +132,11 @@ describe(reduceDraft, () => {
 
     expect(afterFailure).toStrictEqual({
       confirmed: STORED,
-      error: "The disk is full.",
+      error: { during: "save", message: "The disk is full." },
       inFlight: null,
       kind: "dirty",
       rev: 2,
+      undo: null,
       values: titled("Second"),
     });
     expect(reduceDraft(reduceDraft(afterFailure, SEND), ok(2))).toBeNull();
@@ -140,9 +145,10 @@ describe(reduceDraft, () => {
   it("fails when the latest rev's save fails, and keeps the values", () => {
     expect(run(edit("Typed"), SEND, failed(1))).toStrictEqual({
       confirmed: STORED,
-      error: "The disk is full.",
+      error: { during: "save", message: "The disk is full." },
       kind: "failed",
       rev: 1,
+      undo: null,
       values: titled("Typed"),
     });
   });
@@ -153,18 +159,20 @@ describe(reduceDraft, () => {
     expect(reduceDraft(fail, SEND)).toBe(fail);
     expect(reduceDraft(fail, RETRY)).toStrictEqual({
       confirmed: STORED,
-      error: "The disk is full.",
+      error: { during: "save", message: "The disk is full." },
       inFlight: { payload: titled("Typed"), rev: 1 },
       kind: "saving",
       rev: 1,
+      undo: null,
       values: titled("Typed"),
     });
     expect(reduceDraft(fail, edit("Typed more"))).toStrictEqual({
       confirmed: STORED,
-      error: "The disk is full.",
+      error: { during: "save", message: "The disk is full." },
       inFlight: null,
       kind: "dirty",
       rev: 2,
+      undo: null,
       values: titled("Typed more"),
     });
     expect(reduceDraft(fail, DISCARD)).toBeNull();
@@ -212,6 +220,102 @@ describe(reduceDraft, () => {
 
     expect(reduceDraft(saving, ok(7))).toBe(saving);
     expect(reduceDraft(null, ok(1))).toBeNull();
+  });
+});
+
+describe("a Discard main couldn't finish", () => {
+  const TAG = { epoch: "page.1", seq: 4 };
+
+  const undiscarded = (draft: Draft): DraftEvent => ({
+    draft,
+    kind: "undiscarded",
+    message: "Inset can’t write to its data folder.",
+    tag: TAG,
+  });
+
+  const discarded = run(edit("Discard me"), SEND);
+
+  it("brings the discarded changes back as failed, with the save main still holds", () => {
+    expect(
+      discarded === null ? null : run(DISCARD, undiscarded(discarded))
+    ).toStrictEqual({
+      confirmed: STORED,
+      error: {
+        during: "discard",
+        message: "Inset can’t write to its data folder.",
+      },
+      kind: "failed",
+      rev: 1,
+      undo: TAG,
+      values: titled("Discard me"),
+    });
+  });
+
+  it("leaves typing done since the Discard as it is, naming the save main holds", () => {
+    const typed = run(edit("Typed after"));
+
+    expect(
+      discarded === null || typed === null
+        ? null
+        : reduceDraft(typed, undiscarded(discarded))
+    ).toStrictEqual({ ...typed, undo: TAG });
+  });
+
+  it("stays failed through more typing until Keep changes, which sends even the saved fields so main keeps them", () => {
+    const back =
+      discarded === null ? null : run(DISCARD, undiscarded(discarded));
+
+    const typedBack = reduceDraft(back, {
+      kind: "edit",
+      stored: STORED,
+      values: STORED,
+    });
+
+    expect({
+      autosave: reduceDraft(back, SEND),
+      kept: reduceDraft(typedBack, RETRY),
+      typedBack: reduceDraft(typedBack, SEND),
+    }).toStrictEqual({
+      autosave: back,
+      typedBack: {
+        confirmed: STORED,
+        error: {
+          during: "discard",
+          message: "Inset can’t write to its data folder.",
+        },
+        kind: "failed",
+        rev: 2,
+        undo: TAG,
+        values: STORED,
+      },
+      kept: {
+        confirmed: STORED,
+        error: {
+          during: "discard",
+          message: "Inset can’t write to its data folder.",
+        },
+        inFlight: { payload: STORED, rev: 2 },
+        kind: "saving",
+        rev: 2,
+        undo: TAG,
+        values: STORED,
+      },
+    });
+  });
+
+  it("is resolved once a save of it lands, and says a failed one was a save", () => {
+    const back =
+      discarded === null ? null : run(DISCARD, undiscarded(discarded));
+
+    const kept = reduceDraft(reduceDraft(back, RETRY), failed(1));
+
+    expect({
+      failedRetry: kept === null ? null : [kept.error, kept.undo],
+      landed: reduceDraft(reduceDraft(kept, RETRY), ok(1)),
+    }).toStrictEqual({
+      failedRetry: [{ during: "save", message: "The disk is full." }, TAG],
+      landed: null,
+    });
   });
 });
 

@@ -129,8 +129,8 @@ export type Effect =
   | { readonly type: "notify"; readonly message: string }
   /** Starts the limit on the save a quit waits for (SPEC round 7). */
   | { readonly type: "saveDeadline" }
-  /** Removes the capture a discarded save may still write; the store runs it after that save. */
-  | { readonly type: "remove"; readonly id: CaptureId };
+  /** Gives up the capture a discarded save may still write: never listed, even after a crash. */
+  | { readonly type: "withdraw"; readonly id: CaptureId };
 
 export interface Step {
   readonly state: DraftState;
@@ -331,7 +331,7 @@ const onQuitChoice = (state: DraftState, choice: QuitChoice): Step => {
   // A save that didn't finish in time: Discard quits at once, and Save keeps waiting for it.
   if (state.write.kind === "saving") {
     return choice === "discard"
-      ? to(IDLE, { id: state.draft.id, type: "remove" }, { type: "quit" })
+      ? to(IDLE, { id: state.draft.id, type: "withdraw" }, { type: "quit" })
       : stay(state);
   }
 
@@ -579,8 +579,8 @@ export interface DraftDeps {
   readonly now: () => Date;
   readonly quit: () => void;
   readonly notify: (message: string) => void;
-  /** Deletes a saved capture; queued after any publish of it already on its way. */
-  readonly remove: (id: CaptureId) => Promise<void>;
+  /** Gives up a new capture whose save may be on its way; it never shows in the library, even after a crash. */
+  readonly withdraw: (id: CaptureId) => Promise<void>;
 }
 
 export interface DraftController {
@@ -724,8 +724,8 @@ export const createDraftController = (deps: DraftDeps): DraftController => {
         break;
       }
 
-      case "remove": {
-        void deps.remove(effect.id);
+      case "withdraw": {
+        void deps.withdraw(effect.id);
         break;
       }
 
