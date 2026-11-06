@@ -215,6 +215,12 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
         menu?.set(open);
       },
       openSettings: options.openSettings,
+      // A Discard the closed page sent may fail moments from now: the fresh page hears of it.
+      owedDiscards: async () => {
+        await withinLimit(store.settled);
+
+        return [...store.owed()];
+      },
       reportShown: (shown) => {
         shownDone = shown?.done ?? null;
         options.onFocusChange();

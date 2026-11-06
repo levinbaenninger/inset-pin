@@ -1,8 +1,13 @@
 import type { CaptureId, EditableFields } from "@shared/capture-record";
 import { LEAVE_SAVE_WAIT_MS, SAVE_TOO_SLOW } from "@shared/contracts";
-import type { ActionResult, SavedEdits, SaveTag } from "@shared/contracts";
+import type {
+  ActionResult,
+  OwedDiscard,
+  SavedEdits,
+  SaveTag,
+} from "@shared/contracts";
 
-import { reduceDraft, snapshotOf } from "./draft-lifecycle";
+import { reduceDraft, snapshotOf, storedFields } from "./draft-lifecycle";
 import type {
   Draft,
   DraftError,
@@ -93,9 +98,10 @@ const nothing = (): void => undefined;
 const waitsForUser = (draft: Draft): boolean =>
   draft.kind === "failed" && draft.error.during === "discard";
 
-/** A Discard again on its way to main: its answer, and the error the capture showed until then. */
+/** A Discard on its way to main: its answer, the same once this store has taken it in, and the error the capture showed until then. */
 interface Undoing {
   readonly answer: Promise<ActionResult>;
+  readonly done: Promise<ActionResult>;
   readonly error: DraftError | null;
 }
 
@@ -127,7 +133,7 @@ export class DraftStore {
   readonly #epochs = new Map<CaptureId, string>();
   /** Per capture, the save on its way. */
   readonly #sending = new Map<CaptureId, SaveTag>();
-  /** Per capture, a Discard again on its way: the changes count as unsaved until main has put back what is saved. */
+  /** Per capture, a Discard on its way: the changes count as unsaved, and nothing is saved, until main has put back what is saved. */
   readonly #undoing = new Map<CaptureId, Undoing>();
 
   constructor(store: FieldStore) {
@@ -225,9 +231,11 @@ export class DraftStore {
    * Keep changes and Discard again, unless the window is closing or the app
    * quitting: main's marker then finishes the Discard at the next start.
    *
-   * Discard again, after a Discard main couldn't finish, counts as unsaved
-   * until main answers, closing or not, and its changes come back whenever
-   * it fails again: leaving never takes that for done.
+   * A Discard that names a save counts as unsaved until main answers, and
+   * nothing of the capture is saved meanwhile, so a close waits for it and
+   * typing never replaces what main puts back. Its changes come back, with
+   * the typing since, whenever it fails. Only a first Discard sent as the
+   * window closes or the app quits lets go at once (SPEC round 7).
    */
   discard(id: CaptureId, { leaving = false } = {}): void {
     const draft = this.#drafts.get(id);
@@ -252,17 +260,57 @@ export class DraftStore {
       return;
     }
 
-    const answer = settle(
-      async () => await this.#store.discard({ id, tag: held })
-    );
-
-    // Counted before the draft goes, so the capture never reads as saved meanwhile.
-    if (draft.undo !== null) {
-      this.#undoing.set(id, { answer, error: draft.error });
-    }
-
+    // Main's marker finishes it at the next start, and a library opened before then hears it is owed.
+    this.#sendDiscard(id, held, draft, leaving && draft.undo === null);
     this.#apply(id, { kind: "discard" });
-    void this.#undo(id, held, draft, answer, leaving);
+  }
+
+  /**
+   * As the page loads: each Discard main still owes, from a page closed
+   * before this one. One main couldn't finish shows failed with Keep changes
+   * and Discard again. One main hasn't answered yet is asked again, and
+   * waited for as the page that sent it would have.
+   */
+  owe(owed: readonly OwedDiscard[]): void {
+    for (const { confirmed, id, message, tag, values } of owed) {
+      if (!this.#drafts.has(id) && !this.#undoing.has(id)) {
+        const saved = storedFields(confirmed);
+
+        this.#saved.set(id, saved);
+
+        if (message === null) {
+          this.#sendDiscard(
+            id,
+            tag,
+            {
+              confirmed: saved,
+              error: null,
+              inFlight: null,
+              kind: "dirty",
+              rev: 1,
+              undo: tag,
+              values,
+            },
+            false
+          );
+          this.#changed();
+        } else {
+          this.#apply(id, {
+            draft: {
+              confirmed: saved,
+              error: { during: "discard", message },
+              kind: "failed",
+              rev: 1,
+              undo: tag,
+              values,
+            },
+            kind: "undiscarded",
+            message,
+            tag,
+          });
+        }
+      }
+    }
   }
 
   /**
@@ -274,10 +322,16 @@ export class DraftStore {
    * nothing is typed, so the stored copy is current.
    */
   async settle(id: CaptureId): Promise<SavedEdits> {
+    const undoing = this.#undoing.get(id);
+
+    if (undoing !== undefined) {
+      return await this.#settleUndoing(id, undoing);
+    }
+
     const draft = this.#drafts.get(id);
 
     if (draft === undefined) {
-      return await this.#settleUndoing(id);
+      return { fields: null, ok: true };
     }
 
     if (draft.error !== null) {
@@ -408,23 +462,54 @@ export class DraftStore {
     );
   }
 
-  /** A copy of a capture whose Discard again is on its way waits for it: it copies what is saved, or is refused once the changes are back. */
-  async #settleUndoing(id: CaptureId): Promise<SavedEdits> {
-    const undoing = this.#undoing.get(id);
-
-    if (undoing === undefined) {
-      return { fields: null, ok: true };
-    }
-
-    await undoing.answer;
-
+  /**
+   * A copy of a capture whose Discard is on its way takes what the capture
+   * shows as it starts, then waits for main, at most the save limit. It
+   * copies that once main has put back what is saved and any typing it
+   * carries is saved, and is refused once the changes are back, or when main
+   * doesn't answer in time.
+   */
+  async #settleUndoing(id: CaptureId, undoing: Undoing): Promise<SavedEdits> {
     const draft = this.#drafts.get(id);
+    const snapshot = draft === undefined ? null : snapshotOf(draft);
+    const fields = snapshot?.payload ?? this.#saved.get(id) ?? null;
 
-    if (draft === undefined) {
-      return { fields: this.#saved.get(id) ?? null, ok: true };
+    const saved =
+      snapshot === null
+        ? Promise.resolve(SAVED)
+        : this.#waitFor(id, snapshot.rev);
+
+    const discarded = await withinLimit(undoing.done, LEAVE_SAVE_WAIT_MS);
+
+    if (discarded === TOO_SLOW) {
+      return { message: SAVE_TOO_SLOW, ok: false };
     }
 
-    return await this.settle(id);
+    if (!discarded.ok) {
+      return { during: "discard", message: discarded.message, ok: false };
+    }
+
+    const result = await saved;
+
+    return result.ok
+      ? { fields, ok: true }
+      : { message: result.message, ok: false };
+  }
+
+  /** Asks main to put back what was saved before `discarded`; counted as unsaved until main answers, unless it lets go at once. */
+  #sendDiscard(
+    id: CaptureId,
+    tag: SaveTag,
+    discarded: Draft,
+    letsGo: boolean
+  ): void {
+    const answer = settle(async () => await this.#store.discard({ id, tag }));
+    const done = this.#undo(id, tag, discarded, answer, letsGo);
+
+    // Counted before the draft goes, so the capture never reads as saved meanwhile.
+    if (!letsGo) {
+      this.#undoing.set(id, { answer, done, error: discarded.error });
+    }
   }
 
   async #undo(
@@ -432,8 +517,8 @@ export class DraftStore {
     tag: SaveTag,
     discarded: Draft,
     answer: Promise<ActionResult>,
-    leaving: boolean
-  ): Promise<void> {
+    letsGo: boolean
+  ): Promise<ActionResult> {
     const result = await answer;
     const counted = this.#undoing.get(id)?.answer === answer;
 
@@ -441,12 +526,14 @@ export class DraftStore {
       this.#undoing.delete(id);
     }
 
-    if (result.ok || (leaving && discarded.undo === null)) {
+    if (result.ok || letsGo) {
+      // Typing done meanwhile waited for this answer.
       if (counted) {
+        this.flush(id);
         this.#changed();
       }
 
-      return;
+      return result;
     }
 
     // The discarded save stays on disk: its changes show again, failed, until Keep changes keeps them or Discard again gets them back.
@@ -460,10 +547,18 @@ export class DraftStore {
       message: result.message,
       tag,
     });
+    this.#resolve(id, () => true, result);
+
+    return result;
   }
 
   #send(id: CaptureId, kind: "send" | "retry"): void {
     this.#stopTimer(id);
+
+    // A save now would replace what main is putting back, and keep what the user discarded.
+    if (this.#undoing.has(id)) {
+      return;
+    }
 
     const before = this.#drafts.get(id);
 

@@ -14,7 +14,7 @@ import type {
   EditableFields,
   StoredEntry,
 } from "@shared/capture-record";
-import type { SaveTag } from "@shared/contracts";
+import type { OwedDiscard, SaveTag } from "@shared/contracts";
 import { z } from "zod";
 
 import { saveErrorText } from "./save-error";
@@ -138,6 +138,8 @@ export interface CaptureStore {
    * lands and the marker is gone.
    */
   readonly discard: (id: CaptureId, tag: SaveTag) => Promise<StoreResult<null>>;
+  /** Every Discard still owed, failed or not yet answered, for a library page that opens meanwhile. */
+  readonly owed: () => readonly OwedDiscard[];
   /**
    * The capture panel gave up a new capture whose save may still be on its
    * way. A tombstone goes down first, so a start after a crash never lists it.
@@ -252,7 +254,17 @@ interface Undo {
   readonly tag: SaveTag;
   readonly previous: OkEntry;
   readonly marked: boolean;
+  /** Why the last try to put `previous` back failed, while it is still owed. */
+  readonly failure: string | null;
 }
+
+const fieldsOf = (record: CaptureRecord): EditableFields => ({
+  description: record.description,
+  due: record.due,
+  pins: record.pins,
+  steps: record.steps,
+  title: record.title,
+});
 
 /** A write in or beside the queue, and whether it can still change what is on disk. */
 interface Pending {
@@ -760,11 +772,11 @@ export const openCaptureStore = async (
       }
     }
 
-    const mine: Undo = {
-      marked: keeps,
-      previous: owed !== undefined && keeps ? owed.previous : entry,
-      tag,
-    };
+    // An earlier Discard still owed keeps what it puts back, and why it couldn't yet.
+    const mine: Undo =
+      owed !== undefined && keeps
+        ? { ...owed, tag }
+        : { failure: null, marked: false, previous: entry, tag };
 
     // Discarded while capture.json was moved aside: the Discard queued behind puts it back.
     if (isEnded(id, tag)) {
@@ -816,7 +828,7 @@ export const openCaptureStore = async (
       return failure("discarded", DISCARDED_TEXT);
     }
 
-    undo.set(id, { ...mine, marked: false });
+    undo.set(id, { ...mine, failure: null, marked: false });
 
     return success(parsed.data);
   };
@@ -929,7 +941,14 @@ export const openCaptureStore = async (
     try {
       await renameWithRetry(fileOf(id, PREVIOUS_FILE), fileOf(id, RECORD_FILE));
     } catch (error) {
-      return failure("writeFailed", saveErrorText(error, "undo"));
+      const message = saveErrorText(error, "undo");
+      const owed = undo.get(id);
+
+      if (owed !== undefined) {
+        undo.set(id, { ...owed, failure: message });
+      }
+
+      return failure("writeFailed", message);
     }
 
     const slot = undo.get(id);
@@ -1032,6 +1051,22 @@ export const openCaptureStore = async (
     imageFile: (id) =>
       cache.get(id)?.kind === "ok" ? fileOf(id, IMAGE_FILE) : null,
     list: () => [...cache.values()].toSorted(newestFirst),
+    owed: () =>
+      [...undo].flatMap(([id, slot]) => {
+        const entry = cache.get(id);
+
+        return slot.marked && entry?.kind === "ok"
+          ? [
+              {
+                confirmed: fieldsOf(slot.previous.record),
+                id,
+                message: slot.failure,
+                tag: slot.tag,
+                values: fieldsOf(entry.record),
+              },
+            ]
+          : [];
+      }),
     publish: async (record, png) => {
       const progress: Progress = { moving: false };
 

@@ -251,23 +251,24 @@ const answered = (
   };
 };
 
-/** The discarded changes come back as not discarded, unless newer ones were typed since: their save keeps them instead. */
+/**
+ * The discarded changes come back as not discarded, with the typing done
+ * since the Discard when there is some: nothing of it was sent meanwhile,
+ * and only Keep changes or Discard again settles it.
+ */
 const undiscarded = (
   draft: Draft | null,
   discarded: Draft,
   tag: SaveTag,
   message: string
-): Draft =>
-  draft === null
-    ? {
-        confirmed: discarded.confirmed,
-        error: { during: "discard", message },
-        kind: "failed",
-        rev: discarded.rev,
-        undo: tag,
-        values: discarded.values,
-      }
-    : { ...draft, undo: tag };
+): Draft => ({
+  confirmed: discarded.confirmed,
+  error: { during: "discard", message },
+  kind: "failed",
+  rev: (draft ?? discarded).rev,
+  undo: tag,
+  values: (draft ?? discarded).values,
+});
 
 /** The draft lifecycle, the same for every capture; null is clean. */
 export const reduceDraft = (

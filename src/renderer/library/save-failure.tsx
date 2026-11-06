@@ -30,7 +30,9 @@ const SAID: Record<
  * A save that failed, or a Discard main couldn't finish: the typing stays
  * on screen until Retry (Keep changes) saves it or Discard changes (Discard
  * again) drops it. Discard works at once, even while a retry is on its way;
- * Retry waits for that retry's answer, at most the save limit.
+ * Retry waits for that retry's answer, at most the save limit. After a
+ * failed Discard, Return keeps the changes whichever button has the focus
+ * (SPEC round 9), and Space still presses the focused one.
  */
 export const SaveFailure = ({
   error,
@@ -46,6 +48,21 @@ export const SaveFailure = ({
   <div
     className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs"
     data-testid="save-failure"
+    // Before the focused button sees it, so Return on Discard again still keeps.
+    onKeyDownCapture={(event) => {
+      if (
+        error.during === "discard" &&
+        event.key === "Enter" &&
+        !event.nativeEvent.isComposing
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (!retrying) {
+          onRetry();
+        }
+      }
+    }}
     role="alert"
   >
     <HugeiconsIcon

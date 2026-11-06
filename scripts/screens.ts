@@ -24,7 +24,7 @@ import { z } from "zod";
 
 import { drawPins, pinSprite } from "../src/shared/pin-sprite.ts";
 import { installBridge } from "./fixtures/screens-bridge.ts";
-import type { BridgeInput } from "./fixtures/screens-bridge.ts";
+import type { BridgeInput, OwedFixture } from "./fixtures/screens-bridge.ts";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const RENDERER = path.join(ROOT, "out", "renderer");
@@ -2315,11 +2315,17 @@ const checkDrafts = async (
     text: "Couldn’t save your changes, so nothing was copied. The disk is full.Retry",
   };
 
-  const session = async () => {
+  const session = async ({
+    owed = [],
+    stored = captures,
+  }: {
+    readonly owed?: readonly OwedFixture[];
+    readonly stored?: readonly Capture[];
+  } = {}) => {
     const { context, page } = await openLibrary(
       browser,
       origin,
-      { captures: structuredClone(captures), page: "library" },
+      { captures: structuredClone(stored), owed, page: "library" },
       platform,
       `/captures/${a}`
     );
@@ -3329,6 +3335,190 @@ const checkDrafts = async (
       }
     }
   );
+
+  // Round 10: Return in the banner after a failed Discard keeps the changes, as in the prompt, and Space still presses the focused button.
+  await attempt("Return in the banner after a failed Discard", async () => {
+    const s = await session();
+    const { page } = s;
+
+    try {
+      await failDiscard(page);
+      await typeInTitle(page, " later");
+      await page.waitForTimeout(900);
+      await page.evaluate(() => {
+        globalThis.__failDiscards = false;
+      });
+      await s.take();
+      await page
+        .getByTestId("save-failure")
+        .getByRole("button", { name: "Discard again" })
+        .focus();
+      await page.keyboard.press("Enter");
+      await page.waitForTimeout(300);
+
+      const { saves } = await s.take();
+
+      expectSame(
+        "Return on a focused Discard again keeps the changes with the typing since, and discards nothing",
+        {
+          disk: await page.evaluate(
+            (id) => globalThis.__storedTitle?.(id) ?? null,
+            a
+          ),
+          saves,
+          shown: await s.shown(),
+          unsaved: await s.unsavedRow(a),
+        },
+        {
+          disk: `${aTitle} (typed) more later`,
+          saves: [`update:${a}:${aTitle} (typed) more later`],
+          shown: { failure: null, title: `${aTitle} (typed) more later` },
+          unsaved: false,
+        }
+      );
+    } finally {
+      await s.context.close();
+    }
+  });
+
+  await attempt("Space in the banner after a failed Discard", async () => {
+    const s = await session();
+    const { page } = s;
+
+    try {
+      await failDiscard(page);
+      await page.evaluate(() => {
+        globalThis.__failDiscards = false;
+      });
+      await s.take();
+      await page
+        .getByTestId("save-failure")
+        .getByRole("button", { name: "Discard again" })
+        .focus();
+      await page.keyboard.press("Space");
+      await page.waitForTimeout(300);
+
+      const { saves } = await s.take();
+
+      expectSame(
+        "Space on a focused Discard again still discards, so it stays a deliberate choice",
+        {
+          disk: await page.evaluate(
+            (id) => globalThis.__storedTitle?.(id) ?? null,
+            a
+          ),
+          saves,
+          shown: await s.shown(),
+        },
+        {
+          disk: aTitle,
+          saves: [`discard:${a}:${aTitle} (typed) more`],
+          shown: { failure: null, title: aTitle },
+        }
+      );
+    } finally {
+      await s.context.close();
+    }
+  });
+
+  // Round 10: a library opened while main still owes a Discard, as after a close during it, shows it failed rather than the discarded changes as saved.
+  await attempt("a library that opens while main owes a Discard", async () => {
+    const stored = captures.find((one) => one.id === a);
+
+    if (stored === undefined) {
+      throw new Error("capture A is missing");
+    }
+
+    const confirmed = {
+      description: stored.description,
+      due: stored.due,
+      pins: stored.pins,
+      steps: stored.steps,
+      title: aTitle,
+    };
+
+    const discarded = `${aTitle} (discarded)`;
+
+    const s = await session({
+      owed: [
+        {
+          confirmed,
+          id: a,
+          message: "Inset can’t write to its data folder.",
+          tag: { epoch: "closed-page.1", seq: 7 },
+          values: { ...confirmed, title: discarded },
+        },
+      ],
+      stored: captures.map((one) =>
+        one.id === a ? { ...one, title: discarded } : one
+      ),
+    });
+
+    const { page } = s;
+
+    try {
+      const opened = {
+        shown: await s.shown(),
+        unsaved: await s.unsavedRow(a),
+      };
+
+      await page.keyboard.press(`${m}+Alt+c`);
+      await page.getByTestId("notice-action").waitFor();
+
+      const copy = await s.outcome();
+
+      await page.evaluate(() => {
+        globalThis.__failDiscards = false;
+      });
+      await page
+        .getByTestId("save-failure")
+        .getByRole("button", { name: "Discard again" })
+        .click();
+      await page.waitForTimeout(300);
+
+      const { saves } = await s.take();
+
+      expectSame(
+        "it opens with the changes failed, Keep changes and Discard again, and the Not saved row, tells main 1 change at once, refuses a copy, and Discard again puts back what was saved",
+        {
+          after: await s.shown(),
+          copy: { clipboard: copy.clipboard, notice: copy.notice },
+          counts: await page.evaluate(() => globalThis.__unsavedCounts ?? []),
+          disk: await page.evaluate(
+            (id) => globalThis.__storedTitle?.(id) ?? null,
+            a
+          ),
+          opened,
+          saves,
+          unsavedAfter: await s.unsavedRow(a),
+        },
+        {
+          after: { failure: null, title: aTitle },
+          copy: {
+            clipboard: [],
+            notice: {
+              failed: true,
+              text: "Couldn’t discard your changes, so nothing was copied. Inset can’t write to its data folder.Keep changes",
+            },
+          },
+          counts: [1, 0],
+          disk: aTitle,
+          opened: {
+            shown: {
+              failure:
+                "Couldn’t discard your changes. Inset can’t write to its data folder.Keep changesDiscard again",
+              title: discarded,
+            },
+            unsaved: true,
+          },
+          saves: [`discard:${a}:${discarded}`],
+          unsavedAfter: false,
+        }
+      );
+    } finally {
+      await s.context.close();
+    }
+  });
 
   // Round 7 red team: a Retry beside the error that doesn't finish in 3 s says so, and Retry can wait again.
   await attempt("a Retry beside the error that doesn't finish", async () => {

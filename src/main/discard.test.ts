@@ -11,6 +11,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DraftStore, SAVE_AFTER_MS } from "../renderer/library/drafts";
 import { createLeaveHold } from "../renderer/library/leave-hold";
+import { createCopyGate } from "./copy-gate";
+import type { ClipboardWriter } from "./copy-gate";
 import { nodeStoreFs, openCaptureStore } from "./store";
 import type { CaptureStore, StoreResult } from "./store";
 
@@ -189,6 +191,76 @@ const stranded = async () => {
 
   return { answers, drafts };
 };
+
+/** Discard and close lets the window go while main can't put the saved version back. */
+const closedWhileOwed = async (): Promise<void> => {
+  const { answers, drafts } = await landed();
+  const heard: string[] = [];
+
+  const hold = createLeaveHold({
+    drafts,
+    resume: () => {
+      heard.push("resume");
+    },
+    shown: nothing,
+  });
+
+  disk.restoreLocked = true;
+  hold.ask("close");
+  hold.discard();
+  answers.release();
+  await settle();
+
+  expect(heard).toStrictEqual(["resume"]);
+};
+
+/** A library opened after that hears the Discard is owed, as its page does. */
+const reopenedWhileOwed = async (): Promise<DraftStore> => {
+  await closedWhileOwed();
+
+  const fresh = openDrafts();
+
+  fresh.owe(store.owed());
+
+  return fresh;
+};
+
+/** Discard and close lets the window go while main's rename of the saved version back is held on the disk. */
+const closedWhileRestoring = async () => {
+  const { answers, drafts } = await landed();
+  const heard: string[] = [];
+
+  const hold = createLeaveHold({
+    drafts,
+    resume: () => {
+      heard.push("resume");
+    },
+    shown: nothing,
+  });
+
+  disk.hold = "rename";
+  hold.ask("close");
+  hold.discard();
+  await vi.waitFor(() => {
+    expect(disk.held).toBeTruthy();
+  });
+
+  expect(heard).toStrictEqual(["resume"]);
+
+  return answers;
+};
+
+/** A clipboard that records what is put on it. */
+const recording = (pasted: string[]): ClipboardWriter => ({
+  writeImage: async () => {
+    pasted.push("image");
+    await Promise.resolve();
+  },
+  writeText: async (text) => {
+    pasted.push(text);
+    await Promise.resolve();
+  },
+});
 
 /** What a start after a quit or a crash right now finds. */
 const restartedRecord = async (): Promise<CaptureRecord | null> => {
@@ -492,6 +564,54 @@ describe("Discard changes never writes content to undo a save (SPEC round 8)", (
     }).toStrictEqual({ disk: BASE.due, shown: BASE.due });
   });
 
+  it("copies what the capture showed as each copy started while a Discard is on its way, never typing done during the wait", async () => {
+    const { answers, drafts } = await landed();
+    const pasted: string[] = [];
+
+    const copy = createCopyGate({
+      clipboard: recording(pasted),
+      pinnedImage: () => ({ png: Buffer.from(PNG) }),
+      saveEdits: async (id) => await drafts.settle(id),
+      store,
+    });
+
+    disk.hold = "rename";
+    drafts.discard(ID);
+    await vi.waitFor(() => {
+      expect(disk.held).toBeTruthy();
+    });
+
+    const first = copy(ID, "text");
+
+    drafts.edit(ID, { ...BASE, title: "Typed after the first copy" }, BASE, {
+      now: true,
+    });
+
+    const second = copy(ID, "text");
+
+    drafts.edit(ID, { ...BASE, title: "Typed after the second copy" }, BASE, {
+      now: true,
+    });
+    disk.release();
+    answers.release();
+    await settle();
+
+    const written = await onDisk();
+
+    expect({
+      copied: [await first, await second],
+      disk: written.title,
+      pasted,
+    }).toStrictEqual({
+      copied: [{ ok: true }, { ok: true }],
+      disk: "Typed after the second copy",
+      pasted: [
+        "Saved title\n\nSaved description",
+        "Typed after the first copy\n\nSaved description",
+      ],
+    });
+  });
+
   describe("when Discard can't put the saved version back", () => {
     it("stays a failed draft with Keep changes and Discard again, refuses copies, and the next start puts the saved version back", async () => {
       const { answers, drafts } = await stranded();
@@ -673,6 +793,431 @@ describe("Discard changes never writes content to undo a save (SPEC round 8)", (
           restart: BASE.title,
           writes: [],
         },
+      });
+    });
+
+    it("holds a close during a first Discard main hasn't answered, and asks once it fails, so the discarded changes never read as saved", async () => {
+      const drafts = openDrafts();
+      const heard: string[] = [];
+
+      const hold = createLeaveHold({
+        drafts,
+        resume: () => {
+          heard.push("resume");
+        },
+        shown: () => {
+          heard.push("shown");
+        },
+      });
+
+      disk.full = true;
+      drafts.edit(ID, DISCARDED, BASE, { now: true });
+      await vi.waitFor(() => {
+        expect(drafts.get(ID)?.kind).toBe("failed");
+      });
+      disk.full = false;
+      disk.hold = "rename";
+      void drafts.retry(ID);
+      await vi.waitFor(() => {
+        expect(disk.held).toBeTruthy();
+      });
+      disk.restoreLocked = true;
+      drafts.discard(ID);
+
+      const asked = hold.ask("close");
+      const atClose = { heard: [...heard], unsaved: drafts.unsaved()?.count };
+
+      disk.release();
+      await settle();
+      await vi.waitFor(() => {
+        expect(heard).toStrictEqual(["shown"]);
+      });
+
+      const draft = drafts.get(ID);
+
+      expect({
+        asked,
+        atClose,
+        copy: await drafts.settle(ID),
+        draft: draft === undefined ? null : [draft.kind, draft.error],
+        prompt: hold.get(),
+        restart: await restarted(),
+        shown: shown(drafts).title,
+      }).toStrictEqual({
+        asked: {
+          message: "The library holds this to save or ask first.",
+          ok: false,
+        },
+        atClose: { heard: [], unsaved: 1 },
+        copy: {
+          during: "discard",
+          message: "Inset can’t write to its data folder.",
+          ok: false,
+        },
+        draft: [
+          "failed",
+          {
+            during: "discard",
+            message: "Inset can’t write to its data folder.",
+          },
+        ],
+        prompt: {
+          count: 1,
+          leaving: "close",
+          message: "Inset can’t write to its data folder.",
+          undiscarded: true,
+        },
+        restart: BASE.title,
+        shown: DISCARDED.title,
+      });
+    });
+
+    it("sends none of the typing done while a first Discard is on its way: a quit waits, a copy waits and is refused, and the typing comes back failed with the Discard", async () => {
+      const { answers, drafts } = await landed();
+      const heard: string[] = [];
+
+      const hold = createLeaveHold({
+        drafts,
+        resume: () => {
+          heard.push("resume");
+        },
+        shown: () => {
+          heard.push("shown");
+        },
+      });
+
+      disk.hold = "rename";
+      disk.restoreLocked = true;
+      drafts.discard(ID);
+      await vi.waitFor(() => {
+        expect(disk.held).toBeTruthy();
+      });
+
+      const writes = disk.writes.length;
+      const pending = { asked: hold.ask("quit"), unsaved: drafts.unsaved() };
+      const copying = drafts.settle(ID);
+      const typed = { ...BASE, title: "Typed while it was discarded" };
+
+      drafts.edit(ID, typed, BASE, { now: true });
+      answers.release();
+      disk.release();
+      await settle();
+      await vi.waitFor(() => {
+        expect(heard).toStrictEqual(["shown"]);
+      });
+
+      const draft = drafts.get(ID);
+      const written = await onDisk();
+
+      expect({
+        copy: await copying,
+        disk: written.title,
+        draft:
+          draft === undefined
+            ? null
+            : {
+                confirmed: draft.confirmed,
+                error: draft.error,
+                kind: draft.kind,
+                values: draft.values,
+              },
+        pending,
+        prompt: hold.get()?.undiscarded,
+        restart: await restarted(),
+        writes: contentOf(disk.writes.slice(writes)),
+      }).toStrictEqual({
+        copy: {
+          during: "discard",
+          message: "Inset can’t write to its data folder.",
+          ok: false,
+        },
+        disk: DISCARDED.title,
+        draft: {
+          confirmed: BASE,
+          error: {
+            during: "discard",
+            message: "Inset can’t write to its data folder.",
+          },
+          kind: "failed",
+          values: typed,
+        },
+        pending: {
+          asked: {
+            message: "The library holds this to save or ask first.",
+            ok: false,
+          },
+          unsaved: {
+            count: 1,
+            error: null,
+            pending: true,
+            undiscarded: true,
+          },
+        },
+        prompt: true,
+        restart: BASE.title,
+        writes: [],
+      });
+    });
+
+    describe("and the library opens again while main still owes it", () => {
+      it("opens failed, refuses copies, saves nothing through more typing, and Discard again puts the saved version back", async () => {
+        const drafts = await reopenedWhileOwed();
+        const draft = drafts.get(ID);
+
+        const opened = {
+          copy: await drafts.settle(ID),
+          draft:
+            draft === undefined
+              ? null
+              : {
+                  confirmed: draft.confirmed,
+                  error: draft.error,
+                  kind: draft.kind,
+                  values: draft.values,
+                },
+          unsaved: drafts.unsaved(),
+        };
+
+        const writes = disk.writes.length;
+
+        drafts.edit(
+          ID,
+          { ...DISCARDED, description: "Typed after reopening" },
+          DISCARDED
+        );
+        await delay(SAVE_AFTER_MS + 100);
+        await settle();
+
+        const typed = {
+          draft: drafts.get(ID)?.error?.during,
+          writes: contentOf(disk.writes.slice(writes)),
+        };
+
+        disk.restoreLocked = false;
+        drafts.discard(ID);
+        await settle();
+
+        expect({
+          disk: fieldsOf(await onDisk()),
+          draft: drafts.get(ID),
+          opened,
+          owed: store.owed(),
+          restart: await restarted(),
+          shown: shown(drafts),
+          typed,
+        }).toStrictEqual({
+          disk: BASE,
+          draft: undefined,
+          opened: {
+            copy: {
+              during: "discard",
+              message: "Inset can’t write to its data folder.",
+              ok: false,
+            },
+            draft: {
+              confirmed: BASE,
+              error: {
+                during: "discard",
+                message: "Inset can’t write to its data folder.",
+              },
+              kind: "failed",
+              values: DISCARDED,
+            },
+            unsaved: {
+              count: 1,
+              error: "Inset can’t write to its data folder.",
+              pending: false,
+              undiscarded: true,
+            },
+          },
+          owed: [],
+          restart: BASE.title,
+          shown: BASE,
+          typed: { draft: "discard", writes: [] },
+        });
+      });
+
+      it("refuses a copy made with no library page open, as Float on Top makes, until the library settles it", async () => {
+        await closedWhileOwed();
+
+        const pasted: string[] = [];
+
+        const copy = createCopyGate({
+          clipboard: {
+            writeImage: async () => {
+              pasted.push("image");
+              await Promise.resolve();
+            },
+            writeText: async (text) => {
+              pasted.push(text);
+              await Promise.resolve();
+            },
+          },
+          pinnedImage: () => ({ png: Buffer.from(PNG) }),
+          // As main's link answers while no library page is open and none reported unsaved changes.
+          saveEdits: async () =>
+            await Promise.resolve({ fields: null, ok: true }),
+          store,
+        });
+
+        const refusal = {
+          message:
+            "Couldn’t discard your changes, so nothing was copied. Inset can’t write to its data folder.",
+          ok: false,
+          retry: false,
+        };
+
+        const refused = [await copy(ID, "text"), await copy(ID, "image")];
+
+        expect({ pasted: [...pasted], refused }).toStrictEqual({
+          pasted: [],
+          refused: [refusal, refusal],
+        });
+
+        const drafts = openDrafts();
+
+        drafts.owe(store.owed());
+        disk.restoreLocked = false;
+        drafts.discard(ID);
+        await settle();
+
+        expect({
+          copied: await copy(ID, "details"),
+          pasted: pasted.map((text) => text.split("\n")[0]),
+        }).toStrictEqual({ copied: { ok: true }, pasted: [BASE.title] });
+      });
+
+      it("holds a first Discard main is still putting back once the page's wait for it runs out, and shows it failed when main can't", async () => {
+        const answers = await closedWhileRestoring();
+        const fresh = openDrafts();
+
+        // What main's owedDiscards answers once its wait for the held rename runs out.
+        fresh.owe(store.owed());
+
+        const opened = {
+          draft: fresh.get(ID),
+          shown: shown(fresh),
+          unsaved: fresh.unsaved(),
+        };
+
+        disk.restoreLocked = true;
+        disk.release();
+        answers.release();
+        await settle();
+
+        const draft = fresh.get(ID);
+
+        const failed =
+          draft === undefined
+            ? null
+            : {
+                confirmed: draft.confirmed,
+                error: draft.error,
+                kind: draft.kind,
+                values: draft.values,
+              };
+
+        const writes = disk.writes.length;
+
+        fresh.edit(
+          ID,
+          { ...DISCARDED, description: "Typed after reopening" },
+          DISCARDED
+        );
+        await delay(SAVE_AFTER_MS + 100);
+        await settle();
+
+        expect({
+          failed,
+          opened,
+          owed: store.owed().map(({ id, message }) => ({ id, message })),
+          restart: await restarted(),
+          writes: contentOf(disk.writes.slice(writes)),
+        }).toStrictEqual({
+          failed: {
+            confirmed: BASE,
+            error: {
+              during: "discard",
+              message: "Inset can’t write to its data folder.",
+            },
+            kind: "failed",
+            values: DISCARDED,
+          },
+          opened: {
+            draft: undefined,
+            shown: BASE,
+            unsaved: {
+              count: 1,
+              error: null,
+              pending: true,
+              undiscarded: true,
+            },
+          },
+          owed: [{ id: ID, message: "Inset can’t write to its data folder." }],
+          restart: BASE.title,
+          writes: [],
+        });
+      });
+
+      it("refuses a Float on Top copy with no library page open while main is still putting the saved version back", async () => {
+        const answers = await closedWhileRestoring();
+        const pasted: string[] = [];
+
+        const copy = createCopyGate({
+          clipboard: recording(pasted),
+          pinnedImage: () => ({ png: Buffer.from(PNG) }),
+          // As main's link answers while no library page is open and none reported unsaved changes.
+          saveEdits: async () =>
+            await Promise.resolve({ fields: null, ok: true }),
+          store,
+        });
+
+        const refusal = {
+          message:
+            "Couldn’t discard your changes, so nothing was copied. Saving didn’t finish in time.",
+          ok: false,
+          retry: false,
+        };
+
+        const refused = [await copy(ID, "text"), await copy(ID, "image")];
+        const whileOwed = [...pasted];
+
+        disk.release();
+        answers.release();
+        await settle();
+
+        expect({
+          copied: await copy(ID, "text"),
+          pasted,
+          refused,
+          whileOwed,
+        }).toStrictEqual({
+          copied: { ok: true },
+          pasted: ["Saved title\n\nSaved description"],
+          refused: [refusal, refusal],
+          whileOwed: [],
+        });
+      });
+
+      it("keeps the discarded changes on Keep changes, and so does the next start", async () => {
+        const drafts = await reopenedWhileOwed();
+        const kept = await drafts.retry(ID);
+
+        await settle();
+
+        expect({
+          disk: fieldsOf(await onDisk()),
+          draft: drafts.get(ID),
+          kept,
+          owed: store.owed(),
+          restart: await restarted(),
+        }).toStrictEqual({
+          disk: DISCARDED,
+          draft: undefined,
+          kept: { ok: true },
+          owed: [],
+          restart: DISCARDED.title,
+        });
       });
     });
 

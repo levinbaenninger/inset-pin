@@ -67,6 +67,34 @@ export interface BridgeInput {
   readonly capture?: object;
   /** Commands main sends as soon as the page listens, as the tray's Keyboard shortcuts… does. */
   readonly commands?: readonly string[];
+  /** Discards main still owes as the library loads, as after a close whose Discard failed. */
+  readonly owed?: readonly OwedFixture[];
+}
+
+/** A capture's editable fields, as main stores them. */
+interface FixtureFields {
+  readonly title: string;
+  readonly description: string;
+  readonly due: string | null;
+  readonly pins: readonly {
+    readonly x: number;
+    readonly y: number;
+    readonly label?: string;
+  }[];
+  readonly steps: readonly {
+    readonly done: boolean;
+    readonly id: string;
+    readonly text: string;
+  }[];
+}
+
+/** A Discard main still owes, as `owedDiscards` answers it. */
+export interface OwedFixture {
+  readonly id: string;
+  readonly tag: { readonly epoch: string; readonly seq: number };
+  readonly values: FixtureFields;
+  readonly confirmed: FixtureFields;
+  readonly message: string;
 }
 
 /** What the page's events carry here: nothing for "changed", a command name, or a flush request. */
@@ -118,6 +146,15 @@ export const installBridge = (input: BridgeInput): void => {
   >();
 
   const tagKey = (tag: Tag): string => `${tag.epoch}#${String(tag.seq)}`;
+
+  for (const owed of input.owed ?? []) {
+    titles.set(tagKey(owed.tag), owed.values.title);
+    undo.set(owed.id, {
+      owed: true,
+      previous: structuredClone(owed.confirmed),
+      tag: owed.tag,
+    });
+  }
 
   globalThis.__releaseGets = () => {
     const waiting = heldGets;
@@ -334,6 +371,7 @@ export const installBridge = (input: BridgeInput): void => {
       openSettings: () => {
         record("openSettings");
       },
+      owedDiscards: async () => await respond(input.owed ?? []),
       remove: recorded("remove"),
       reportShown: nothing,
       resumeLeaving: () => {

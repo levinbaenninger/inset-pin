@@ -34,8 +34,19 @@ libraryBridge().on("changed", () => {
 const withoutFields = (result: ActionResult): SavedEdits =>
   result.ok ? { fields: null, ok: true } : result;
 
+// A Discard a closed or reloaded page sent may still be owed, so this page shows it before it answers or reports anything.
+const owedShown = (async (): Promise<void> => {
+  try {
+    drafts.owe(await libraryBridge().owedDiscards());
+  } catch {
+    // Main couldn't answer, so it can't be asked to save either: the page still opens.
+  }
+})();
+
 /** Before a copy, a close or a quit, main waits for what is typed to be saved, and hears how it went. */
 const answerFlush = async (request: FlushRequest): Promise<SavedEdits> => {
+  await owedShown;
+
   if (request.id === null) {
     return withoutFields(leaveHold.ask(request.leaving));
   }
@@ -44,20 +55,6 @@ const answerFlush = async (request: FlushRequest): Promise<SavedEdits> => {
     ? withoutFields(await drafts.retry(request.id))
     : await drafts.settle(request.id);
 };
-
-// Main asks a page that may not answer, so it keeps the count it last heard. A fresh page reports at once: until it does, main keeps the count a crashed or reloaded page left.
-let reported = drafts.unsaved()?.count ?? 0;
-
-libraryBridge().unsavedCount(reported);
-
-drafts.subscribe(() => {
-  const count = drafts.unsaved()?.count ?? 0;
-
-  if (count !== reported) {
-    reported = count;
-    libraryBridge().unsavedCount(count);
-  }
-});
 
 libraryBridge().on("flush", (request) => {
   void (async () => {
@@ -88,12 +85,32 @@ handleMenuKeys({
   },
 });
 
-const root = document.querySelector("#root");
+const start = async (): Promise<void> => {
+  await owedShown;
 
-if (root !== null) {
-  createRoot(root).render(
-    <StrictMode>
-      <RouterProvider router={router} />
-    </StrictMode>
-  );
-}
+  // Main asks a page that may not answer, so it keeps the count it last heard. A fresh page reports at once: until it does, main keeps the count a crashed or reloaded page left.
+  let reported = drafts.unsaved()?.count ?? 0;
+
+  libraryBridge().unsavedCount(reported);
+
+  drafts.subscribe(() => {
+    const count = drafts.unsaved()?.count ?? 0;
+
+    if (count !== reported) {
+      reported = count;
+      libraryBridge().unsavedCount(count);
+    }
+  });
+
+  const root = document.querySelector("#root");
+
+  if (root !== null) {
+    createRoot(root).render(
+      <StrictMode>
+        <RouterProvider router={router} />
+      </StrictMode>
+    );
+  }
+};
+
+void start();

@@ -254,17 +254,21 @@ describe(DraftStore, () => {
     });
   });
 
-  it("never takes a discarded save as saved, so a new edit starts from what was saved before it, under a new epoch", async () => {
+  it("never takes a discarded save as saved, so a new edit starts from what was saved before it, under a new epoch, once main has answered the Discard", async () => {
     const { answer, drafts, sent, tags } = heldDisk();
 
     drafts.edit(A, titled("Discard me"), STORED, { now: true });
     drafts.discard(A);
     drafts.edit(A, titled("Kept"), STORED, { now: true });
 
-    // The new edit doesn't wait for the discarded save: main runs them in order.
-    expect(sent.map(({ title }) => title)).toStrictEqual([
-      "Discard me",
-      "Kept",
+    const beforeAnswer = sent.map(({ title }) => title);
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    // The new edit waits only for main's answer to the Discard, not for the discarded save's.
+    expect([beforeAnswer, sent.map(({ title }) => title)]).toStrictEqual([
+      ["Discard me"],
+      ["Discard me", "Kept"],
     ]);
 
     await answer();
@@ -446,27 +450,170 @@ describe(DraftStore, () => {
       });
     });
 
-    it("keeps typing done since the Discard, and names the save main holds when that is discarded too", async () => {
-      const { disk, drafts, named } = lockedDisk();
+    it("sends none of the typing done while main answers the Discard, brings it back failed with the Discard, and names the same save on Discard again", async () => {
+      const { disk, drafts, named, sent } = lockedDisk();
+      let answer = unanswered;
 
+      // oxlint-disable-next-line promise/avoid-new -- the test answers the Discard later, through this callback.
+      disk.discard = new Promise<ActionResult>((resolve) => {
+        answer = resolve;
+      });
       drafts.edit(A, titled("Discard me"), STORED);
       drafts.flush(A);
       drafts.discard(A);
-      drafts.edit(A, titled("Typed after"), STORED);
-      await vi.advanceTimersByTimeAsync(0);
+      drafts.edit(A, titled("Typed after"), STORED, { now: true });
+
+      const quitting = drafts.settleAll(SAVE_AFTER_MS);
+
+      await vi.advanceTimersByTimeAsync(SAVE_AFTER_MS);
+
+      const waiting = {
+        quit: await quitting,
+        sent: [...sent],
+        unsaved: drafts.unsaved(),
+      };
+
+      answer(LOCKED);
+      await vi.advanceTimersByTimeAsync(SAVE_AFTER_MS);
+
+      const draft = drafts.get(A);
 
       const typed = {
-        error: drafts.get(A)?.error,
-        values: drafts.get(A)?.values.title,
+        copy: await drafts.settle(A),
+        draft: draft === undefined ? null : [draft.kind, draft.error],
+        sent: [...sent],
+        values: draft?.values.title,
       };
 
       disk.discard = { ok: true };
       drafts.discard(A);
       await vi.advanceTimersByTimeAsync(0);
 
-      expect({ named: named.length, typed }).toStrictEqual({
-        named: 2,
-        typed: { error: null, values: "Typed after" },
+      expect({
+        named: new Set(named.map((tag) => tag.seq)).size,
+        shown: drafts.get(A)?.values ?? drafts.saved(A),
+        typed,
+        waiting,
+      }).toStrictEqual({
+        named: 1,
+        shown: STORED,
+        typed: {
+          copy: { during: "discard", message: LOCKED.message, ok: false },
+          draft: ["failed", { during: "discard", message: LOCKED.message }],
+          sent: ["Discard me"],
+          values: "Typed after",
+        },
+        waiting: {
+          quit: "overdue",
+          sent: ["Discard me"],
+          unsaved: {
+            count: 1,
+            error: null,
+            pending: true,
+            undiscarded: false,
+          },
+        },
+      });
+    });
+
+    it("waits for main's answer before a copy, at most the save limit, and copies what is saved once it is back", async () => {
+      const { disk, drafts } = lockedDisk();
+      let answer = unanswered;
+
+      // oxlint-disable-next-line promise/avoid-new -- the test answers the Discard later, through this callback.
+      disk.discard = new Promise<ActionResult>((resolve) => {
+        answer = resolve;
+      });
+      drafts.edit(A, titled("Discard me"), STORED);
+      drafts.flush(A);
+      drafts.discard(A);
+
+      const late = drafts.settle(A);
+
+      await vi.advanceTimersByTimeAsync(3000);
+
+      const copying = drafts.settle(A);
+
+      answer({ ok: true });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect({
+        copied: await copying,
+        late: await late,
+      }).toStrictEqual({
+        copied: { fields: STORED, ok: true },
+        late: { message: "Saving didn’t finish in time.", ok: false },
+      });
+    });
+
+    it("opens a Discard main still owes as failed, refuses its copies, keeps it through typing, and Keep changes sends even the saved fields so main keeps them", async () => {
+      const { drafts, sent } = lockedDisk();
+      const tag = { epoch: "closed-page.1", seq: 7 };
+
+      drafts.owe([
+        {
+          confirmed: STORED,
+          id: A,
+          message: LOCKED.message,
+          tag,
+          values: titled("Discarded"),
+        },
+      ]);
+      // A capture the page already holds changes for keeps them.
+      drafts.owe([
+        {
+          confirmed: STORED,
+          id: A,
+          message: "Other",
+          tag,
+          values: titled("Other"),
+        },
+      ]);
+
+      const opened = {
+        copy: await drafts.settle(A),
+        draft: drafts.get(A),
+        saved: drafts.saved(A),
+        unsaved: drafts.unsaved(),
+      };
+
+      drafts.edit(A, STORED, titled("Discarded"));
+      await vi.advanceTimersByTimeAsync(SAVE_AFTER_MS);
+
+      const typed = { draft: drafts.get(A)?.kind, sent: [...sent] };
+      const keeping = drafts.retry(A);
+
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect({
+        draft: drafts.get(A),
+        kept: await keeping,
+        opened,
+        sent,
+        typed,
+      }).toStrictEqual({
+        draft: undefined,
+        kept: { ok: true },
+        opened: {
+          copy: { during: "discard", message: LOCKED.message, ok: false },
+          draft: {
+            confirmed: STORED,
+            error: { during: "discard", message: LOCKED.message },
+            kind: "failed",
+            rev: 1,
+            undo: tag,
+            values: titled("Discarded"),
+          },
+          saved: STORED,
+          unsaved: {
+            count: 1,
+            error: LOCKED.message,
+            pending: false,
+            undiscarded: true,
+          },
+        },
+        sent: [STORED.title],
+        typed: { draft: "failed", sent: [] },
       });
     });
 

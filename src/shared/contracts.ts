@@ -178,6 +178,23 @@ export const SaveTagSchema = z.object({
 
 export type SaveTag = z.output<typeof SaveTagSchema>;
 
+/**
+ * A Discard main couldn't finish and still owes (SPEC round 9), so a library
+ * page that opens meanwhile shows it failed, with Keep changes and Discard
+ * again, rather than the discarded changes as saved.
+ */
+export interface OwedDiscard {
+  readonly id: CaptureId;
+  /** The save main still holds, which Discard again names. */
+  readonly tag: SaveTag;
+  /** What capture.json holds: the changes the user discarded. */
+  readonly values: EditableFields;
+  /** What Discard puts back. */
+  readonly confirmed: EditableFields;
+  /** Why main couldn't put it back; null while main is still trying. */
+  readonly message: string | null;
+}
+
 export type ActionResult =
   | { readonly ok: true }
   | { readonly ok: false; readonly message: string };
@@ -305,6 +322,8 @@ export const libraryContract = defineContract({
     menuOpen: send(z.boolean()),
     /** Ctrl+, on Windows, where no app menu offers Settings. */
     openSettings: send(z.void()),
+    /** Asked once as the page loads, after main's writes settle: the Discards main still owes, which the page shows failed. */
+    owedDiscards: invoke(z.void(), out<OwedDiscard[]>()),
     remove: invoke(CaptureIdSchema, out<ActionResult>()),
     /** Whether the capture on screen is done, so the menu can name Mark as Done; null for none. */
     reportShown: send(z.object({ done: z.boolean() }).nullable()),

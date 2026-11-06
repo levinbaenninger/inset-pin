@@ -1,4 +1,5 @@
 import type { CaptureId, EditableFields } from "@shared/capture-record";
+import { SAVE_TOO_SLOW } from "@shared/contracts";
 import type { CopyResult, SavedEdits } from "@shared/contracts";
 import { entryPlainText, entryText } from "@shared/entry-text";
 import { clipboard, ClipboardItem } from "electron";
@@ -47,7 +48,7 @@ export const electronClipboard: ClipboardWriter = {
 
 export interface CopyGateOptions {
   readonly clipboard: ClipboardWriter;
-  readonly store: Pick<CaptureStore, "get">;
+  readonly store: Pick<CaptureStore, "get" | "owed">;
   /**
    * Saves what the library has typed into this capture, waits for the disk,
    * and hands back the fields as they were when the copy started.
@@ -112,6 +113,15 @@ export const createCopyGate =
         ok: false,
         retry: true,
       };
+    }
+
+    // No library page was open to refuse it, so the stored record may still hold what the user discarded; only main's answer or the library can settle it.
+    const owed = store.owed().find((one) => one.id === id);
+
+    if (owed !== undefined) {
+      return fail(
+        `Couldn’t discard your changes, so nothing was copied. ${owed.message ?? SAVE_TOO_SLOW}`
+      );
     }
 
     // Nothing typed: the record as stored when the copy started is what the library showed.

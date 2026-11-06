@@ -251,14 +251,24 @@ describe("a Discard main couldn't finish", () => {
     });
   });
 
-  it("leaves typing done since the Discard as it is, naming the save main holds", () => {
-    const typed = run(edit("Typed after"));
+  it("brings typing done since the Discard back failed with it, toward what the Discard puts back", () => {
+    const typed = run(edit("Typed after"), edit("Typed after, more"));
 
     expect(
       discarded === null || typed === null
         ? null
         : reduceDraft(typed, undiscarded(discarded))
-    ).toStrictEqual({ ...typed, undo: TAG });
+    ).toStrictEqual({
+      confirmed: STORED,
+      error: {
+        during: "discard",
+        message: "Inset can’t write to its data folder.",
+      },
+      kind: "failed",
+      rev: 2,
+      undo: TAG,
+      values: titled("Typed after, more"),
+    });
   });
 
   it("stays failed through more typing until Keep changes, which sends even the saved fields so main keeps them", () => {
