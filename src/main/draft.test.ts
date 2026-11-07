@@ -815,11 +815,22 @@ describe("draft and store together", () => {
       },
     });
 
+    const pending: Promise<unknown>[] = [];
+
     const { calls, controller } = createFakes({
       capture: capturing,
-      publish: store.publish,
+      publish: async (record, png) => {
+        const published = store.publish(record, png);
+
+        pending.push(published);
+
+        return await published;
+      },
       withdraw: async (id) => {
-        await store.withdraw(id);
+        const withdrawn = store.withdraw(id);
+
+        pending.push(withdrawn);
+        await withdrawn;
       },
     });
 
@@ -834,6 +845,8 @@ describe("draft and store together", () => {
     /** Lets the write go on and waits until the store has finished. */
     const land = async (): Promise<void> => {
       disk.release();
+      // settled() may skip a discarded write before its filesystem work has finished.
+      await Promise.all(pending);
       await store.settled();
       await vi.advanceTimersByTimeAsync(0);
     };
