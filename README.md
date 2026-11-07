@@ -1,6 +1,6 @@
 # Inset Context Pin
 
-Inset Context Pin is a small app for one capture experiment. You point at a detail in your real work, press a shortcut, and type what matters about it. The app saves a cropped screenshot with a pin on that detail next to your thought.
+Inset Context Pin is a small app for one capture experiment. You point at a detail in your real work, press a shortcut, place numbered pins on what matters and give it a title. The app saves a cropped screenshot with its pins next to your notes.
 
 It is a prototype for testing whether pointing at a place can replace describing it. It is not a note app. [IMPLEMENTATION_REPORT.md](IMPLEMENTATION_REPORT.md) lists what was tested, on which system, and what is still open.
 
@@ -39,36 +39,36 @@ The installer copy updates itself the same way. It checks on start and every fou
 
 The capture flow was tested on Windows 11 with real input. [IMPLEMENTATION_REPORT.md](IMPLEMENTATION_REPORT.md) lists what passed and what is still open, such as a complete run of the unpacked app and displays scaled above 100%.
 
-## Capture a thought
+## Capture something
 
 1. Move the pointer over the detail that matters, in any app.
-2. Press `⌥⌘P` on macOS or `Ctrl+Alt+P` on Windows. A small panel opens beside the pointer with a crop around that point and a ring on it.
-3. Type what matters in **What matters here?**.
-4. Optional: adjust what is saved. The frame in the preview is the crop, with the screen around it dimmed. Drag the frame to move it, drag a corner or an edge to crop, and pinch on the trackpad to show more or less; **Tighten** and **Widen context** above the preview do that in steps. Click or drag to move the pin, or nudge it with the arrow keys.
-5. Press `⌘↩` or `Ctrl+Enter`, or click **Save**. The panel closes and you are back in your work.
+2. Press `⌥⌘P` on macOS or `Ctrl+Alt+P` on Windows. A small panel opens beside the pointer with a crop around that point. It has no pin yet.
+3. Click in the preview to place pin 1 ("Click to place pin 1" shows until you do). Each further click places the next numbered pin, and the title keeps the keyboard, so you can type on. Drag a pin to move it; click one, or press `1`–`9`, to select it, then nudge it with the arrow keys (one image pixel, `Shift` for 10) or remove it with `⌫`. `P` turns pin mode off and on, and `⇧P` drops a pin under the pointer.
+4. Type a **Title**. **Add** adds a **Description** (`⌘D`), **Next steps** (`⇧⌘S`) and **Due** (`⇧⌘D`: Today, Tomorrow, This weekend, Next week, or Pick a date…). On Windows the keys use `Ctrl`.
+5. Optional: adjust the crop. Drag the frame to move it, drag a corner or an edge, or pinch; **Tighten** (`⌘=`) and **Widen** (`⌘−`) do it in steps. The crop always keeps every pin inside.
+6. Press `⌘↩` or `Ctrl+Enter`, or click **Save**. Saving needs a title.
 
-To set a capture aside, press `Escape` or click anywhere outside the panel. The draft stays in memory. Press the shortcut again to bring the same draft back. The panel then says **Unsaved draft from** with its time, because the app does not take a new screenshot while a draft exists. Save or discard it to capture something new.
+`Escape` sets the capture aside, and the shortcut brings the same draft back. **Discard** asks a second time once there is something to lose. `⌘/` or `Ctrl+/` lists every key. While a save runs, the fields wait for it.
 
-To throw a draft away, click **Discard**. Once you have typed something, the button asks **Click again to discard**. A second click within 4 seconds discards the draft. `Escape` takes the question back.
+If the shortcut does not work because another app uses it, choose **New capture in 3 seconds** from the pin icon and move the pointer over your detail before the delay ends.
 
-If the shortcut does not work because another app uses it, choose **New capture in 3 seconds** from the pin icon and move the pointer over your detail before the delay ends. The welcome window and the pin's menu both say when the shortcut is taken.
+To quit, choose **Quit Inset Context Pin** from the pin icon. If a draft has anything in it, the panel asks first: **Save**, **Discard** or **Cancel**. `Return` always saves, `Esc` cancels, and `Space` presses the focused button. If the draft's save failed or is still on its way after 3 seconds, the panel asks too, with **Retry** in place of **Save**, and the app quits once the save lands unless you cancel. Discard then also gives up what that save writes, so it never shows in the library, even if the app is forced to quit before the save lands.
 
-To quit, choose **Quit Inset Context Pin** from the pin icon. If a draft has a thought that is not saved yet, the panel asks first: **Save and quit**, **Discard and quit**, or **Cancel**.
+## The library
 
-## Read, edit, and export captures
+Click the Dock icon, choose **Recent captures…** from the pin icon, or start the app again while it runs. The sidebar lists captures by day, newest first; drag its edge to resize it, or hide it with `⌃⌘S` (`Ctrl+B`). Each row shows the image with its pins, the title, the step progress and, on the right, the Due chip ("Overdue" once the day has passed).
 
-Click the Dock icon, choose **Recent captures…** or one of the newest captures from the pin icon, or start the app again while it runs. The window shows your captures grouped by day, newest first, and opens the newest one beside the list. In a narrow window the list and a capture each take the whole window. Before the first capture it shows the welcome instead, and the first capture appears there as soon as you save it.
+- **Edit in place.** Title, description, next steps, Due and pin labels save as you type. The chips under the title add a missing field, and the same keys work: `⌘D`, `⇧⌘S`, `⇧⌘D`. `Return` edits the title. The Due chip's `×` clears the day, and **Pick a date…** opens a calendar: the arrows move, `Return` picks, `Esc` closes it. When and where the capture was taken sits at its foot.
+- **Unsaved changes are kept.** If a save fails, your typing stays, also after you open another capture; its row says **Not saved**. Open it again to see the error, such as "The disk is full.", with **Retry** and **Discard changes**. Discard changes puts back every field at once. A save still on its way is dropped, or the file it replaced is renamed back, so Discard works even on a full disk, and a crash halfway through still comes back to what was saved. If Discard can't put the saved version back, for example because another program locks the file, the changes stay as **Not saved** with "Couldn’t discard your changes" and the reason: **Keep changes** saves them, and **Discard again** tries again to put back the version saved before them. Typing meanwhile saves nothing and copies are refused until you choose, and `Return` in that message keeps the changes whichever button has the focus. Until Inset has answered a Discard, typing waits, a copy waits up to 3 seconds, and closing or quitting waits for it too. If it still hasn’t answered after 3 seconds, the prompt says "1 change isn’t discarded yet" with **Wait**, **Close anyway** (or **Quit anyway**) and **Cancel**. `Return` waits again; Close anyway leaves at once and the Discard finishes on its own, or the next time Inset starts. A library window opened while a Discard is still owed shows the capture this way again. If the window can't find out which Discards are owed, it says "Library can’t open yet" and shows no capture, and keeps trying until it can. Closing or quitting asks "1 change couldn’t be discarded" with **Keep changes**, **Discard again** and **Cancel**, and Discard again lets the app go only once the saved version is back. Closing the library or quitting while changes still can't be saved waits up to 3 seconds and then asks, with **Retry**, **Discard and close** (or **Discard and quit**) and **Cancel**. `Return` always presses **Retry** (or **Keep changes**), `Esc` cancels, and `Space` presses the focused button. If the library doesn't answer in time, or its window crashed or reloaded with changes unsaved, the app asks natively: **Wait**, **Quit anyway** or **Cancel**. While a prompt is open, keys never change the capture behind it.
+- **Pins.** Under the image, every pin is listed as "1 · label". Press `P` or click **Add pins** to place more, drag a pin to move it, and `⌫` removes the selected one. In a label, `Return` keeps what you typed and `Esc` takes it back. `⌘Z` undoes a pin edit (a whole drag at once) and `⇧⌘Z` redoes it. A pin stays selected only while the image has the focus.
+- **Search** with `⌘F` or `Ctrl+F`. It looks in titles, descriptions, steps and pin labels. `due:today`, `due:overdue`, `due:week` (overdue, today and the next six days), `due:any` and `due:none` filter by Due. Typing `due:` lists them; the filter button in the field offers them too. Matches are highlighted.
+- **Mark as done** (`Space` on a focused sidebar row, or the check button) moves a capture to **Done**, at the foot of the sidebar; the notice offers Undo.
+- **Copy Text** (`⌘C` when nothing is selected) copies the title and description. **Copy with Details** (`⌥⌘C`) adds the steps as `- [ ]` items, `Due: <date>` and the pin labels. **Copy Image** (`⇧⌘C`) copies the crop with every pin drawn on it. Dragging the image into another app drops the same picture as a file. Every copy, the floating window's included, saves what you are typing first and waits for it to reach the disk, then copies what was on screen when you pressed it. If that save fails, or the capture already says **Not saved**, nothing is copied. The notice says why and offers **Retry**, which saves the changes so you can copy again.
+- **Float on Top** (`⌥⌘F` or `Ctrl+Alt+F`, previously "Pin") keeps the capture in a small window above every other app.
+- **Delete…** (`⌫`) asks first.
+- The ⋯ button and a right-click on a row hold the same commands with their keys. While a row's menu is open, the keys it shows act on that row's capture, not the one open, and so do they while the row has the focus after it closes. In an open menu, `Space` and `Return` pick the highlighted item, and other shortcuts do nothing until it closes. A click on search or a field closes the menu and goes straight there. `Esc`, a command or a click on empty space gives the focus back to the row or the ⋯ button. **Settings** and **Keyboard shortcuts** sit at the foot of the sidebar.
 
-- Search the thoughts with the field at the top, or with `⌘F` or `Ctrl+F`. Every word you type must appear.
-- Move through the list with `↑` and `↓`.
-- **Copy note** copies the thought, also with `⌘C` or `Ctrl+C` when no text is selected. **Copy image** copies the crop with the pin drawn on it, also with `⇧⌘C` or `Ctrl+Shift+C`. Each button shows **Copied** when it has worked.
-- Drag the image itself into another app to drop it as a file. The file carries the pin too and is named after the thought.
-- **Edit thought** changes the text, also with `Enter`. `⌘↩` saves it and `Escape` cancels. Choosing another capture with an unsaved change asks first; `⌘↩` there saves and goes on.
-- **Delete** asks once, then opens the next capture the list shows. `Backspace` or `Delete` asks too.
-- **Pin** keeps the capture in a small window above every other app, also with `⌘P` or `Ctrl+P`. Click the pinned capture for **Close**, **Copy image** and **Show in library**, or right-click it on Windows; drag it anywhere, and drag an edge to resize it. `Escape` closes it.
-- Right-click a capture in the list for the same commands. On macOS the **Capture** menu lists them with their keys.
-- `⌘W` or `Ctrl+W` closes the window, also Settings and a pinned capture.
-- To keep the library above other apps, choose **View > Keep Library on Top** on macOS, or **Keep library on top** from the pin icon on Windows.
+Captures saved by an older version open with nothing lost. A one-line thought becomes the title. A longer one stays whole, exactly as typed, as the description, and its first line becomes the title. The old pin becomes pin 1. The file is rewritten in the new format only when you change the capture.
 
 ## Settings
 
@@ -76,7 +76,7 @@ Choose **Settings…** from the app menu (`⌘,`) or the pin icon. On Windows, `
 
 - **Open at Login** starts the app when you log in.
 - **Show app icon in** (macOS): the Dock and the menu bar, the Dock only, or the menu bar only. Without the Dock icon the app has no menu bar of its own.
-- **Copy after saving** puts each saved capture on the clipboard, the image with its pin and the thought, ready to paste.
+- **Copy after saving** puts each saved capture on the clipboard, the image with its pins and its text, ready to paste.
 
 ## Where captures are stored
 
@@ -108,13 +108,14 @@ These scripts check the code. CI runs the first four on every pull request.
 | `pnpm typecheck` | Type-checks the main, preload, and renderer code in strict mode. |
 | `pnpm test` | Runs the Vitest suite. |
 | `pnpm build` | Builds the app into `out/` with electron-vite. |
+| `pnpm screens` | Builds, then screenshots every window in its main states, light and dark, as macOS and Windows show them, into `release/screens/`. It runs the pages in Playwright's Chromium with a fake preload bridge and sample data (`scripts/screens.ts`), so it needs no screen access and never starts Electron. |
 | `pnpm fix` | Formats the code and applies safe lint fixes. |
 
 To build installers on your machine, run `pnpm package:mac` on macOS or `pnpm package:win` on Windows. The files land in `release/`.
 
 ### Verify on the real macOS desktop
 
-`scripts/e2e/verify-macos.ts` drives the real app from outside. It presses the global shortcut over a marker window and checks the panel size and position. It also checks draft retention, focus return, the saved pin pixel, widening near a screen edge, the tray fallback, failed writes, restarts, the library, and the quit dialog. It reads the app's own event log and real window bounds.
+`scripts/e2e/verify-macos.ts` drives the real app from outside. It presses the global shortcut over a marker window and checks the panel size and position. A capture starts without a pin, so before each save the script clicks the preview where the pointer was, from the geometry the app logs with `panelShown`. It also checks draft retention, focus return, the saved pin pixel, widening near a screen edge, the tray fallback, failed writes, restarts, the library, and the quit dialog. It reads the app's own event log and real window bounds.
 
 ```sh
 node scripts/e2e/verify-macos.ts dev       # builds, then tests out/ with Electron

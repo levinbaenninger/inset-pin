@@ -9,5 +9,5 @@ export default defineConfig({
       "@shared": path.resolve(import.meta.dirname, "src/shared"),
     },
   },
-  test: { include: ["src/**/*.test.ts"] },
+  test: { include: ["src/**/*.test.ts", "scripts/**/*.test.ts"] },
 });

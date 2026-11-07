@@ -1,9 +1,8 @@
-import type { CaptureId } from "@shared/capture-record";
-import type { ActionResult } from "@shared/contracts";
-import { clipboard, ClipboardItem, nativeImage } from "electron";
+import type { CaptureId, SavedPin } from "@shared/capture-record";
+import { drawPins } from "@shared/pin-sprite";
+import { nativeImage } from "electron";
 
 import { exportFileName } from "./library-view";
-import { drawPinMark } from "./pin-mark";
 import type { CaptureStore } from "./store";
 
 export interface PinnedImage {
@@ -12,21 +11,26 @@ export interface PinnedImage {
   readonly fileName: string;
 }
 
-export interface CaptureExport {
-  /** The saved crop with the pin drawn on it, so the receiving app sees what mattered. */
-  readonly pinnedImage: (id: CaptureId) => PinnedImage | null;
-  readonly copyImage: (id: CaptureId) => Promise<ActionResult>;
-  readonly copyNote: (id: CaptureId) => Promise<ActionResult>;
-  /** The image and the thought in one clipboard item; an app takes whichever it can paste. */
-  readonly copyBoth: (id: CaptureId) => Promise<ActionResult>;
+/** The pins and title the page shows, when they may be newer than the saved ones. */
+export interface ShownPins {
+  readonly pins: readonly SavedPin[];
+  readonly title: string;
 }
 
-const OK: ActionResult = { ok: true };
+/**
+ * The saved crop with every pin drawn on it, so the receiving app sees what
+ * mattered. A drag passes the pins on screen, since it can't wait for a save.
+ */
+export type PinnedImageOf = (
+  id: CaptureId,
+  shown?: ShownPins
+) => PinnedImage | null;
 
-const fail = (message: string): ActionResult => ({ message, ok: false });
-
-export const createCaptureExport = (store: CaptureStore): CaptureExport => {
-  const pinnedImage = (id: CaptureId): PinnedImage | null => {
+export const createPinnedImage = (store: CaptureStore): PinnedImageOf => {
+  const pinnedImage = (
+    id: CaptureId,
+    shown?: ShownPins
+  ): PinnedImage | null => {
     const entry = store.get(id);
     const file = store.imageFile(id);
 
@@ -41,73 +45,31 @@ export const createCaptureExport = (store: CaptureStore): CaptureExport => {
     }
 
     const { height, width } = saved.getSize();
-    const { pin, image } = entry.record;
+    const { image } = entry.record;
+    const inside = shown?.pins.every((pin) => pin.x < width && pin.y < height);
 
+    const { pins, title } =
+      shown !== undefined && inside === true ? shown : entry.record;
+
+    // The same sprite the screen shows (src/shared/pin-sprite.ts), in the bitmap's BGRA order.
     const marked = nativeImage.createFromBitmap(
       Buffer.from(
-        drawPinMark(
+        drawPins(
           { data: saved.toBitmap(), height, width },
-          pin,
-          image.pixelsPerDip
+          pins,
+          image.pixelsPerDip,
+          "bgra"
         )
       ),
       { height, width }
     );
 
     return {
-      fileName: exportFileName(entry.record.thought),
+      fileName: exportFileName(title),
       image: marked,
       png: marked.toPNG(),
     };
   };
 
-  const write = async (
-    id: CaptureId,
-    withThought: boolean
-  ): Promise<ActionResult> => {
-    const pinned = pinnedImage(id);
-    const entry = store.get(id);
-
-    if (pinned === null || entry?.kind !== "ok") {
-      return fail("This capture has no readable image.");
-    }
-
-    try {
-      const png = new Blob([pinned.png], { type: "image/png" });
-
-      await clipboard.write([
-        new ClipboardItem(
-          withThought
-            ? {
-                "image/png": png,
-                "text/plain": new Blob([entry.record.thought], {
-                  type: "text/plain",
-                }),
-              }
-            : { "image/png": png }
-        ),
-      ]);
-
-      return OK;
-    } catch {
-      return fail("The image could not be copied.");
-    }
-  };
-
-  return {
-    copyBoth: async (id) => await write(id, true),
-    copyImage: async (id) => await write(id, false),
-    copyNote: async (id) => {
-      const entry = store.get(id);
-
-      if (entry?.kind !== "ok") {
-        return fail("This capture can't be copied.");
-      }
-
-      await clipboard.writeText(entry.record.thought);
-
-      return OK;
-    },
-    pinnedImage,
-  };
+  return pinnedImage;
 };

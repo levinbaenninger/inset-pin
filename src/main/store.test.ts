@@ -3,15 +3,19 @@ import {
   mkdtemp,
   readdir,
   readFile,
+  rename,
   rm,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 import { CaptureIdSchema } from "@shared/capture-record";
-import type { CaptureRecordV1 } from "@shared/capture-record";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { CaptureRecord, EditableFields } from "@shared/capture-record";
+import { DueDateSchema } from "@shared/due";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 
 import { failNextWrite, nodeStoreFs, openCaptureStore } from "./store";
 import type { CaptureStore, StoreFs } from "./store";
@@ -26,19 +30,44 @@ const PNG = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
 
 const EDIT_TIME = new Date("2026-10-21T19:00:00.000Z");
 
-const record: CaptureRecordV1 = {
+const record: CaptureRecord = {
   capturedAt: "2026-10-21T18:40:12.345Z",
+  description: "",
+  due: null,
   id: ID,
   image: { file: "crop.png", heightPx: 600, pixelsPerDip: 2, widthPx: 960 },
   invokedVia: "shortcut",
-  pin: { x: 240, y: 100 },
-  schemaVersion: 1,
+  pins: [{ x: 240, y: 100 }],
+  schemaVersion: 2,
   source: { kind: "display", label: "Built-in Retina Display" },
-  thought: "This total ignores the discount row",
+  status: { kind: "active" },
+  steps: [],
+  title: "This total ignores the discount row",
   updatedAt: "2026-10-21T18:40:31.002Z",
 };
 
-const retried: CaptureRecordV1 = {
+const v1Json = JSON.stringify({
+  capturedAt: record.capturedAt,
+  id: ID,
+  image: record.image,
+  invokedVia: "shortcut",
+  pin: { x: 240, y: 100 },
+  schemaVersion: 1,
+  source: record.source,
+  thought: "This total ignores the discount row\nCheck with finance",
+  updatedAt: record.updatedAt,
+});
+
+const fields = (change: Partial<EditableFields> = {}): EditableFields => ({
+  description: record.description,
+  due: record.due,
+  pins: record.pins,
+  steps: record.steps,
+  title: record.title,
+  ...change,
+});
+
+const retried: CaptureRecord = {
   ...record,
   updatedAt: "2026-10-21T18:45:00.000Z",
 };
@@ -49,6 +78,8 @@ type FailWhen = (op: Op, target: string) => boolean;
 
 interface FaultControl {
   failWhen: FailWhen | null;
+  /** The Node error code the injected failure carries. */
+  code?: string;
 }
 
 let root = "";
@@ -68,7 +99,9 @@ const createFaultFs = () => {
     log.push(`${op} ${relative(target)}`);
 
     if (control.failWhen?.(op, target) === true) {
-      throw Object.assign(new Error(`Injected ${op} failure`), { code: "EIO" });
+      throw Object.assign(new Error(`Injected ${op} failure`), {
+        code: control.code ?? "EIO",
+      });
     }
 
     return await run();
@@ -115,6 +148,15 @@ const createFaultFs = () => {
   };
 
   return { control, fs, log };
+};
+
+let saves = 0;
+
+/** A library save's tag: one page's epoch, a new seq each time. */
+const saveTag = () => {
+  saves += 1;
+
+  return { epoch: "library", seq: saves };
 };
 
 const counterNonce = (): (() => string) => {
@@ -179,7 +221,7 @@ describe(openCaptureStore, () => {
       value: record,
     });
     await expect(reopenList()).resolves.toStrictEqual([
-      { id: ID, kind: "ok", record },
+      { id: ID, kind: "ok", migratedFrom: null, record },
     ]);
     await expect(
       readFile(path.join(root, ID, "crop.png"))
@@ -195,17 +237,17 @@ describe(openCaptureStore, () => {
     [
       "writing crop.png",
       (op, target) => op === "write" && target.endsWith("crop.png"),
-      "Injected write failure",
+      "Couldn’t save (EIO).",
     ],
     [
       "writing capture.json",
       (op, target) => op === "write" && target.endsWith("capture.json"),
-      "Injected write failure",
+      "Couldn’t save (EIO).",
     ],
     [
       "renaming staging into place",
       (op, target) => op === "rename" && target.endsWith(ID),
-      "Injected rename failure",
+      "Couldn’t save (EIO).",
     ],
   ])(
     "leaves no partial entry when %s fails",
@@ -242,7 +284,7 @@ describe(openCaptureStore, () => {
       value: record,
     });
     await expect(reopenList()).resolves.toStrictEqual([
-      { id: ID, kind: "ok", record },
+      { id: ID, kind: "ok", migratedFrom: null, record },
     ]);
   });
 
@@ -258,19 +300,21 @@ describe(openCaptureStore, () => {
     await expect(listDir()).resolves.toStrictEqual([".staging", ".trash", ID]);
   });
 
-  it("refuses a second publish of the same id with a different thought", async () => {
+  it("refuses a second publish of the same id with a different title", async () => {
     const store = await open();
 
     await store.publish(record, PNG);
 
     await expect(
-      store.publish({ ...retried, thought: "Edited before the retry" }, PNG)
+      store.publish({ ...retried, title: "Edited before the retry" }, PNG)
     ).resolves.toStrictEqual({
       error: "writeFailed",
       message: "Another entry already uses this capture id.",
       ok: false,
     });
-    expect(store.list()).toStrictEqual([{ id: ID, kind: "ok", record }]);
+    expect(store.list()).toStrictEqual([
+      { id: ID, kind: "ok", migratedFrom: null, record },
+    ]);
     await expect(readText(ID, "capture.json")).resolves.toBe(
       JSON.stringify(record, null, 2)
     );
@@ -285,13 +329,16 @@ describe(openCaptureStore, () => {
       ok: true,
       value: record,
     });
-    expect(store.list()).toStrictEqual([{ id: ID, kind: "ok", record }]);
+    expect(store.list()).toStrictEqual([
+      { id: ID, kind: "ok", migratedFrom: null, record },
+    ]);
     await expect(listDir(".staging")).resolves.toStrictEqual([]);
   });
 
-  it.each<[string, Partial<CaptureRecordV1>]>([
-    ["thought", { thought: "Edited before the retry" }],
-    ["pin", { pin: { x: 241, y: 100 } }],
+  it.each<[string, Partial<CaptureRecord>]>([
+    ["title", { title: "Edited before the retry" }],
+    ["pin", { pins: [{ x: 241, y: 100 }] }],
+    ["pin count", { pins: [] }],
     ["crop size", { image: { ...record.image, widthPx: 1358 } }],
   ])(
     "keeps the draft when the entry at the final path has a different %s",
@@ -312,17 +359,17 @@ describe(openCaptureStore, () => {
   );
 
   it("never rewrites or removes an entry from a newer version", async () => {
-    const foreignJson = `{"schemaVersion":2,"id":"${FOREIGN_ID}"}`;
+    const foreignJson = `{"schemaVersion":3,"id":"${FOREIGN_ID}"}`;
 
     await seed(FOREIGN_ID, foreignJson);
 
     const store = await open();
 
     expect(store.list()).toStrictEqual([
-      { id: FOREIGN_ID, kind: "foreign", schemaVersion: 2 },
+      { id: FOREIGN_ID, kind: "foreign", schemaVersion: 3 },
     ]);
     await expect(
-      store.updateThought(FOREIGN_ID, "edit")
+      store.update(FOREIGN_ID, fields(), saveTag())
     ).resolves.toMatchObject({
       error: "readOnly",
     });
@@ -335,44 +382,136 @@ describe(openCaptureStore, () => {
     expect(store.imageFile(FOREIGN_ID)).toBeNull();
   });
 
-  it("updates the thought, stamps updatedAt and keeps unknown keys", async () => {
+  it("updates the fields, stamps updatedAt and keeps unknown keys", async () => {
     await seed(ID, JSON.stringify({ ...record, future: 1 }));
 
     const store = await open();
 
+    const change = fields({
+      description: "Check with finance",
+      due: DueDateSchema.parse("2026-11-07"),
+      pins: [
+        { label: "Total", x: 240, y: 100 },
+        { x: 10, y: 20 },
+      ],
+      steps: [{ done: true, id: "s1", text: "Ask" }],
+      title: "New title",
+    });
+
     const updated = {
       ...record,
+      ...change,
       future: 1,
-      thought: "New thought",
       updatedAt: "2026-10-21T19:00:00.000Z",
     };
 
-    await expect(store.updateThought(ID, "New thought")).resolves.toStrictEqual(
-      {
-        ok: true,
-        value: updated,
-      }
-    );
+    await expect(store.update(ID, change, saveTag())).resolves.toStrictEqual({
+      ok: true,
+      value: updated,
+    });
     await expect(readText(ID, "capture.json")).resolves.toBe(
       JSON.stringify(updated, null, 2)
     );
     await expect(reopenList()).resolves.toStrictEqual([
-      { id: ID, kind: "ok", record: updated },
+      { id: ID, kind: "ok", migratedFrom: null, record: updated },
     ]);
   });
 
-  it("keeps the old thought on disk and in the cache when an edit cannot be committed", async () => {
+  it("reads a v1 capture as v2 and leaves its file alone until an edit", async () => {
+    await seed(ID, v1Json);
+
+    const store = await open();
+
+    expect(store.get(ID)).toMatchObject({
+      kind: "ok",
+      migratedFrom: 1,
+      record: {
+        description: "This total ignores the discount row\nCheck with finance",
+        pins: [{ x: 240, y: 100 }],
+        title: "This total ignores the discount row",
+      },
+    });
+    await expect(readText(ID, "capture.json")).resolves.toBe(v1Json);
+
+    await store.setDone(ID, true);
+
+    const written = z
+      .record(z.string(), z.unknown())
+      .parse(JSON.parse(await readText(ID, "capture.json")));
+
+    expect(written).toMatchObject({
+      description: "This total ignores the discount row\nCheck with finance",
+      pins: [{ x: 240, y: 100 }],
+      schemaVersion: 2,
+      status: { at: "2026-10-21T19:00:00.000Z", kind: "done" },
+      title: "This total ignores the discount row",
+    });
+    expect("thought" in written).toBeFalsy();
+    expect("pin" in written).toBeFalsy();
+  });
+
+  it("settles only once every queued write, and any queued meanwhile, is done", async () => {
+    const store = await open();
+
+    await store.publish(record, PNG);
+
+    const first = store.update(ID, fields({ title: "First" }), saveTag());
+    const settled = store.settled();
+    const second = store.update(ID, fields({ title: "Second" }), saveTag());
+
+    await settled;
+
+    expect(store.get(ID)).toMatchObject({ record: { title: "Second" } });
+    await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+  });
+
+  it("marks a capture done and active again", async () => {
+    const store = await open();
+
+    await store.publish(record, PNG);
+
+    await expect(store.setDone(ID, true)).resolves.toMatchObject({
+      value: { status: { kind: "done" } },
+    });
+    await expect(store.setDone(ID, false)).resolves.toMatchObject({
+      value: { status: { kind: "active" } },
+    });
+  });
+
+  it("keeps the old record on disk and in the cache when an edit cannot be committed, and says why in plain words", async () => {
     const fault = createFaultFs();
     const store = await open(fault.fs);
 
     await store.publish(record, PNG);
-    fault.control.failWhen = (op, target) =>
-      op === "rename" && target.endsWith("capture.json");
 
-    await expect(store.updateThought(ID, "Lost?")).resolves.toMatchObject({
+    // The new file can't be renamed into place once; moving the old one back succeeds.
+    let renames = 0;
+
+    fault.control.failWhen = (op, target) => {
+      if (op === "rename" && target.endsWith("capture.json")) {
+        renames += 1;
+
+        return renames === 1;
+      }
+
+      return false;
+    };
+
+    fault.control.code = "ENOSPC";
+
+    await expect(
+      store.update(ID, fields({ title: "Lost?" }), saveTag())
+    ).resolves.toStrictEqual({
       error: "writeFailed",
+      message: "The disk is full.",
+      ok: false,
     });
-    expect(store.get(ID)).toStrictEqual({ id: ID, kind: "ok", record });
+    expect(store.get(ID)).toStrictEqual({
+      id: ID,
+      kind: "ok",
+      migratedFrom: null,
+      record,
+    });
     await expect(readText(ID, "capture.json")).resolves.toBe(
       JSON.stringify(record, null, 2)
     );
@@ -382,12 +521,84 @@ describe(openCaptureStore, () => {
     ]);
   });
 
-  it("refuses to save a blank thought", async () => {
+  it.each(["retry", "discard"] as const)(
+    "recovers in the same session on %s after installing an edit and rolling back both fail",
+    async (action) => {
+      const fault = createFaultFs();
+      const store = await open(fault.fs);
+      const tag = saveTag();
+      const change = fields({ title: "Retried edit" });
+
+      await store.publish(record, PNG);
+      fault.control.code = "EPERM";
+      fault.control.failWhen = (op, target) =>
+        op === "rename" && target.endsWith("capture.json");
+
+      await expect(store.update(ID, change, tag)).resolves.toMatchObject({
+        error: "writeFailed",
+        ok: false,
+      });
+      await expect(readText(ID, "capture.json")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect({
+        backup: await readText(ID, "capture.json.prev"),
+        shown: store.get(ID),
+      }).toStrictEqual({
+        backup: JSON.stringify(record, null, 2),
+        shown: { id: ID, kind: "ok", migratedFrom: null, record },
+      });
+
+      fault.control.failWhen = null;
+
+      const updated = {
+        ...record,
+        ...change,
+        updatedAt: EDIT_TIME.toISOString(),
+      };
+
+      const retryResult =
+        action === "retry" ? await store.update(ID, change, tag) : null;
+
+      expect({
+        disk: action === "retry" ? await readText(ID, "capture.json") : null,
+        retryResult,
+      }).toStrictEqual({
+        disk: action === "retry" ? JSON.stringify(updated, null, 2) : null,
+        retryResult: action === "retry" ? { ok: true, value: updated } : null,
+      });
+
+      const discarded = await store.discard(ID, tag);
+
+      expect({
+        discarded,
+        disk: await readText(ID, "capture.json"),
+        left: await listDir(ID),
+        owed: store.owed(),
+        shown: store.get(ID),
+      }).toStrictEqual({
+        discarded: { ok: true, value: null },
+        disk: JSON.stringify(record, null, 2),
+        left: ["capture.json", "crop.png"],
+        owed: [],
+        shown: { id: ID, kind: "ok", migratedFrom: null, record },
+      });
+    }
+  );
+
+  it("refuses a blank title and a pin outside the crop", async () => {
     const store = await open();
 
     await store.publish(record, PNG);
 
-    await expect(store.updateThought(ID, "  \n")).resolves.toMatchObject({
+    await expect(
+      store.update(ID, fields({ title: "  " }), saveTag())
+    ).resolves.toMatchObject({
+      error: "invalid",
+    });
+    await expect(
+      store.update(ID, fields({ pins: [{ x: 960, y: 0 }] }), saveTag())
+    ).resolves.toMatchObject({
       error: "invalid",
     });
   });
@@ -410,7 +621,7 @@ describe(openCaptureStore, () => {
 
     const results = await Promise.all([
       store.publish(record, PNG),
-      store.updateThought(ID, "Edited"),
+      store.update(ID, fields({ title: "Edited" }), saveTag()),
       store.remove(ID),
     ]);
 
@@ -426,6 +637,7 @@ describe(openCaptureStore, () => {
       `rename ${ID}`,
       "sync .",
       `write ${ID}/capture.json.n2.tmp`,
+      `rename ${ID}/capture.json.prev`,
       `rename ${ID}/capture.json`,
       `rename .trash/${ID}.n3`,
       `rm .trash/${ID}.n3`,
@@ -456,7 +668,7 @@ describe(openCaptureStore, () => {
       value: record,
     });
     await expect(reopenList()).resolves.toStrictEqual([
-      { id: ID, kind: "ok", record },
+      { id: ID, kind: "ok", migratedFrom: null, record },
     ]);
   });
 
@@ -489,12 +701,268 @@ describe(openCaptureStore, () => {
 
     await expect(store.publish(record, PNG)).resolves.toStrictEqual({
       error: "writeFailed",
-      message: "Simulated write failure (INSET_FAIL_NEXT_WRITE)",
+      message: "Couldn’t save.",
       ok: false,
     });
     await expect(store.publish(record, PNG)).resolves.toStrictEqual({
       ok: true,
       value: record,
     });
+  });
+});
+
+/** Holds the next content write until the test lets it go. */
+const holdingFs = () => {
+  const fault = createFaultFs();
+  const gate = { armed: false, held: false, release: (): void => undefined };
+
+  const fs: StoreFs = {
+    ...fault.fs,
+    writeFileDurable: async (target, data) => {
+      if (gate.armed) {
+        gate.armed = false;
+        gate.held = true;
+        // oxlint-disable-next-line promise/avoid-new -- the test lets the held write go on later, through this callback.
+        await new Promise<void>((resolve) => {
+          gate.release = resolve;
+        });
+      }
+
+      await fault.fs.writeFileDurable(target, data);
+    },
+  };
+
+  return { fault, fs, gate };
+};
+
+const onDisk = async (): Promise<CaptureRecord> =>
+  z
+    .custom<CaptureRecord>()
+    .parse(JSON.parse(await readText(ID, "capture.json")));
+
+describe("Discard changes on the store (SPEC round 8)", () => {
+  const TAG = { epoch: "page.1", seq: 1 };
+  const LATER = { epoch: "page.2", seq: 2 };
+
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(tmpdir(), "inset-store-"));
+  });
+
+  afterEach(async () => {
+    await rm(root, { force: true, recursive: true });
+  });
+
+  it("drops a discarded save before it replaces capture.json, and settles without waiting for it", async () => {
+    const { fault, fs, gate } = holdingFs();
+    const store = await open(fs);
+
+    await store.publish(record, PNG);
+    gate.armed = true;
+
+    const saving = store.update(ID, fields({ title: "Discarded" }), TAG);
+
+    await vi.waitFor(() => {
+      expect(gate.held).toBeTruthy();
+    });
+
+    const discarded = store.discard(ID, TAG);
+
+    const settledEarly = await Promise.race([
+      store.settled().then(() => "settled"),
+      delay(200).then(() => "still waiting"),
+    ]);
+
+    fault.log.length = 0;
+    gate.release();
+
+    const after = await onDisk();
+
+    expect({
+      disk: after.title,
+      discarded: await discarded,
+      ops: fault.log,
+      saving: await saving,
+      settledEarly,
+      shown: store.get(ID),
+    }).toStrictEqual({
+      disk: record.title,
+      discarded: { ok: true, value: null },
+      ops: [`write ${ID}/capture.json.n2.tmp`, `rm ${ID}/capture.json.n2.tmp`],
+      saving: {
+        error: "discarded",
+        message: "The changes were discarded.",
+        ok: false,
+      },
+      settledEarly: "settled",
+      shown: { id: ID, kind: "ok", migratedFrom: null, record },
+    });
+  });
+
+  it("undoes a discarded save that already replaced capture.json by renaming the old file back, writing only its empty marker", async () => {
+    const fault = createFaultFs();
+    const store = await open(fault.fs);
+
+    await store.publish(record, PNG);
+    await store.update(ID, fields({ title: "Discarded" }), TAG);
+    fault.log.length = 0;
+    fault.control.failWhen = (op) => op === "write";
+    fault.control.code = "ENOSPC";
+
+    await expect(store.discard(ID, TAG)).resolves.toStrictEqual({
+      ok: true,
+      value: null,
+    });
+    expect({
+      disk: await onDisk(),
+      left: await listDir(ID),
+      ops: fault.log.filter((op) => !op.startsWith("sync ")),
+      shown: store.get(ID),
+    }).toStrictEqual({
+      disk: record,
+      left: ["capture.json", "crop.png"],
+      ops: [
+        `write ${ID}/capture.json.discard`,
+        `rename ${ID}/capture.json`,
+        `rm ${ID}/capture.json.discard`,
+      ],
+      shown: { id: ID, kind: "ok", migratedFrom: null, record },
+    });
+  });
+
+  it("keeps a capture marked done after the discarded save", async () => {
+    const store = await open();
+
+    await store.publish(record, PNG);
+    await store.update(ID, fields({ title: "Discarded" }), TAG);
+    await store.setDone(ID, true);
+    await store.discard(ID, TAG);
+
+    const disk = await onDisk();
+
+    expect([disk.title, disk.status.kind]).toStrictEqual([
+      record.title,
+      "done",
+    ]);
+    expect(store.get(ID)).toMatchObject({
+      record: { status: { kind: "done" }, title: record.title },
+    });
+  });
+
+  it("fails a Mark as done whose backup can't take it, so Discard still puts back the saved version", async () => {
+    const fault = createFaultFs();
+    const store = await open(fault.fs);
+
+    await store.publish(record, PNG);
+    await store.update(ID, fields({ title: "Discarded" }), TAG);
+    fault.control.code = "EPERM";
+    fault.control.failWhen = (op, target) =>
+      op === "rename" && target.endsWith("capture.json.prev");
+
+    const done = await store.setDone(ID, true);
+
+    fault.control.failWhen = null;
+
+    const discarded = await store.discard(ID, TAG);
+
+    expect({
+      discarded,
+      disk: await onDisk(),
+      done,
+      left: await listDir(ID),
+    }).toStrictEqual({
+      discarded: { ok: true, value: null },
+      disk: record,
+      done: {
+        error: "writeFailed",
+        message: "Inset can’t write to its data folder.",
+        ok: false,
+      },
+      left: ["capture.json", "crop.png"],
+    });
+  });
+
+  it("undoes nothing when a later save replaced capture.json since, and lands a newer epoch's save queued behind a discarded one", async () => {
+    const { fs, gate } = holdingFs();
+    const store = await open(fs);
+
+    await store.publish(record, PNG);
+    await store.update(ID, fields({ title: "Confirmed" }), TAG);
+    gate.armed = true;
+
+    const discarded = store.update(ID, fields({ title: "Discarded" }), {
+      epoch: TAG.epoch,
+      seq: 3,
+    });
+
+    await vi.waitFor(() => {
+      expect(gate.held).toBeTruthy();
+    });
+    void store.discard(ID, { epoch: TAG.epoch, seq: 3 });
+
+    const newer = store.update(ID, fields({ title: "Newer" }), LATER);
+
+    gate.release();
+    await store.settled();
+
+    const results = await Promise.all([discarded, newer]);
+    const landed = await onDisk();
+
+    expect([...results.map((result) => result.ok), landed.title]).toStrictEqual(
+      [false, true, "Newer"]
+    );
+
+    // An earlier, confirmed save is never undone: only the save a discard names is.
+    await store.discard(ID, TAG);
+
+    const kept = await onDisk();
+
+    expect(kept.title).toBe("Newer");
+  });
+
+  it("puts a v1 capture's own file back when its first edit is discarded", async () => {
+    await seed(ID, v1Json);
+
+    const store = await open();
+
+    await store.update(ID, fields({ title: "Discarded" }), TAG);
+    await store.discard(ID, TAG);
+
+    await expect(readText(ID, "capture.json")).resolves.toBe(v1Json);
+    expect(store.get(ID)).toMatchObject({ migratedFrom: 1 });
+  });
+
+  it("clears a temp file a quit left behind in a capture's folder at the next open", async () => {
+    const store = await open();
+
+    await store.publish(record, PNG);
+    await writeFile(path.join(root, ID, "capture.json.abc.tmp"), "{}");
+    await open();
+
+    await expect(listDir(ID)).resolves.toStrictEqual([
+      "capture.json",
+      "crop.png",
+    ]);
+  });
+
+  it("opens a capture whose last save was cut off between its two renames from the file it moved aside", async () => {
+    const store = await open();
+
+    await store.publish(record, PNG);
+    await store.update(ID, fields({ title: "Saved" }), TAG);
+    await rename(
+      path.join(root, ID, "capture.json"),
+      path.join(root, ID, "capture.json.prev")
+    );
+
+    const reopened = await open();
+
+    expect(reopened.get(ID)).toMatchObject({
+      kind: "ok",
+      record: { title: "Saved" },
+    });
+    await expect(listDir(ID)).resolves.toStrictEqual([
+      "capture.json",
+      "crop.png",
+    ]);
   });
 });

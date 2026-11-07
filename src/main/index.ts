@@ -2,13 +2,14 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 
-import { CaptureIdSchema, deriveTitle } from "@shared/capture-record";
-import type { PointVia } from "@shared/capture-record";
+import { CaptureIdSchema } from "@shared/capture-record";
+import type { CaptureId, PointVia } from "@shared/capture-record";
 import {
   captureContract,
   pinContract,
   settingsContract,
 } from "@shared/contracts";
+import type { SavedEdits } from "@shared/contracts";
 import type { IconPlace, SettingsView } from "@shared/settings";
 import {
   CAPTURE_ACCELERATOR,
@@ -31,7 +32,8 @@ import electronUpdater from "electron-updater";
 import { appMenuTemplate, HELP_URL } from "./app-menu";
 import type { AppMenuActions, AppMenuState } from "./app-menu";
 import { captureDisplay, sampleAnchor } from "./capture";
-import { createCaptureExport } from "./capture-export";
+import { createPinnedImage } from "./capture-export";
+import { createCopyGate, electronClipboard } from "./copy-gate";
 import { createDraftController } from "./draft";
 import { e2eLog } from "./e2e-log";
 import { serveContract } from "./ipc-kit";
@@ -150,7 +152,29 @@ const start = async (): Promise<void> => {
   );
 
   const settings = await openSettingsStore(dataDir, nodeSettingsFs);
-  const exporter = createCaptureExport(store);
+  const pinnedImage = createPinnedImage(store);
+
+  // The library saves its typing before every copy; it is created further down, and has nothing typed until then.
+  const libraryEdits = {
+    save: async (_id: CaptureId): Promise<SavedEdits> =>
+      await Promise.resolve({ fields: null, ok: true as const }),
+  };
+
+  const copy = createCopyGate({
+    clipboard: electronClipboard,
+    pinnedImage,
+    saveEdits: async (id) => await libraryEdits.save(id),
+    store,
+  });
+
+  // A floating capture's own menu on Windows has no page to say a failed copy on.
+  const copyAndSay = async (id: CaptureId): Promise<void> => {
+    const copied = await copy(id, "image");
+
+    if (!copied.ok) {
+      showNotification(copied.message);
+    }
+  };
 
   let shortcutRegistered = false;
   let countdown: NodeJS.Timeout | null = null;
@@ -160,6 +184,9 @@ const start = async (): Promise<void> => {
   const menus = { refresh: ignore };
 
   let updater: Updater | null = null;
+
+  // The library's New capture button reaches the delayed capture, defined further down, through this.
+  const startCapture = { soon: ignore };
 
   // A pin and the library open each other, so a pin reaches the library through this once it exists.
   let openLibrary: LibraryWindow["open"] = ignore;
@@ -173,7 +200,9 @@ const start = async (): Promise<void> => {
   });
 
   const pins = createPinWindows({
-    copyImage: exporter.copyImage,
+    copyImage: (id) => {
+      void copyAndSay(id);
+    },
     preload: preloadPath("pin"),
     showInLibrary: (id) => {
       openLibrary(id);
@@ -183,7 +212,10 @@ const start = async (): Promise<void> => {
   });
 
   const library = createLibraryWindow({
-    exporter,
+    captureSoon: () => {
+      startCapture.soon();
+    },
+    copy,
     onClosed: () => {
       e2eLog("libraryClosed");
       menus.refresh();
@@ -199,7 +231,8 @@ const start = async (): Promise<void> => {
     openSettings: () => {
       settingsWindow.open();
     },
-    pinToScreen: pins.open,
+    floatOnTop: pins.open,
+    pinnedImage,
     preload: preloadPath("library"),
     status: () => ({
       iconIn: settings.current().iconIn,
@@ -210,6 +243,7 @@ const start = async (): Promise<void> => {
   });
 
   openLibrary = library.open;
+  libraryEdits.save = library.saveEdits;
 
   const surface = createCaptureSurface({
     // The panel never activates the app, so the app in front keeps the keyboard without app.hide().
@@ -237,8 +271,16 @@ const start = async (): Promise<void> => {
 
       e2eLog(result.ok ? "saved" : "saveFailed", { draftId: record.id });
 
-      if (result.ok && settings.current().copyAfterSave) {
-        const copied = await exporter.copyBoth(record.id);
+      const shown = draft.view();
+
+      // A capture discarded while its save was on its way is withdrawn, so it isn’t copied either.
+      if (
+        result.ok &&
+        settings.current().copyAfterSave &&
+        shown.kind === "draft" &&
+        shown.draftId === record.id
+      ) {
+        const copied = await copy(record.id, "imageAndDetails");
 
         if (!copied.ok) {
           showNotification(`Saved, but not copied. ${copied.message}`);
@@ -249,6 +291,9 @@ const start = async (): Promise<void> => {
     },
     quit: () => {
       resumeQuit();
+    },
+    withdraw: async (id) => {
+      await store.withdraw(id);
     },
     surface,
   });
@@ -323,8 +368,8 @@ const start = async (): Promise<void> => {
         const id = pins.captureOf(sender.id);
 
         return id === null
-          ? { message: "This pin has no capture.", ok: false }
-          : await exporter.copyImage(id);
+          ? { message: "This pin has no capture.", ok: false, retry: false }
+          : await copy(id, "image");
       },
       get: (_input, sender) => {
         const id = pins.captureOf(sender.id);
@@ -338,6 +383,13 @@ const start = async (): Promise<void> => {
         if (id !== null) {
           library.open(id);
         }
+      },
+      retrySave: async (_input, sender) => {
+        const id = pins.captureOf(sender.id);
+
+        return id === null
+          ? { message: "This pin has no capture.", ok: false }
+          : await library.retryEdits(id);
       },
     },
     {
@@ -371,6 +423,8 @@ const start = async (): Promise<void> => {
     menus.refresh();
   };
 
+  startCapture.soon = captureAfterDelay;
+
   const menuModel = (): TrayModel => ({
     countdownPending: countdown !== null,
     draft: draft.tray(),
@@ -381,13 +435,16 @@ const start = async (): Promise<void> => {
       .list()
       .flatMap((entry) =>
         entry.kind === "ok"
-          ? [{ id: entry.record.id, title: deriveTitle(entry.record.thought) }]
+          ? [{ id: entry.record.id, title: entry.record.title }]
           : []
       ),
     shortcutRegistered,
     update: updater?.state() ?? null,
     version: app.getVersion(),
   });
+
+  /** Set once the library's typing is saved for this quit; a quit the draft holds clears it. */
+  let editsSaved = false;
 
   const quitGate = createQuitGate({
     holdIfNeeded: draft.holdQuitIfNeeded,
@@ -398,8 +455,17 @@ const start = async (): Promise<void> => {
     releaseWindows: () => {
       surface.allowClose();
       settingsWindow.allowClose();
+      library.allowClose();
     },
+    // A restart the draft held starts again from the top, so the library saves its typing and the disk finishes first.
+    restart: () => {
+      library.leave("restart", () => {
+        quitGate.restartToUpdate();
+      });
+    },
+    // Set only as the install starts, so a restart the draft holds still saves the library's typing on the next quit.
     restartToUpdate: () => {
+      editsSaved = true;
       updater?.install();
     },
   });
@@ -408,7 +474,21 @@ const start = async (): Promise<void> => {
 
   const installUpdate = (): void => {
     if (updater?.state().kind === "ready") {
-      quitGate.restartToUpdate();
+      library.leave("restart", () => {
+        quitGate.restartToUpdate();
+      });
+    }
+  };
+
+  /** The sheet lives in the library, which opens first when it is closed. */
+  const showShortcuts = (): void => {
+    if (library.isOpen()) {
+      library.command("shortcuts");
+    } else {
+      library.open();
+      library.whenLoaded(() => {
+        library.command("shortcuts");
+      });
     }
   };
 
@@ -419,6 +499,8 @@ const start = async (): Promise<void> => {
       library.open();
     } else if (action === "openSettings") {
       settingsWindow.open();
+    } else if (action === "showShortcuts") {
+      showShortcuts();
     } else if (action === "toggleLibraryOnTop") {
       library.setFloating(!library.isFloating());
       menus.refresh();
@@ -454,6 +536,10 @@ const start = async (): Promise<void> => {
       library.open();
     },
     openSettings: settingsWindow.open,
+    pageMenuOpen: library.menuOpen,
+    showShortcuts: () => {
+      showShortcuts();
+    },
     setFloatOnTop: (on) => {
       library.setFloating(on);
       menus.refresh();
@@ -471,6 +557,7 @@ const start = async (): Promise<void> => {
       floatOnTop: library.isFloating(),
       libraryFocused: library.isFocused(),
       libraryOpen: library.isOpen(),
+      shownDone: library.shownDone(),
       update: model.update,
     };
 
@@ -575,7 +662,15 @@ const start = async (): Promise<void> => {
     draft.dismiss();
   });
   surface.onShown((bounds) => {
-    e2eLog("panelShown", { bounds, draftId: currentDraftId() });
+    const view = draft.view();
+    const pointer = view.kind === "draft" ? draft.pointer(view.draftId) : null;
+
+    const preview =
+      view.kind === "draft" && pointer !== null
+        ? { crop: view.seed.crop, frame: view.frame.size, pointer }
+        : undefined;
+
+    e2eLog("panelShown", { bounds, draftId: currentDraftId(), preview });
   });
   surface.onHidden(() => {
     e2eLog("panelHidden");
@@ -610,9 +705,21 @@ const start = async (): Promise<void> => {
   app.on("second-instance", () => {
     library.open();
   });
+
   app.on("before-quit", (event) => {
+    if (!editsSaved) {
+      event.preventDefault();
+      library.leave("quit", () => {
+        editsSaved = true;
+        app.quit();
+      });
+
+      return;
+    }
+
     if (!quitGate.allowQuit()) {
       event.preventDefault();
+      editsSaved = false;
     }
   });
   app.on("will-quit", () => {

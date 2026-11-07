@@ -133,7 +133,7 @@ describe(scaleCrop, () => {
   it("widens about the pin and keeps its relative position", () => {
     const pin = pt<"image">(1200, 700);
     const before = rect<"image">(960, 600, 960, 600);
-    const after = scaleCrop(before, pin, 2, retina, 2);
+    const after = scaleCrop(before, [pin], 2, retina, 2);
 
     expect(after).toStrictEqual({ height: 1200, width: 1920, x: 720, y: 500 });
     expect(pinInCrop(pin, before)).toStrictEqual({ x: 240, y: 100 });
@@ -148,7 +148,7 @@ describe(scaleCrop, () => {
 
   it("keeps a pin near an edge on the same image detail after widening", () => {
     const pin = pt<"image">(50, 40);
-    const after = scaleCrop(rect(0, 0, 960, 600), pin, 2, retina, 2);
+    const after = scaleCrop(rect(0, 0, 960, 600), [pin], 2, retina, 2);
 
     expect(after).toStrictEqual({ height: 1200, width: 1920, x: 0, y: 0 });
     expect(pinInCrop(pin, after)).toStrictEqual({ x: 50, y: 40 });
@@ -156,13 +156,13 @@ describe(scaleCrop, () => {
 
   it("stops at the whole image", () => {
     expect(
-      scaleCrop(rect(720, 500, 1920, 1200), pt(1200, 700), 2, retina, 2)
+      scaleCrop(rect(720, 500, 1920, 1200), [pt(1200, 700)], 2, retina, 2)
     ).toStrictEqual({ height: 1800, width: 2880, x: 0, y: 0 });
   });
 
   it("stops tightening at 160×100 DIP", () => {
     expect(
-      scaleCrop(rect(960, 600, 960, 600), pt(1200, 700), 0.25, retina, 2)
+      scaleCrop(rect(960, 600, 960, 600), [pt(1200, 700)], 0.25, retina, 2)
     ).toStrictEqual({ height: 200, width: 320, x: 1120, y: 667 });
   });
 });
@@ -179,14 +179,17 @@ describe(clampPin, () => {
 describe(normalizeGeometry, () => {
   it("repairs an out-of-image crop and pulls the pin inside, idempotently", () => {
     const once = normalizeGeometry(
-      { crop: rect(2800, 0, 960, 600), pin: pt(0, 0) },
+      { crop: rect(2800, 0, 960, 600), pins: [pt(0, 0), pt(3000, 1000)] },
       retina,
       2
     );
 
     expect(once).toStrictEqual({
       crop: { height: 600, width: 960, x: 1920, y: 0 },
-      pin: { x: 1920, y: 0 },
+      pins: [
+        { x: 1920, y: 0 },
+        { x: 2879, y: 599 },
+      ],
     });
     expect(normalizeGeometry(once, retina, 2)).toStrictEqual(once);
   });
@@ -197,7 +200,7 @@ describe(moveCrop, () => {
   const pin = pt<"image">(1200, 700);
 
   it("moves by the drag", () => {
-    expect(moveCrop(crop, pt(100, -50), pin, retina)).toStrictEqual({
+    expect(moveCrop(crop, pt(100, -50), [pin], retina)).toStrictEqual({
       height: 600,
       width: 960,
       x: 1060,
@@ -206,17 +209,19 @@ describe(moveCrop, () => {
   });
 
   it("stops at the image edge, and at the pin first", () => {
-    expect(moveCrop(crop, pt(0, 5000), pt(1200, 1500), retina)).toMatchObject({
-      y: 1200,
-    });
-    expect(moveCrop(crop, pt(-5000, 5000), pin, retina)).toMatchObject({
+    expect(moveCrop(crop, pt(0, 5000), [pt(1200, 1500)], retina)).toMatchObject(
+      {
+        y: 1200,
+      }
+    );
+    expect(moveCrop(crop, pt(-5000, 5000), [pin], retina)).toMatchObject({
       x: 241,
       y: 700,
     });
   });
 
   it("never leaves the pin outside", () => {
-    const moved = moveCrop(crop, pt(900, 0), pin, retina);
+    const moved = moveCrop(crop, pt(900, 0), [pin], retina);
 
     expect(moved.x).toBe(1200);
     expect(pin.x).toBeGreaterThanOrEqual(moved.x);
@@ -229,9 +234,9 @@ describe(resizeCrop, () => {
 
   it("moves only the dragged edges", () => {
     expect(
-      resizeCrop(crop, "se", pt(2400, 1500), pin, retina, 2)
+      resizeCrop(crop, "se", pt(2400, 1500), [pin], retina, 2)
     ).toStrictEqual({ height: 900, width: 1440, x: 960, y: 600 });
-    expect(resizeCrop(crop, "w", pt(100, 0), pin, retina, 2)).toStrictEqual({
+    expect(resizeCrop(crop, "w", pt(100, 0), [pin], retina, 2)).toStrictEqual({
       height: 600,
       width: 1820,
       x: 100,
@@ -241,20 +246,59 @@ describe(resizeCrop, () => {
 
   it("stops at the image", () => {
     expect(
-      resizeCrop(crop, "nw", pt(-300, -300), pin, retina, 2)
+      resizeCrop(crop, "nw", pt(-300, -300), [pin], retina, 2)
     ).toStrictEqual({ height: 1200, width: 1920, x: 0, y: 0 });
   });
 
   it("stops at the pin and at the smallest crop", () => {
-    expect(resizeCrop(crop, "w", pt(1900, 0), pin, retina, 2).x).toBe(1200);
-    expect(resizeCrop(crop, "e", pt(0, 0), pin, retina, 2)).toMatchObject({
+    expect(resizeCrop(crop, "w", pt(1900, 0), [pin], retina, 2).x).toBe(1200);
+    expect(resizeCrop(crop, "e", pt(0, 0), [pin], retina, 2)).toMatchObject({
       width: 320,
       x: 960,
     });
-    expect(resizeCrop(crop, "n", pt(0, 9999), pin, retina, 2)).toMatchObject({
+    expect(resizeCrop(crop, "n", pt(0, 9999), [pin], retina, 2)).toMatchObject({
       height: 500,
       y: 700,
     });
+  });
+});
+
+describe("crops with several pins or none", () => {
+  const pins = [pt<"image">(1000, 650), pt<"image">(1800, 1100)];
+
+  it("never tightens past the box the pins need", () => {
+    const tight = scaleCrop(rect(960, 600, 960, 600), pins, 0.1, retina, 2);
+
+    expect(tight.width).toBeGreaterThanOrEqual(801);
+    expect(tight.height).toBeGreaterThanOrEqual(451);
+    expect(tight.x).toBeLessThanOrEqual(1000);
+    expect(tight.x + tight.width).toBeGreaterThan(1800);
+  });
+
+  it("scales about the crop's middle without pins", () => {
+    expect(scaleCrop(rect(960, 600, 960, 600), [], 2, retina, 2)).toStrictEqual(
+      { height: 1200, width: 1920, x: 480, y: 300 }
+    );
+  });
+
+  it("moves freely without pins, inside the image", () => {
+    expect(
+      moveCrop(rect(960, 600, 960, 600), pt(-5000, 0), [], retina)
+    ).toMatchObject({ x: 0, y: 600 });
+  });
+
+  it("keeps every pin while moving and resizing", () => {
+    const crop = rect<"image">(960, 600, 960, 600);
+
+    expect(moveCrop(crop, pt(500, 0), pins, retina).x).toBe(1000);
+    expect(resizeCrop(crop, "e", pt(0, 0), pins, retina, 2).width).toBe(841);
+    expect(resizeCrop(crop, "w", pt(1500, 0), pins, retina, 2).x).toBe(1000);
+  });
+
+  it("resizes down to the smallest crop without pins", () => {
+    expect(
+      resizeCrop(rect(960, 600, 960, 600), "e", pt(0, 0), [], retina, 2).width
+    ).toBe(320);
   });
 });
 

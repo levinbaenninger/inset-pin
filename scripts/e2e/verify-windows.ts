@@ -17,9 +17,10 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { z } from "zod";
 
-import { PIN_RGB } from "../../src/main/pin-mark.ts";
-import { CaptureRecordV1Schema } from "../../src/shared/capture-record.ts";
+import { CaptureRecordSchema } from "../../src/shared/capture-record.ts";
 import { DEFAULT_CROP_DIP } from "../../src/shared/geometry.ts";
+import { PIN_RGB } from "../../src/shared/pin-sprite.ts";
+import { pinClickPoint } from "./pin-click.ts";
 
 const root = path.resolve(import.meta.dirname, "../..");
 const mode = process.argv[2] === "packaged" ? "packaged" : "dev";
@@ -61,6 +62,19 @@ const EventSchema = z.object({
     .optional(),
   draftId: z.string().optional(),
   event: z.string(),
+  /** Logged with panelShown: where the pointer was in the captured frame, and the crop. */
+  preview: z
+    .object({
+      crop: z.object({
+        height: z.number(),
+        width: z.number(),
+        x: z.number(),
+        y: z.number(),
+      }),
+      frame: z.object({ height: z.number(), width: z.number() }),
+      pointer: z.object({ x: z.number(), y: z.number() }),
+    })
+    .optional(),
   t: z.number(),
   windows: z.number(),
 });
@@ -80,10 +94,13 @@ const WindowSchema = z.object({
   y: z.number(),
 });
 
+/** x and y are the centre; width and height the size, in physical pixels as UI Automation reports them. */
 const ElementSchema = z.object({
   enabled: z.boolean(),
+  height: z.number(),
   name: z.string(),
   type: z.string(),
+  width: z.number(),
   x: z.number(),
   y: z.number(),
 });
@@ -198,6 +215,24 @@ const findButton = async (name: string, attempts = 10): Promise<Element> => {
   await delay(400);
 
   return await findButton(name, attempts - 1);
+};
+
+/** Any element by the start of its name, such as the preview, "Screenshot with 0 pins". */
+const findNamed = async (
+  name: string,
+  attempts = 10
+): Promise<Element | null> => {
+  const hit = elements().find(
+    (element) => element.name.startsWith(name) && element.x > 0
+  );
+
+  if (hit !== undefined || attempts <= 1) {
+    return hit ?? null;
+  }
+
+  await delay(400);
+
+  return await findNamed(name, attempts - 1);
 };
 
 const clickButton = async (name: string) => {
@@ -381,26 +416,67 @@ const openPanel = async (label: string) => {
   return { captured, shown };
 };
 
-/** The pin pixel of a saved crop, read from the file. */
+/**
+ * A capture starts with no pin, so the flow clicks the preview where the
+ * pointer was, as a person clicks the detail they pointed at. Type the title
+ * first: the click keeps the keyboard in the title, but a click on the
+ * preview's background would take it if nothing had it.
+ */
+const placePin = async (shown: AppEvent | undefined, label: string) => {
+  const preview = await findNamed("Screenshot with");
+
+  if (shown?.preview === undefined || preview === null) {
+    record(
+      `${label}: click places pin 1`,
+      false,
+      shown?.preview === undefined ? "no preview logged" : "preview not found"
+    );
+
+    return;
+  }
+
+  const at = pinClickPoint(shown.preview, {
+    height: preview.height,
+    width: preview.width,
+    x: preview.x - preview.width / 2,
+    y: preview.y - preview.height / 2,
+  });
+
+  click(appPid(), at.x, at.y);
+  record(
+    `${label}: click places pin 1`,
+    (await findNamed("Screenshot with 1 pin")) !== null,
+    `${at.x},${at.y}`
+  );
+};
+
+/** The pixel under pin 1 of a saved crop, read from the file; with no pin saved, the check fails and says so. */
 const inspectRecord = (captureId: string, dataDir = userData) => {
   const dir = path.join(dataDir, "captures", captureId);
 
-  const stored = CaptureRecordV1Schema.parse(
+  const stored = CaptureRecordSchema.parse(
     JSON.parse(readFileSync(path.join(dir, "capture.json"), "utf-8"))
   );
+
+  const [pin] = stored.pins;
 
   const pixel = helper(
     RgbSchema.extend({ height: z.number(), width: z.number() }),
     "filepixel",
     path.join(dir, "crop.png"),
-    String(stored.pin.x),
-    String(stored.pin.y)
+    String(pin?.x ?? 0),
+    String(pin?.y ?? 0)
   );
 
   return {
     height: pixel.height,
-    onMarker: pixel.r > 200 && pixel.g < 90 && pixel.b > 200,
-    rgb: `rgb(${pixel.r},${pixel.g},${pixel.b})`,
+    onMarker:
+      pin !== undefined && pixel.r > 200 && pixel.g < 90 && pixel.b > 200,
+    pin,
+    rgb:
+      pin === undefined
+        ? "no pin saved"
+        : `rgb(${pixel.r},${pixel.g},${pixel.b})`,
     stored,
     width: pixel.width,
   };
@@ -467,7 +543,7 @@ const checkFirstLaunch = async () => {
   );
   record(
     "the welcome says how to capture",
-    await windowShows("Inset Context Pin is running"),
+    await windowShows("Point at it, pin it, say why"),
     windowText().replaceAll(/\s+/gu, " ").slice(0, 160)
   );
   await delay(500);
@@ -599,8 +675,11 @@ const checkSave = async () => {
   let mark = events().length;
 
   shortcut();
-  await waitFor("panelShown", mark);
+
+  const shown = await waitFor("panelShown", mark);
+
   await delay(300);
+  await placePin(shown, "first capture");
   mark = events().length;
   keys("ctrl+enter");
   record("Ctrl+Enter saves", (await waitFor("saved", mark)) !== undefined);
@@ -634,8 +713,8 @@ const checkSavedRecord = (captureId: string | undefined) => {
   record("record persisted", true, captureId);
   record(
     "thought typed across two panel sessions",
-    stored.thought === thought,
-    JSON.stringify(stored.thought)
+    stored.title === thought,
+    JSON.stringify(stored.title)
   );
   record(
     "crop is the default size",
@@ -703,6 +782,7 @@ const checkSecondDisplay = async () => {
   );
   shotApp("04-panel-second-display");
   await typeText("Second display detail");
+  await placePin(shown, "second display");
 
   const mark = events().length;
 
@@ -723,8 +803,11 @@ const checkSecondDisplay = async () => {
 
 const checkFailedWrite = async () => {
   await focusMarker();
-  await openPanel("failed write");
+
+  const { shown } = await openPanel("failed write");
+
   await typeText("Retry me");
+  await placePin(shown, "failed write");
 
   let mark = events().length;
 
@@ -749,11 +832,14 @@ const checkFailedWrite = async () => {
 const checkEdgeWiden = async () => {
   await startMarker(edgeMarker);
   await focusMarker();
-  await openPanel("point near the screen edge");
+
+  const { shown } = await openPanel("point near the screen edge");
+
   await typeText("Edge detail");
-  await clickButton("Widen context");
+  await placePin(shown, "edge capture");
+  await clickButton("Widen");
   await delay(300);
-  await clickButton("Widen context");
+  await clickButton("Widen");
   await delay(300);
   shotApp("06-panel-widened");
 
@@ -796,6 +882,7 @@ const checkTrayFallback = async () => {
   record("tray panel has the keyboard", appInFront(), front().title);
   await clickFieldIfUnfocused();
   await typeText("Via tray");
+  await placePin(shown, "tray capture");
   keys("ctrl+enter");
 
   const saved = await waitFor("saved", mark);
@@ -843,30 +930,38 @@ const checkLibrary = async (newest: string | null) => {
     helper(Ok, "focus", String(window.hwnd));
   }
 
-  await clickButton("Copy note");
+  // Ctrl+C with nothing selected copies the capture as text: its title, here.
+  keys("ctrl+c");
   await delay(400);
   record(
-    "Copy note puts the newest thought on the clipboard",
+    "Ctrl+C copies the newest capture as text",
     helper(z.string().nullable(), "cliptext") === "Via tray"
   );
 
-  await clickButton("Copy image");
+  await clickButton("Copy image with pins");
   await delay(600);
 
   const copied = path.join(work, "copied.png");
   const image = helper(z.object({ ok: z.boolean() }), "clipimage", copied);
 
-  if (!image.ok || newest === null) {
-    record("Copy image puts a picture on the clipboard", false);
-  } else {
-    const { stored } = inspectRecord(newest);
+  const newestRecord = newest === null ? null : inspectRecord(newest);
+  const pin = newestRecord?.pin;
+  const ppd = newestRecord?.stored.image.pixelsPerDip ?? 1;
 
+  if (!image.ok || pin === undefined) {
+    record(
+      "Copy image puts a picture with pin 1 on the clipboard",
+      false,
+      pin === undefined ? "no pin saved" : "no image"
+    );
+  } else {
     const pixel = helper(
       RgbSchema,
       "filepixel",
       copied,
-      String(stored.pin.x),
-      String(stored.pin.y)
+      String(pin.x),
+      // Just above the tip, where the pin is solid colour.
+      String(pin.y - Math.round(3 * ppd))
     );
 
     const [r, g, b] = PIN_RGB;
@@ -907,7 +1002,7 @@ const checkQuitWithDraft = async () => {
   await delay(1000);
   record(
     "quit asks in the panel",
-    await windowShows("Quit Inset Context Pin?"),
+    await windowShows("Save before quitting?"),
     windowText().replaceAll(/\s+/gu, " ").slice(0, 160)
   );
   record("the quit question has the keyboard", appInFront(), front().title);
@@ -929,7 +1024,7 @@ const checkQuitWithDraft = async () => {
 
   await trayItem("Quit Inset Context Pin");
   await delay(1000);
-  await clickButton("Discard and quit");
+  await clickButton("Discard");
   record("quit Discard exits", app !== undefined && (await exited(app)));
   record(
     "quit Discard saves nothing",

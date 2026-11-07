@@ -39,6 +39,7 @@ describe(trayMenu, () => {
       "Version 0.1.57",
       "Check for updates",
       "---",
+      "Keyboard shortcuts…",
       "Settings…",
       "Quit Inset Context Pin",
     ]);
@@ -104,6 +105,7 @@ describe(trayMenu, () => {
       "Version 0.1.57",
       "Check for updates",
       "---",
+      "Keyboard shortcuts…",
       "Settings…",
       "Quit Inset Context Pin",
     ]);
@@ -209,7 +211,7 @@ describe("a copy that can't update itself", () => {
       "---",
       "Version 0.1.57",
       "---",
-      "Settings…",
+      "Keyboard shortcuts…",
     ]);
   });
 });

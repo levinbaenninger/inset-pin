@@ -1,183 +1,414 @@
+import {
+  CheckmarkCircle02Icon,
+  Copy01Icon,
+  Delete02Icon,
+  Image01Icon,
+  PictureInPictureOnIcon,
+  TextAlignLeftIcon,
+  Undo02Icon,
+} from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import type { CaptureId } from "@shared/capture-record";
-import { createContext, use, useEffect, useEffectEvent, useRef } from "react";
-import type { ReactNode, RefObject } from "react";
+import type { ActionResult, CopyResult, SavedCapture } from "@shared/contracts";
+import { keyLabels, menuKeyAction } from "@shared/shortcuts";
+import type { MenuKeyAction } from "@shared/shortcuts";
+import {
+  getRouteApi,
+  useNavigate,
+  useParams,
+  useRouter,
+} from "@tanstack/react-router";
+import { useRef, useState } from "react";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuShortcut,
+} from "@/components/ui/context-menu";
+import {
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
+} from "@/components/ui/dropdown-menu";
 import { libraryBridge } from "@/shared/bridge";
+import type { Icon } from "@/shared/icon-button";
+import { afterMenusClose, pickShownItem } from "@/shared/menu-keys";
 import { isMac } from "@/shared/platform";
 
-import { captureKeyAction } from "./capture-keys";
+import { drafts } from "./library-drafts";
+import { useLibraryState } from "./library-state";
+import { isShown, listOrder, selectionAfterRemoval } from "./list-model";
+import { useNotice } from "./notice";
 
-/** What the shown capture can do; the list's right-click menu calls these. */
-export interface CaptureCommands {
-  readonly id: CaptureId;
-  readonly copyNote: () => void;
-  readonly copyImage: () => void;
-  readonly edit: () => void;
-  readonly pin: () => void;
-  readonly askDelete: () => void;
+const api = libraryBridge();
+const rootRoute = getRouteApi("__root__");
+const KEYS = keyLabels(isMac);
+
+interface MenuItem {
+  readonly kind: "item";
+  readonly action: MenuKeyAction | "done";
+  readonly label: string;
+  readonly icon: Icon;
+  readonly keys?: string;
+  readonly destructive?: boolean;
+  readonly run: () => void;
 }
 
-type CommandsRef = RefObject<CaptureCommands | null>;
+export type MenuEntry =
+  | MenuItem
+  | { readonly kind: "separator"; readonly id: string };
 
-const CaptureCommandsContext = createContext<CommandsRef | null>(null);
+const UNREACHABLE = "Inset couldn’t reach the app. Try again.";
 
-export const CaptureCommandsProvider = ({
-  children,
-}: {
-  readonly children: ReactNode;
-}) => {
-  const commands = useRef<CaptureCommands | null>(null);
-
-  return (
-    <CaptureCommandsContext value={commands}>{children}</CaptureCommandsContext>
-  );
-};
-
-export const useCaptureCommands = (): CommandsRef => {
-  const commands = use(CaptureCommandsContext);
-
-  if (commands === null) {
-    throw new Error("useCaptureCommands needs a CaptureCommandsProvider");
+/** Never rejects, so a closed channel reads as a failure the notice can show. */
+const settle = async (
+  call: () => Promise<ActionResult>
+): Promise<ActionResult> => {
+  try {
+    return await call();
+  } catch {
+    return { message: UNREACHABLE, ok: false };
   }
-
-  return commands;
 };
 
-const isTextField = (target: EventTarget | null): boolean =>
-  target instanceof HTMLInputElement ||
-  target instanceof HTMLTextAreaElement ||
-  (target instanceof HTMLElement && target.isContentEditable);
-
-/** A dialog or an open menu handles its own keys. */
-const inLayer = (target: EventTarget | null): boolean =>
-  target instanceof Element &&
-  target.closest('[role="dialog"], [role="alertdialog"], [role="menu"]') !==
-    null;
-
-/** Enter keeps its meaning on buttons and on links to another capture. */
-const enterActivates = (target: EventTarget | null, id: CaptureId): boolean =>
-  target instanceof Element &&
-  (target.closest("button") !== null ||
-    target.closest(`a:not([data-capture-id="${id}"])`) !== null);
-
-const hasTextSelection = (): boolean =>
-  (window.getSelection()?.toString() ?? "") !== "";
-
-/** Runs the app menu's commands on the shown capture; Find goes to the search. */
-export const useMenuCommands = (find: () => void): void => {
-  const commands = useCaptureCommands();
-  const onFind = useEffectEvent(find);
-
-  useEffect(
-    () =>
-      libraryBridge().on("command", (command) => {
-        const shown = commands.current;
-
-        if (command === "find") {
-          onFind();
-        } else if (shown !== null) {
-          const run = {
-            copyImage: shown.copyImage,
-            copyNote: shown.copyNote,
-            delete: shown.askDelete,
-            edit: shown.edit,
-            pin: shown.pin,
-          }[command];
-
-          run();
-        }
-      }),
-    [commands]
-  );
+const settleCopy = async (
+  call: () => Promise<CopyResult>
+): Promise<CopyResult> => {
+  try {
+    return await call();
+  } catch {
+    return { message: UNREACHABLE, ok: false, retry: false };
+  }
 };
 
 /**
- * Publishes the shown capture's commands and gives them keys: Enter edits,
- * Backspace or Delete asks to delete, ⇧⌘C copies the image, ⌘P pins it to the
- * screen, and the copy command (⌘C, Ctrl+C or Edit > Copy) copies the note
- * when no text is selected.
+ * Where a row puts the focus back once its menu or delete dialog closes.
+ * `leaving` runs while the row is still listed and about to go (marked done,
+ * or deleted), so the focus can land on its neighbour instead.
  */
-export const useCaptureShortcuts = (
-  commands: CaptureCommands,
-  active: boolean
-): void => {
-  const ref = useCaptureCommands();
+export interface RowFocus {
+  readonly leaving: () => void;
+  readonly land: () => void;
+}
 
-  // Every render, so the menu always calls the current closures.
-  useEffect(() => {
-    ref.current = commands;
-  });
+/**
+ * Everything that can be done to one capture, once: the right-click menu in
+ * the sidebar, the capture's ⋯ menu and its keys all use these. Delete asks
+ * first, in the dialog this returns. Copies go through main's copy gate,
+ * which saves what is typed first and copies nothing when that fails.
+ */
+export const useCaptureCommands = (capture: SavedCapture, focus?: RowFocus) => {
+  const navigate = useNavigate();
+  const router = useRouter();
+  const captures = rootRoute.useLoaderData();
+  const { captureId: openId } = useParams({ strict: false });
+  const { list, now, parsed, query } = useLibraryState();
+  const say = useNotice();
+  const [confirming, setConfirming] = useState(false);
+  // Where the focus was as Delete asked, for a dialog without a row to land on.
+  const askedFrom = useRef<Element | null>(null);
+  const done = capture.status.kind === "done";
 
-  useEffect(
-    () => () => {
-      if (ref.current?.id === commands.id) {
-        ref.current = null;
+  const report = (
+    result: ActionResult,
+    text: string,
+    undo?: () => void
+  ): void => {
+    if (!result.ok) {
+      say({ failed: true, text: result.message });
+    } else if (undo === undefined) {
+      say({ text });
+    } else {
+      say({ action: { label: "Undo", run: undo }, text });
+    }
+  };
+
+  /** A refusal for unsaved changes: Retry (Keep changes, after a Discard main couldn't finish) saves them, and the user then copies again. */
+  const refuseWithRetry = (text: string): void => {
+    const undiscarded = drafts.get(capture.id)?.error?.during === "discard";
+
+    const retrySave = async (): Promise<void> => {
+      const saved = await drafts.retry(capture.id);
+
+      if (saved.ok) {
+        say({ text: "Saved. You can copy it now." });
+      } else {
+        refuseWithRetry(`Couldn’t save your changes. ${saved.message}`);
       }
+    };
+
+    say({
+      action: {
+        label: undiscarded ? "Keep changes" : "Retry",
+        run: () => {
+          void retrySave();
+        },
+      },
+      failed: true,
+      text,
+    });
+  };
+
+  const setDone = async (id: CaptureId, value: boolean): Promise<void> => {
+    const result = await settle(
+      async () => await api.setDone({ done: value, id })
+    );
+
+    report(result, value ? "Moved to Done" : "Back in the list", () => {
+      void setDone(id, !value);
+    });
+  };
+
+  /** A copy refused because the capture's changes aren't saved offers Retry, while they still aren't. */
+  const copy = async (
+    call: () => Promise<CopyResult>,
+    text: string
+  ): Promise<void> => {
+    const result = await settleCopy(call);
+
+    if (result.ok) {
+      say({ text });
+    } else if (result.retry && drafts.get(capture.id) !== undefined) {
+      refuseWithRetry(result.message);
+    } else {
+      say({ failed: true, text: result.message });
+    }
+  };
+
+  const remove = async (): Promise<void> => {
+    const ids = listOrder(captures)
+      .filter((item) => isShown(item, list, parsed, query.trim() !== "", now))
+      .map((item) => item.id);
+
+    const next = selectionAfterRemoval(ids, capture.id);
+    const result = await settle(async () => await api.remove(capture.id));
+
+    if (!result.ok) {
+      say({ failed: true, text: result.message });
+
+      return;
+    }
+
+    // Its typing can't be saved any more, so it must not hold a close.
+    drafts.forget(capture.id);
+    say({ text: "Capture deleted" });
+
+    if (openId === capture.id) {
+      await router.invalidate();
+      await navigate(
+        next === null
+          ? { to: "/" }
+          : { params: { captureId: next }, to: "/captures/$captureId" }
+      );
+    }
+  };
+
+  // The floating window reads the saved capture, so it opens once the typing is saved.
+  const floatAfterSaving = async (): Promise<void> => {
+    const saved = await drafts.settle(capture.id);
+
+    if (!saved.ok) {
+      const what = saved.during === "discard" ? "discard" : "save";
+
+      say({
+        failed: true,
+        text: `Couldn’t ${what} your changes, so it didn’t float. ${saved.message}`,
+      });
+
+      return;
+    }
+
+    api.floatOnTop(capture.id);
+    say({ text: "Floating on top of other apps" });
+  };
+
+  const commands = {
+    // From a menu it asks once the menu has gone and given the focus back to its owner.
+    askDelete: () => {
+      afterMenusClose(() => {
+        askedFrom.current = document.activeElement;
+        setConfirming(true);
+      });
     },
-    [commands.id, ref]
+    copyDetails: () => {
+      void copy(
+        async () => await api.copyDetails(capture.id),
+        "Copied with details"
+      );
+    },
+    copyImage: () => {
+      void copy(
+        async () => await api.copyImage(capture.id),
+        "Image copied with its pins"
+      );
+    },
+    copyText: () => {
+      void copy(async () => await api.copyText(capture.id), "Copied");
+    },
+    float: () => {
+      void floatAfterSaving();
+    },
+    toggleDone: () => {
+      focus?.leaving();
+      void setDone(capture.id, !done);
+    },
+  };
+
+  const entries: readonly MenuEntry[] = [
+    {
+      action: "copyText",
+      icon: Copy01Icon,
+      keys: KEYS.copyText,
+      kind: "item",
+      label: "Copy Text",
+      run: commands.copyText,
+    },
+    {
+      action: "copyDetails",
+      icon: TextAlignLeftIcon,
+      keys: KEYS.copyDetails,
+      kind: "item",
+      label: "Copy with Details",
+      run: commands.copyDetails,
+    },
+    {
+      action: "copyImage",
+      icon: Image01Icon,
+      keys: KEYS.copyImage,
+      kind: "item",
+      label: "Copy Image",
+      run: commands.copyImage,
+    },
+    {
+      action: "float",
+      icon: PictureInPictureOnIcon,
+      keys: KEYS.float,
+      kind: "item",
+      label: "Float on Top",
+      run: commands.float,
+    },
+    { id: "status", kind: "separator" },
+    // Space marks a focused row done; inside a menu it picks the highlighted item, so the menu shows no key here.
+    {
+      action: "done",
+      icon: done ? Undo02Icon : CheckmarkCircle02Icon,
+      kind: "item",
+      label: done ? "Mark as Not Done" : "Mark as Done",
+      run: commands.toggleDone,
+    },
+    { id: "delete", kind: "separator" },
+    {
+      action: "delete",
+      destructive: true,
+      icon: Delete02Icon,
+      keys: KEYS.delete,
+      kind: "item",
+      label: "Delete…",
+      run: commands.askDelete,
+    },
+  ];
+
+  const dialog = (
+    <AlertDialog onOpenChange={setConfirming} open={confirming}>
+      <AlertDialogContent
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+
+          const from = askedFrom.current;
+
+          if (focus !== undefined) {
+            focus.land();
+          } else if (from instanceof HTMLElement && from.isConnected) {
+            from.focus();
+          }
+        }}
+      >
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete this capture?</AlertDialogTitle>
+          <AlertDialogDescription>
+            <span className="text-foreground line-clamp-2 font-medium">
+              {capture.title}
+            </span>
+            Its image and notes are removed from this computer. To keep it out
+            of the list instead, mark it as done.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={() => {
+              focus?.leaving();
+              askedFrom.current = null;
+              void remove();
+            }}
+            variant="destructive"
+          >
+            Delete
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 
-  const onKeyDown = useEffectEvent((event: KeyboardEvent) => {
-    if (
-      !active ||
-      event.defaultPrevented ||
-      event.isComposing ||
-      isTextField(event.target) ||
-      inLayer(event.target)
-    ) {
-      return;
-    }
+  return { commands, dialog, entries };
+};
 
-    const action = captureKeyAction(event, isMac);
+const PARTS = {
+  context: {
+    Item: ContextMenuItem,
+    Separator: ContextMenuSeparator,
+    Shortcut: ContextMenuShortcut,
+  },
+  dropdown: {
+    Item: DropdownMenuItem,
+    Separator: DropdownMenuSeparator,
+    Shortcut: DropdownMenuShortcut,
+  },
+} as const;
 
-    if (
-      action === null ||
-      (action === "edit" && enterActivates(event.target, commands.id))
-    ) {
-      return;
-    }
+/**
+ * A capture menu's keys: each key it shows runs that item for the menu's own
+ * capture, before the menu or the page sees the key, so the capture that is
+ * open is never the one acted on.
+ */
+export const onMenuKey = pickShownItem((event) => menuKeyAction(event, isMac));
 
-    event.preventDefault();
+/** The entries as items of a right-click menu or of the ⋯ dropdown; the two take the same shape. */
+export const MenuEntries = ({
+  entries,
+  kind,
+}: {
+  readonly entries: readonly MenuEntry[];
+  readonly kind: keyof typeof PARTS;
+}) => {
+  const { Item, Separator, Shortcut } = PARTS[kind];
 
-    const run = {
-      copyImage: commands.copyImage,
-      delete: commands.askDelete,
-      edit: commands.edit,
-      pin: commands.pin,
-    }[action];
-
-    run();
-  });
-
-  const onCopy = useEffectEvent((event: ClipboardEvent) => {
-    if (
-      !active ||
-      hasTextSelection() ||
-      isTextField(document.activeElement) ||
-      inLayer(document.activeElement)
-    ) {
-      return;
-    }
-
-    event.preventDefault();
-    commands.copyNote();
-  });
-
-  useEffect(() => {
-    const keyDown = (event: KeyboardEvent): void => {
-      onKeyDown(event);
-    };
-
-    const copy = (event: ClipboardEvent): void => {
-      onCopy(event);
-    };
-
-    window.addEventListener("keydown", keyDown);
-    document.addEventListener("copy", copy);
-
-    return () => {
-      window.removeEventListener("keydown", keyDown);
-      document.removeEventListener("copy", copy);
-    };
-  }, []);
+  return entries.map((entry) =>
+    entry.kind === "separator" ? (
+      <Separator key={entry.id} />
+    ) : (
+      <Item
+        data-key-action={entry.keys === undefined ? undefined : entry.action}
+        key={entry.label}
+        onSelect={() => {
+          entry.run();
+        }}
+        variant={entry.destructive === true ? "destructive" : "default"}
+      >
+        <HugeiconsIcon icon={entry.icon} />
+        {entry.label}
+        {entry.keys === undefined ? null : <Shortcut>{entry.keys}</Shortcut>}
+      </Item>
+    )
+  );
 };

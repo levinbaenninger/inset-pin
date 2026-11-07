@@ -44,7 +44,9 @@ export const pinBridge = (): Client<PinContract> => {
   const api = window.insetPin;
 
   if (api === undefined) {
-    throw new Error("The pin bridge is only available in a pinned capture.");
+    throw new Error(
+      "The floating bridge is only available in a floating capture."
+    );
   }
 
   return api;

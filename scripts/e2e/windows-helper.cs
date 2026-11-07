@@ -238,7 +238,9 @@ static class Helper
         return "{\"type\":" + Json(info.ControlType.ProgrammaticName.Replace("ControlType.", "")) +
             ",\"name\":" + Json(info.Name) + ",\"enabled\":" + (info.IsEnabled ? "true" : "false") +
             ",\"x\":" + (empty ? 0 : (int)Math.Round(r.X + r.Width / 2)) +
-            ",\"y\":" + (empty ? 0 : (int)Math.Round(r.Y + r.Height / 2)) + "}";
+            ",\"y\":" + (empty ? 0 : (int)Math.Round(r.Y + r.Height / 2)) +
+            ",\"width\":" + (empty ? 0 : (int)Math.Round(r.Width)) +
+            ",\"height\":" + (empty ? 0 : (int)Math.Round(r.Height)) + "}";
     }
 
     /** Every named element of the process's visible windows, as UI Automation reports them. */

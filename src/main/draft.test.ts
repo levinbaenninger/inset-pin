@@ -59,13 +59,16 @@ const point: DraftEvent = {
 
 const initialContent: DraftContent = {
   crop: rect(960, 600, 960, 600),
-  pin: pt(1440, 900),
-  thought: "",
+  description: "",
+  due: null,
+  pins: [],
+  steps: [],
+  title: "",
 };
 
-const typed = (thought: string): DraftContent => ({
+const typed = (title: string): DraftContent => ({
   ...initialContent,
-  thought,
+  title,
 });
 
 const run = (state: DraftState, ...events: readonly DraftEvent[]): Step => {
@@ -80,8 +83,8 @@ const run = (state: DraftState, ...events: readonly DraftEvent[]): Step => {
 
 const captured = run(IDLE, point, { frame, id: ID, type: "captured" }).state;
 
-const withThought = (thought: string): DraftState =>
-  run(captured, { content: typed(thought), id: ID, type: "edited" }).state;
+const withThought = (title: string): DraftState =>
+  run(captured, { content: typed(title), id: ID, type: "edited" }).state;
 
 const draftOf = (state: DraftState): Draft => {
   if (state.phase !== "draft") {
@@ -108,7 +111,7 @@ describe(step, () => {
     });
   });
 
-  it("opens the draft with the sampled point as pin and the default crop", () => {
+  it("opens the draft without pins, the crop centred on the sampled point", () => {
     expect(captured).toMatchObject({
       draft: {
         capturedAt: AT,
@@ -139,10 +142,12 @@ describe(step, () => {
     });
   });
 
-  it("restores a dismissed draft with its id, time, pin and thought", () => {
+  it("restores a dismissed draft with its id, time, pins and fields", () => {
     const moved: DraftContent = {
       ...typed("Discount row"),
-      pin: pt(1500, 950),
+      description: "Check with finance",
+      pins: [pt(1500, 950), pt(1000, 700)],
+      steps: [{ done: false, id: "s1", text: "Ask" }],
     };
 
     const dismissed = run(
@@ -191,9 +196,9 @@ describe(step, () => {
 
   it("repairs untrusted geometry from the renderer", () => {
     const outside: DraftContent = {
+      ...typed("x"),
       crop: rect(2800, 0, 960, 600),
-      pin: pt(0, 0),
-      thought: "x",
+      pins: [pt(0, 0)],
     };
 
     expect(
@@ -201,13 +206,26 @@ describe(step, () => {
         step(captured, { content: outside, id: ID, type: "edited" }).state
       ).content
     ).toStrictEqual({
+      ...typed("x"),
       crop: { height: 600, width: 960, x: 1920, y: 0 },
-      pin: { x: 1920, y: 0 },
-      thought: "x",
+      pins: [{ x: 1920, y: 0 }],
     });
   });
 
-  it("refuses to save a blank thought", () => {
+  it("refuses to save without a title, even with other fields", () => {
+    expect(
+      step(captured, {
+        content: { ...typed(""), description: "Only this" },
+        id: ID,
+        type: "saveRequested",
+      })
+    ).toStrictEqual({
+      effects: [],
+      state: captured,
+    });
+  });
+
+  it("refuses to save a blank title", () => {
     expect(
       step(captured, { content: typed("  \n"), id: ID, type: "saveRequested" })
     ).toStrictEqual({
@@ -272,7 +290,7 @@ describe(step, () => {
     });
     expect(again).toStrictEqual({ effects: [], state: asking.state });
     expect(saving).toMatchObject({
-      effects: [{ type: "publish" }],
+      effects: [{ type: "publish" }, { type: "saveDeadline" }],
       state: { write: { kind: "saving" } },
     });
     expect(done).toStrictEqual({ effects: [{ type: "quit" }], state: IDLE });
@@ -341,10 +359,37 @@ describe(step, () => {
     const done = step(held.state, { id: ID, type: "published" });
 
     expect(held).toMatchObject({
-      effects: [],
+      effects: [{ type: "saveDeadline" }],
       state: { quit: "afterSave", write: { kind: "saving" } },
     });
     expect(done).toStrictEqual({ effects: [{ type: "quit" }], state: IDLE });
+  });
+
+  it("asks once the save a quit waits on is still on its way after the limit, and quits when it lands", () => {
+    const overdue = step(savingWhile("afterSave"), { type: "saveOverdue" });
+
+    expect(overdue).toStrictEqual({
+      effects: [{ type: "focus" }],
+      state: savingWhile("asking"),
+    });
+    expect(viewOf(overdue.state)).toMatchObject({
+      quitting: true,
+      write: { kind: "saving" },
+    });
+    expect(step(overdue.state, { id: ID, type: "published" })).toStrictEqual({
+      effects: [{ type: "quit" }],
+      state: IDLE,
+    });
+  });
+
+  it("ignores the limit once the save it timed has landed or the quit was cancelled", () => {
+    const cancelled = { ...savingWhile("none") };
+
+    expect(
+      [IDLE, cancelled, savingWhile("asking")].map(
+        (state) => step(state, { type: "saveOverdue" }).state
+      )
+    ).toStrictEqual([IDLE, cancelled, savingWhile("asking")]);
   });
 
   it("shows the draft and stays running when the save before quitting fails", () => {
@@ -389,21 +434,31 @@ describe(step, () => {
       ).effects
     ).toMatchObject([
       { draft: { content: typed("Keep me") }, type: "publish" },
+      { type: "saveDeadline" },
     ]);
   });
 
-  // Not reachable through events any more; guards the question against a save that started first.
-  it.each(["save", "discard"] as const)(
-    "waits for a running save when the quit question is answered %s",
-    (choice) => {
-      expect(
-        step(savingWhile("asking"), { choice, type: "quitChoice" })
-      ).toStrictEqual({
-        effects: [],
-        state: savingWhile("afterSave"),
-      });
-    }
-  );
+  it("answers the question at once while the save it waited on is still on its way", () => {
+    const asking = savingWhile("asking");
+
+    expect(
+      (["save", "cancel", "discard"] as const).map((choice) =>
+        step(asking, { choice, type: "quitChoice" })
+      )
+    ).toStrictEqual([
+      // Save is the save on its way: the question stays, and its landing quits.
+      { effects: [], state: asking },
+      { effects: [{ type: "focus" }], state: savingWhile("none") },
+      // The save may still land, so the capture it writes is withdrawn.
+      {
+        effects: [{ id: ID, type: "withdraw" }, { type: "quit" }],
+        state: IDLE,
+      },
+    ]);
+    expect(
+      step(savingWhile("none"), { id: ID, type: "published" })
+    ).toStrictEqual({ effects: [], state: IDLE });
+  });
 
   it("closes the problem panel on dismiss without keeping a draft", () => {
     const problem = run(IDLE, point, {
@@ -424,24 +479,55 @@ describe(step, () => {
 });
 
 describe(mayQuit, () => {
-  it("holds quit only for a savable or saving draft", () => {
+  it("holds quit for anything typed or placed, or a save under way", () => {
     const saving = step(withThought("x"), {
       content: typed("x"),
       id: ID,
       type: "saveRequested",
     }).state;
 
+    const edited = (change: Partial<DraftContent>) =>
+      run(captured, {
+        content: { ...typed(""), ...change },
+        id: ID,
+        type: "edited",
+      }).state;
+
     expect(
       [IDLE, withThought(""), withThought("x"), saving].map(mayQuit)
     ).toStrictEqual([true, true, false, false]);
+    expect(
+      [
+        edited({ pins: [pt(1440, 900)] }),
+        edited({ description: "Note" }),
+        edited({ steps: [{ done: false, id: "s", text: "Do" }] }),
+        edited({ steps: [{ done: false, id: "s", text: " " }] }),
+      ].map(mayQuit)
+    ).toStrictEqual([false, false, false, true]);
+  });
+
+  it("asks on quit for pins without a title, and Save from the question does nothing", () => {
+    const pinned = run(captured, {
+      content: { ...typed(""), pins: [pt(1440, 900)] },
+      id: ID,
+      type: "edited",
+    }).state;
+
+    const asking = step(pinned, { type: "quitHeld" }).state;
+
+    expect(asking).toMatchObject({ quit: "asking" });
+    expect(step(asking, { choice: "save", type: "quitChoice" })).toMatchObject({
+      effects: [{ type: "focus" }],
+      state: { quit: "none" },
+    });
   });
 });
 
 describe(toRecord, () => {
-  it("stores the pin relative to the approved crop", () => {
+  it("stores every pin relative to the approved crop, in order, and trims the fields", () => {
     const widened = scaleCrop(
       rect(960, 600, 960, 600),
-      pt(1200, 700),
+      [pt(1200, 700)],
       2,
       frame.size,
       2
@@ -449,11 +535,22 @@ describe(toRecord, () => {
 
     const draft: Draft = {
       ...draftOf(captured),
-      content: { crop: widened, pin: pt(1200, 700), thought: "Here" },
+      content: {
+        ...typed("  Here "),
+        crop: widened,
+        description: "\nWhy it matters\n",
+        pins: [pt(1200, 700), pt(800, 600)],
+        steps: [
+          { done: false, id: "a", text: " Ask " },
+          { done: false, id: "b", text: "  " },
+        ],
+      },
     };
 
     expect(toRecord(draft, SAVED_AT)).toStrictEqual({
       capturedAt: "2026-10-21T18:40:12.345Z",
+      description: "Why it matters",
+      due: null,
       id: ID,
       image: {
         file: "crop.png",
@@ -462,10 +559,15 @@ describe(toRecord, () => {
         widthPx: 1920,
       },
       invokedVia: "shortcut",
-      pin: { x: 480, y: 200 },
-      schemaVersion: 1,
+      pins: [
+        { x: 480, y: 200 },
+        { x: 80, y: 100 },
+      ],
+      schemaVersion: 2,
       source: { kind: "display", label: "Built-in Retina Display" },
-      thought: "Here",
+      status: { kind: "active" },
+      steps: [{ done: false, id: "a", text: "Ask" }],
+      title: "Here",
       updatedAt: "2026-10-21T18:41:00.000Z",
     });
   });
@@ -474,6 +576,8 @@ describe(toRecord, () => {
 const settle = async (): Promise<void> => {
   await delay(0);
 };
+
+const nothing = (): void => undefined;
 
 const createFakes = (overrides: Partial<DraftDeps> = {}) => {
   const calls: string[] = [];
@@ -499,6 +603,10 @@ const createFakes = (overrides: Partial<DraftDeps> = {}) => {
     },
     quit: () => {
       calls.push("quit");
+    },
+    withdraw: async (id) => {
+      calls.push(`withdraw ${id}`);
+      await Promise.resolve();
     },
     surface: {
       focus: () => {
@@ -633,7 +741,10 @@ describe("draft and store together", () => {
 
     controller.invoke(point.invocation);
     await settle();
-    controller.save(ID, typed("This total ignores the discount row"));
+    controller.save(ID, {
+      ...typed("This total ignores the discount row"),
+      pins: [pt(1440, 900)],
+    });
     await vi.waitFor(() => {
       expect(controller.view()).toStrictEqual({ kind: "none" });
     });
@@ -645,8 +756,8 @@ describe("draft and store together", () => {
         id: ID,
         kind: "ok",
         record: {
-          pin: { x: 480, y: 300 },
-          thought: "This total ignores the discount row",
+          pins: [{ x: 480, y: 300 }],
+          title: "This total ignores the discount row",
         },
       },
     ]);
@@ -674,6 +785,175 @@ describe("draft and store together", () => {
     expect(reopened.list()).toStrictEqual([]);
   });
 
+  /** A store whose first write waits for the test, as a slow disk would, and a quit held while a new capture's save waits on it. */
+  const quitWhileSaving = async () => {
+    const disk = { entered: nothing, release: nothing };
+    let first = true;
+
+    // oxlint-disable-next-line promise/avoid-new -- resolved once the publish reaches the disk.
+    const started = new Promise<void>((resolve) => {
+      disk.entered = resolve;
+    });
+
+    // oxlint-disable-next-line promise/avoid-new -- the test lets the write go on later.
+    const latch = new Promise<void>((resolve) => {
+      disk.release = resolve;
+    });
+
+    const store = await openCaptureStore(root, {
+      fs: {
+        ...nodeStoreFs,
+        writeFileDurable: async (target, data) => {
+          if (first) {
+            first = false;
+            disk.entered();
+            await latch;
+          }
+
+          await nodeStoreFs.writeFileDurable(target, data);
+        },
+      },
+    });
+
+    const pending: Promise<unknown>[] = [];
+
+    const { calls, controller } = createFakes({
+      capture: capturing,
+      publish: async (record, png) => {
+        const published = store.publish(record, png);
+
+        pending.push(published);
+
+        return await published;
+      },
+      withdraw: async (id) => {
+        const withdrawn = store.withdraw(id);
+
+        pending.push(withdrawn);
+        await withdrawn;
+      },
+    });
+
+    controller.invoke(point.invocation);
+    await settle();
+    controller.save(ID, typed("Keep me"));
+    await started;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+    expect(controller.holdQuitIfNeeded()).toBe("hold");
+
+    /** Lets the write go on and waits until the store has finished. */
+    const land = async (): Promise<void> => {
+      disk.release();
+      // settled() may skip a discarded write before its filesystem work has finished.
+      await Promise.all(pending);
+      await store.settled();
+      await vi.advanceTimersByTimeAsync(0);
+    };
+
+    const quits = (): number => calls.filter((call) => call === "quit").length;
+
+    const shown = () => {
+      const view = controller.view();
+
+      return view.kind === "draft"
+        ? { quitting: view.quitting, write: view.write }
+        : view;
+    };
+
+    return { controller, land, quits, shown, store };
+  };
+
+  describe("a quit waiting on a new capture's save that doesn't finish", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("asks after 3 s, and Cancel keeps the app running when the save lands later", async () => {
+      const { controller, land, quits, shown, store } = await quitWhileSaving();
+
+      await vi.advanceTimersByTimeAsync(2999);
+
+      const before = shown();
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      const after = shown();
+
+      controller.answerQuit("cancel");
+      await land();
+
+      expect({
+        after,
+        before,
+        landed: shown(),
+        quits: quits(),
+        saved: store.list().map((entry) => entry.id),
+      }).toStrictEqual({
+        after: { quitting: true, write: { kind: "saving" } },
+        before: { quitting: false, write: { kind: "saving" } },
+        landed: { kind: "none" },
+        quits: 0,
+        saved: [ID],
+      });
+    });
+
+    it("quits at once on Discard, the disk wait before the quit doesn't wait for the held save, and its landing later leaves no capture behind", async () => {
+      const { controller, land, quits, shown, store } = await quitWhileSaving();
+
+      await vi.advanceTimersByTimeAsync(3000);
+      controller.answerQuit("discard");
+
+      const atOnce = { quits: quits(), view: shown() };
+
+      const disk = { written: false };
+
+      void store.settled().then(() => {
+        disk.written = true;
+
+        return disk.written;
+      });
+      await vi.waitFor(() => {
+        expect(disk.written).toBeTruthy();
+      });
+
+      const writtenWhileHeld = disk.written;
+
+      await land();
+
+      expect({
+        atOnce,
+        quits: quits(),
+        saved: store.list().map((entry) => entry.id),
+        writtenWhileHeld,
+      }).toStrictEqual({
+        atOnce: { quits: 1, view: { kind: "none" } },
+        quits: 1,
+        saved: [],
+        writtenWhileHeld: true,
+      });
+    });
+
+    it("keeps asking on Save, and quits once the save lands", async () => {
+      const { controller, land, quits, shown } = await quitWhileSaving();
+
+      await vi.advanceTimersByTimeAsync(3000);
+      controller.answerQuit("save");
+
+      const waiting = { quits: quits(), view: shown() };
+
+      await land();
+
+      expect({ quits: quits(), waiting }).toStrictEqual({
+        quits: 1,
+        waiting: {
+          quits: 0,
+          view: { quitting: true, write: { kind: "saving" } },
+        },
+      });
+    });
+  });
+
   it("keeps the draft when the write fails and saves it under the same id on retry", async () => {
     const store = await openCaptureStore(root, {
       fs: failNextWrite(nodeStoreFs),
@@ -699,10 +979,10 @@ describe("draft and store together", () => {
 
     expect(controller.view()).toMatchObject({
       draftId: ID,
-      seed: { thought: "Retry me" },
+      seed: { title: "Retry me" },
       write: {
         kind: "failed",
-        message: "Simulated write failure (INSET_FAIL_NEXT_WRITE)",
+        message: "Couldn’t save.",
       },
     });
     await expect(reopenedList()).resolves.toStrictEqual([]);
@@ -713,7 +993,7 @@ describe("draft and store together", () => {
     });
 
     await expect(reopenedList()).resolves.toMatchObject([
-      { id: ID, kind: "ok", record: { thought: "Retry me" } },
+      { id: ID, kind: "ok", record: { title: "Retry me" } },
     ]);
   });
 });
