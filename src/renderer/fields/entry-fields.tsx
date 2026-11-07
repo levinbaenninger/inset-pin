@@ -320,7 +320,14 @@ export const EntryFields = ({
   const shown = shownFields(value, ui.revealed);
   const styles = VARIANT[variant];
   const page = variant === "page";
-  const { descriptionRef, titleRef } = ui;
+  const { descriptionRef, setDueOpen, titleRef } = ui;
+
+  // A save shuts an open Due picker, so it doesn't spring back once the save is over.
+  useEffect(() => {
+    if (disabled) {
+      setDueOpen(false);
+    }
+  }, [disabled, setDueOpen]);
 
   const add = (field: Field): void => {
     ui.run(field, value, onChange);
@@ -333,6 +340,7 @@ export const EntryFields = ({
   const dueRow =
     value.due === null ? null : (
       <DueField
+        disabled={disabled}
         due={value.due}
         now={now}
         onChange={(due) => {
@@ -351,6 +359,7 @@ export const EntryFields = ({
     value.due === null ? (
       <DuePicker
         anchor={<span className="inline-flex">{child}</span>}
+        disabled={disabled}
         due={null}
         now={now}
         onChange={(due) => {
@@ -461,6 +470,7 @@ export const EntryFields = ({
       {shown.steps ? (
         <div className={page ? "-mx-1.5 mt-1" : "px-1.5 pb-1"}>
           <StepsEditor
+            disabled={disabled}
             focusId={ui.focusStep}
             onChange={(steps, immediately) => {
               onChange({ ...value, steps }, immediately);

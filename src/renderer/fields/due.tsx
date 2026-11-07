@@ -228,13 +228,16 @@ const ITEM =
  */
 export const DuePicker = ({
   anchor,
+  disabled = false,
   due,
   now,
-  onChange,
+  onChange: report,
   onOpenChange,
   open,
   shortcut,
 }: {
+  /** While the panel saves, main takes no edits: the picker stays shut and picks nothing. */
+  readonly disabled?: boolean;
   readonly due: DueDate | null;
   readonly now: Date;
   readonly open: boolean;
@@ -247,6 +250,12 @@ export const DuePicker = ({
 }) => {
   const [calendar, setCalendar] = useState(false);
   const list = useRef<HTMLDivElement>(null);
+
+  const onChange = (value: DueDate | null): void => {
+    if (!disabled) {
+      report(value);
+    }
+  };
 
   const pick = (value: DueDate | null): void => {
     onChange(value);
@@ -279,7 +288,7 @@ export const DuePicker = ({
           setCalendar(false);
         }
       }}
-      open={open}
+      open={open && !disabled}
     >
       <PopoverAnchor asChild>{anchor}</PopoverAnchor>
       <PopoverContent
@@ -361,6 +370,7 @@ export const DuePicker = ({
 
 /** The chip in an editor: it opens the picker, and its × clears the day, as in Window Links. */
 export const DueField = ({
+  disabled = false,
   due,
   now,
   onChange,
@@ -368,6 +378,7 @@ export const DueField = ({
   open,
   shortcut,
 }: {
+  readonly disabled?: boolean;
   readonly due: DueDate;
   readonly now: Date;
   readonly open: boolean;
@@ -380,20 +391,25 @@ export const DueField = ({
       <span
         className={cn(
           "inline-flex h-6 shrink-0 items-center rounded-md text-xs font-medium whitespace-nowrap tabular-nums",
-          STATE_CLASS[dueState(due, now)]
+          STATE_CLASS[dueState(due, now)],
+          disabled && "opacity-60"
         )}
         data-due-state={dueState(due, now)}
         data-testid="due-chip"
       >
         <button
           aria-label={`${dueSentence(due, now)}. Change it (${shortcut})`}
-          className="focus-visible:ring-ring/50 flex h-full items-center gap-1 rounded-md pr-0.5 pl-1.5 outline-none hover:brightness-95 focus-visible:ring-3 dark:hover:brightness-125"
+          className="focus-visible:ring-ring/50 flex h-full items-center gap-1 rounded-md pr-0.5 pl-1.5 outline-none hover:brightness-95 focus-visible:ring-3 disabled:pointer-events-none dark:hover:brightness-125"
+          disabled={disabled}
           onClick={() => {
             onOpenChange(!open);
           }}
           // Backspace on the chip clears the day, rather than asking to delete the capture.
           onKeyDown={(event) => {
-            if (event.key === "Backspace" || event.key === "Delete") {
+            if (
+              !disabled &&
+              (event.key === "Backspace" || event.key === "Delete")
+            ) {
               event.preventDefault();
               onChange(null);
             }
@@ -406,9 +422,12 @@ export const DueField = ({
         </button>
         <button
           aria-label="Clear Due"
-          className="focus-visible:ring-ring/50 grid h-full w-6 place-items-center rounded-md opacity-70 outline-none hover:opacity-100 focus-visible:ring-3"
+          className="focus-visible:ring-ring/50 grid h-full w-6 place-items-center rounded-md opacity-70 outline-none hover:opacity-100 focus-visible:ring-3 disabled:pointer-events-none"
+          disabled={disabled}
           onClick={() => {
-            onChange(null);
+            if (!disabled) {
+              onChange(null);
+            }
           }}
           title="Clear Due"
           type="button"
@@ -417,6 +436,7 @@ export const DueField = ({
         </button>
       </span>
     }
+    disabled={disabled}
     due={due}
     now={now}
     onChange={onChange}

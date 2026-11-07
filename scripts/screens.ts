@@ -665,6 +665,14 @@ const makeScenes = (
       page: "capture",
     },
     {
+      // Round 14: an explicit Save locks steps and Due with the title, as main takes no edits until it lands.
+      data: { view: { ...filled, write: { kind: "saving" } } },
+      fit: true,
+      name: "capture-11-saving-locked",
+      page: "capture",
+      platforms: ["macos"],
+    },
+    {
       data: { view: { ...filled, quitting: true } },
       fit: true,
       name: "capture-7-quit",
@@ -4970,6 +4978,109 @@ const checkCaptureQuit = async (
   return failures;
 };
 
+type PanelView = ReturnType<typeof draftView>;
+
+/** The capture panel on its own, at its usual width, with the scene's draft. */
+const openPanel = async (
+  browser: Browser,
+  origin: string,
+  platform: Platform,
+  view: PanelView
+) => {
+  const context = await browser.newContext({
+    userAgent: USER_AGENT[platform],
+    viewport: SIZES.capture,
+  });
+
+  const page = await context.newPage();
+  const input: BridgeInput = { page: "capture", view };
+
+  await page.addInitScript(installBridge, input);
+  await page.goto(`${origin}/capture.html`);
+  await page.getByTestId("title-field").waitFor();
+  await page.waitForTimeout(150);
+
+  return { context, page };
+};
+
+/**
+ * Main takes no edits while an explicit Save runs (src/main/draft.ts), so
+ * the panel locks steps and Due with the title: a Due picker open at ⌘↩
+ * shuts, and no click or key on a step or the chip sends an edit.
+ */
+const checkSaveLock = async (
+  browser: Browser,
+  origin: string,
+  desktop: Targets,
+  platform: Platform
+): Promise<string[]> => {
+  const { expectSame, failures } = makeReport(platform);
+  const m = mod(platform);
+
+  const { context, page } = await openPanel(
+    browser,
+    origin,
+    platform,
+    draftView(desktop, {
+      due: dueIn(1),
+      steps: [step(1, "Ask Rieder"), step(2, "Tell Marco")],
+      title: "Chairs are CHF 280 over the cap",
+    })
+  );
+
+  const chip = page.getByTestId("due-chip");
+  const before = await chip.textContent();
+
+  await page.getByTestId("title-field").focus();
+  await page.keyboard.press(`${m}+Shift+d`);
+  await page.getByTestId("due-picker").waitFor();
+  await page.evaluate(() => {
+    globalThis.__panelCalls = [];
+  });
+  await page.keyboard.press(`${m}+Enter`);
+  await page.waitForTimeout(200);
+
+  const pickerOpen = await page.getByTestId("due-picker").count();
+
+  await page.getByLabel("Next step 1", { exact: true }).click({ force: true });
+  await page.keyboard.type(" now");
+  await page.keyboard.press("Enter");
+  await page.getByLabel("Done: next step 2").click({ force: true });
+  await page.getByLabel("Remove next step 1").click({ force: true });
+  await chip.getByRole("button", { name: /^Due /u }).click({ force: true });
+  await page.getByLabel("Clear Due").click({ force: true });
+  await page.waitForTimeout(200);
+
+  expectSame(
+    "during Save the open Due picker shuts, and steps and Due send no edit and keep what they showed",
+    {
+      calls: await page.evaluate(() => globalThis.__panelCalls ?? []),
+      chip: (await chip.count()) === 0 ? null : await chip.textContent(),
+      picker: pickerOpen + (await page.getByTestId("due-picker").count()),
+      steps: await page
+        .getByTestId("steps-editor")
+        .locator("input:not([aria-hidden])")
+        .evaluateAll((fields: HTMLInputElement[]) =>
+          fields.map((field) => `${field.value}:${field.disabled}`)
+        ),
+      ticked: await page
+        .getByLabel("Done: next step 2")
+        .getAttribute("aria-checked"),
+    },
+    {
+      calls: ["save"],
+      chip: before,
+      picker: 0,
+      steps: ["Ask Rieder:true", "Tell Marco:true"],
+      ticked: "false",
+    }
+  );
+
+  await context.close();
+
+  return failures;
+};
+
 const runChecks = async (
   browser: Browser,
   origin: string,
@@ -4982,6 +5093,13 @@ const runChecks = async (
       name: string,
       run: () => Promise<string[]>
     ): Promise<string[]> => {
+      // SCREENS_CHECK="save lock" runs only the checks whose name holds it, for a quick loop on one.
+      const only = process.env.SCREENS_CHECK;
+
+      if (only !== undefined && !name.includes(only)) {
+        return [];
+      }
+
       try {
         return await run();
       } catch (error) {
@@ -4997,6 +5115,10 @@ const runChecks = async (
       ...(await guarded(
         "add menu",
         async () => await checkAddMenu(browser, origin, desktop, platform)
+      )),
+      ...(await guarded(
+        "save lock",
+        async () => await checkSaveLock(browser, origin, desktop, platform)
       )),
       ...(await guarded(
         "capture quit prompt",

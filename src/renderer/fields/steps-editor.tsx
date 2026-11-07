@@ -20,8 +20,9 @@ export const newStep = (): Step => ({
  * it, the arrow keys move between them, and the circle checks one off.
  */
 export const StepsEditor = ({
+  disabled = false,
   focusId,
-  onChange,
+  onChange: report,
   onFocused,
   onLeave,
   steps,
@@ -29,6 +30,8 @@ export const StepsEditor = ({
   readonly steps: readonly Step[];
   /** `now` for a tick or a removal, which saves at once; typing waits. */
   readonly onChange: (steps: readonly Step[], now: boolean) => void;
+  /** While the panel saves, main takes no edits, so nothing here changes. */
+  readonly disabled?: boolean;
   /** A step to focus once its field mounts, such as one just added. */
   readonly focusId: string | null;
   readonly onFocused: () => void;
@@ -37,6 +40,12 @@ export const StepsEditor = ({
 }) => {
   const fields = useRef(new Map<string, HTMLInputElement>());
   const pending = useRef<string | null>(null);
+
+  const onChange = (next: readonly Step[], now: boolean): void => {
+    if (!disabled) {
+      report(next, now);
+    }
+  };
 
   const focus = (id: string | undefined): void => {
     if (id !== undefined) {
@@ -142,6 +151,7 @@ export const StepsEditor = ({
               <Checkbox
                 aria-label={`Done: next step ${index + 1}`}
                 checked={step.done}
+                disabled={disabled}
                 onCheckedChange={() => {
                   onChange(
                     steps.map((item) =>
@@ -154,9 +164,10 @@ export const StepsEditor = ({
               <input
                 aria-label={`Next step ${index + 1}`}
                 className={cn(
-                  "placeholder:text-muted-foreground h-8 min-w-0 flex-1 bg-transparent text-sm outline-none",
+                  "placeholder:text-muted-foreground h-8 min-w-0 flex-1 bg-transparent text-sm outline-none disabled:opacity-60",
                   step.done && "text-muted-foreground line-through"
                 )}
+                disabled={disabled}
                 maxLength={STEP_MAX}
                 onBlur={onLeave}
                 onChange={(event) => {
@@ -192,7 +203,8 @@ export const StepsEditor = ({
               />
               <button
                 aria-label={`Remove next step ${index + 1}`}
-                className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 grid size-6 shrink-0 place-items-center rounded-md opacity-0 group-focus-within:opacity-100 group-hover:opacity-100"
+                className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 grid size-6 shrink-0 place-items-center rounded-md opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 disabled:pointer-events-none"
+                disabled={disabled}
                 onClick={() => {
                   remove(index);
                 }}
@@ -207,7 +219,8 @@ export const StepsEditor = ({
       ) : null}
       {steps.length > 0 && steps.length < STEPS_MAX ? (
         <button
-          className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 flex h-8 items-center gap-2.5 self-start rounded-md pr-2 pl-1.5 text-sm outline-none focus-visible:ring-3"
+          className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 flex h-8 items-center gap-2.5 self-start rounded-md pr-2 pl-1.5 text-sm outline-none focus-visible:ring-3 disabled:pointer-events-none disabled:opacity-60"
+          disabled={disabled}
           onClick={() => {
             insertAfter(steps.length - 1);
           }}

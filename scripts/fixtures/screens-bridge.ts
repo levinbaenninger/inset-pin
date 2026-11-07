@@ -12,6 +12,8 @@ declare global {
   var __fitted: number | undefined;
   /** The library calls that act on a capture, as `name:id`, for the checks in scripts/screens.ts to read. */
   var __calls: string[] | undefined;
+  /** What the capture panel sent main (edit, save, dismiss), apart from `__calls` so the quit checks keep their exact lists. */
+  var __panelCalls: string[] | undefined;
   /** Every copy the page asked for, as `name:id`, whether or not it was made. */
   var __asked: string[] | undefined;
   /** While true, saving a capture's typing fails, as a full disk would. */
@@ -243,6 +245,10 @@ export const installBridge = (input: BridgeInput): void => {
     globalThis.__calls = [...(globalThis.__calls ?? []), call];
   };
 
+  const panelCall = (call: string): void => {
+    globalThis.__panelCalls = [...(globalThis.__panelCalls ?? []), call];
+  };
+
   const recorded =
     (name: string) =>
     async (id: string): Promise<typeof OK> => {
@@ -314,8 +320,12 @@ export const installBridge = (input: BridgeInput): void => {
         record(`answerQuit:${choice}`);
       },
       discard: nothing,
-      dismiss: nothing,
-      edit: nothing,
+      dismiss: () => {
+        panelCall("dismiss");
+      },
+      edit: () => {
+        panelCall("edit");
+      },
       getView: async () => await respond(input.view),
       on,
       openScreenSettings: nothing,
@@ -323,7 +333,9 @@ export const installBridge = (input: BridgeInput): void => {
       reportHeight: (report: { readonly height: number }) => {
         fitHeight(report.height);
       },
-      save: nothing,
+      save: () => {
+        panelCall("save");
+      },
     },
     library: {
       captureSoon: nothing,
