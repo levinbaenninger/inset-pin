@@ -1,5 +1,4 @@
 import type { CaptureId } from "@shared/capture-record";
-import type { ActionResult } from "@shared/contracts";
 import { BrowserWindow, Menu, screen } from "electron";
 import type { WebContents } from "electron";
 
@@ -49,15 +48,15 @@ const fitToCropOnWindows = (window: BrowserWindow, opened: PinSize): void => {
 };
 
 /**
- * Captures pinned to the screen: small windows that float above other apps on
+ * Captures floating on top (Float on Top): small windows that float above other apps on
  * every Space until they are closed, one per capture.
  */
 export const createPinWindows = (options: {
   readonly store: CaptureStore;
   readonly preload: string;
   readonly url: string;
-  /** The pin's right-click menu on Windows. */
-  readonly copyImage: (id: CaptureId) => Promise<ActionResult>;
+  /** The pin's right-click menu on Windows, which says a failed copy itself. */
+  readonly copyImage: (id: CaptureId) => void;
   readonly showInLibrary: (id: CaptureId) => void;
 }): PinWindows => {
   const windows = new Map<CaptureId, BrowserWindow>();
@@ -85,7 +84,7 @@ export const createPinWindows = (options: {
       Menu.buildFromTemplate([
         {
           click: () => {
-            void options.copyImage(id);
+            options.copyImage(id);
           },
           label: "Copy image",
         },
@@ -142,7 +141,7 @@ export const createPinWindows = (options: {
       minimizable: false,
       show: false,
       skipTaskbar: true,
-      title: entry.record.thought.split("\n")[0] ?? "Pinned capture",
+      title: entry.record.title,
       webPreferences: secureWebPreferences(options.preload),
       width,
       x: area.x + area.width - width - MARGIN - step,
@@ -169,7 +168,7 @@ export const createPinWindows = (options: {
     }
 
     harden(window.webContents, "pin");
-    // The page's own title would name every pin in Alt+Tab "Pinned capture".
+    // The page's own title would name every floating capture in Alt+Tab alike.
     window.on("page-title-updated", (event) => {
       event.preventDefault();
     });

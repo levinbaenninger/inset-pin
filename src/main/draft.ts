@@ -1,9 +1,10 @@
-import { canSaveThought } from "@shared/capture-record";
+import { canSaveTitle, SCHEMA_VERSION } from "@shared/capture-record";
 import type {
   CaptureId,
-  CaptureRecordV1,
+  CaptureRecord,
   PointVia,
 } from "@shared/capture-record";
+import { LEAVE_SAVE_WAIT_MS } from "@shared/contracts";
 import type {
   CaptureProblem,
   CaptureView,
@@ -19,6 +20,8 @@ import {
 } from "@shared/geometry";
 import type { DisplaySnapshot, Point, Rect, Size } from "@shared/geometry";
 import { insetUrl } from "@shared/inset-url";
+
+import { saveErrorText } from "./save-error";
 
 export interface Anchor {
   readonly point: Point<"screen">;
@@ -65,7 +68,11 @@ export interface Draft {
   readonly content: DraftContent;
 }
 
-/** "asking" means the panel shows the quit question and waits for an answer. */
+/**
+ * - asking: the panel shows the quit question and waits for an answer; with a
+ *   save on its way, that save didn't finish within the limit, and its landing quits.
+ * - afterSave: a save is on its way and the quit follows it, asking if it isn't done within the limit.
+ */
 export type QuitState = "none" | "asking" | "afterSave";
 
 export type DraftState =
@@ -109,7 +116,9 @@ export type DraftEvent =
   | { readonly type: "dismissed" }
   | { readonly type: "discarded"; readonly id: CaptureId }
   | { readonly type: "quitHeld" }
-  | { readonly type: "quitChoice"; readonly choice: QuitChoice };
+  | { readonly type: "quitChoice"; readonly choice: QuitChoice }
+  /** The limit on the save a quit waits for ran out. */
+  | { readonly type: "saveOverdue" };
 
 /** Window visibility and the view are derived from state, never emitted as effects. */
 export type Effect =
@@ -117,7 +126,11 @@ export type Effect =
   | { readonly type: "publish"; readonly draft: Draft }
   | { readonly type: "focus" }
   | { readonly type: "quit" }
-  | { readonly type: "notify"; readonly message: string };
+  | { readonly type: "notify"; readonly message: string }
+  /** Starts the limit on the save a quit waits for (SPEC round 7). */
+  | { readonly type: "saveDeadline" }
+  /** Gives up the capture a discarded save may still write: never listed, even after a crash. */
+  | { readonly type: "withdraw"; readonly id: CaptureId };
 
 export interface Step {
   readonly state: DraftState;
@@ -141,10 +154,31 @@ const show = (state: DraftPhase): DraftPhase =>
     ? state
     : { ...state, shownSeq: state.shownSeq + 1, surface: "shown" };
 
-const normalize = (draft: Draft, content: DraftContent): DraftContent => ({
-  ...normalizeGeometry(content, draft.frame.size, draft.frame.ppd),
-  thought: content.thought,
-});
+const normalize = (draft: Draft, content: DraftContent): DraftContent => {
+  const { crop, pins } = normalizeGeometry(
+    content,
+    draft.frame.size,
+    draft.frame.ppd
+  );
+
+  return { ...content, crop, pins };
+};
+
+/** Anything the user would lose by quitting: words, a step, a due date or a pin. */
+export const hasContent = (content: DraftContent): boolean =>
+  content.title.trim() !== "" ||
+  content.description.trim() !== "" ||
+  content.steps.some((step) => step.text.trim() !== "") ||
+  content.due !== null ||
+  content.pins.length > 0;
+
+export const EMPTY_FIELDS = {
+  description: "",
+  due: null,
+  pins: [],
+  steps: [],
+  title: "",
+} as const satisfies Omit<DraftContent, "crop">;
 
 const withContent = (state: DraftPhase, content: DraftContent): DraftPhase => ({
   ...state,
@@ -191,16 +225,21 @@ const onCaptured = (
   }
 
   const { anchor, at, via } = state.invocation;
-  const pin = screenToImage(anchor.point, anchor.display.bounds, frame.size);
 
+  const pointer = screenToImage(
+    anchor.point,
+    anchor.display.bounds,
+    frame.size
+  );
+
+  // No pin yet: the crop centres on the pointer, and a click places pin 1.
   return stay({
     draft: {
       anchor,
       capturedAt: at,
       content: {
-        crop: defaultCrop(pin, frame.size, frame.ppd),
-        pin,
-        thought: "",
+        ...EMPTY_FIELDS,
+        crop: defaultCrop(pointer, frame.size, frame.ppd),
       },
       frame,
       id,
@@ -221,7 +260,7 @@ const onSaveRequested = (
 ): Step => {
   const current = editableDraft(state, id);
 
-  if (current === null || !canSaveThought(content.thought)) {
+  if (current === null || !canSaveTitle(content.title)) {
     return stay(state);
   }
 
@@ -273,7 +312,7 @@ const onQuitHeld = (state: DraftState): Step => {
   }
 
   if (state.write.kind === "saving") {
-    return stay({ ...state, quit: "afterSave" });
+    return to({ ...state, quit: "afterSave" }, { type: "saveDeadline" });
   }
 
   // The panel asks; its answer comes back as a quitChoice event.
@@ -289,27 +328,41 @@ const onQuitChoice = (state: DraftState, choice: QuitChoice): Step => {
     return to({ ...state, quit: "none" }, { type: "focus" });
   }
 
-  // Never quit during a write: wait for it, and keep the draft if it fails.
+  // A save that didn't finish in time: Discard quits at once, and Save keeps waiting for it.
   if (state.write.kind === "saving") {
-    return stay({ ...state, quit: "afterSave" });
+    return choice === "discard"
+      ? to(IDLE, { id: state.draft.id, type: "withdraw" }, { type: "quit" })
+      : stay(state);
   }
 
   if (choice === "discard") {
     return to(IDLE, { type: "quit" });
   }
 
-  if (canSaveThought(state.draft.content.thought)) {
+  if (canSaveTitle(state.draft.content.title)) {
     const saving: DraftPhase = {
       ...state,
       quit: "afterSave",
       write: { kind: "saving" },
     };
 
-    return to(saving, { draft: saving.draft, type: "publish" });
+    return to(
+      saving,
+      { draft: saving.draft, type: "publish" },
+      { type: "saveDeadline" }
+    );
   }
 
   return to({ ...state, quit: "none" }, { type: "focus" });
 };
+
+/** The save a quit waits for didn't land in time: the panel asks, and Cancel and Discard answer at once. */
+const onSaveOverdue = (state: DraftState): Step =>
+  state.phase === "draft" &&
+  state.quit === "afterSave" &&
+  state.write.kind === "saving"
+    ? to(show({ ...state, quit: "asking" }), { type: "focus" })
+    : stay(state);
 
 /** Pure; unknown or stale events leave the state unchanged. */
 export const step = (state: DraftState, event: DraftEvent): Step => {
@@ -351,9 +404,7 @@ export const step = (state: DraftState, event: DraftEvent): Step => {
         return stay(state);
       }
 
-      return current.quit === "afterSave"
-        ? to(IDLE, { type: "quit" })
-        : stay(IDLE);
+      return current.quit === "none" ? stay(IDLE) : to(IDLE, { type: "quit" });
     }
 
     case "publishFailed": {
@@ -374,6 +425,10 @@ export const step = (state: DraftState, event: DraftEvent): Step => {
 
     case "quitChoice": {
       return onQuitChoice(state, event.choice);
+    }
+
+    case "saveOverdue": {
+      return onSaveOverdue(state);
     }
 
     default: {
@@ -462,17 +517,15 @@ export const trayOf = (state: DraftState): TrayState => {
     : state.surface;
 };
 
-/** Uses the savability rule, so the quit dialog's Save is never a dead end. */
+/** Asks before anything typed or placed is lost; the question's Save needs a title. */
 export const mayQuit = (state: DraftState): boolean =>
   !(
     state.phase === "draft" &&
-    (canSaveThought(state.draft.content.thought) ||
-      state.write.kind === "saving")
+    (hasContent(state.draft.content) || state.write.kind === "saving")
   );
 
-export const toRecord = (draft: Draft, savedAt: Date): CaptureRecordV1 => {
-  const { crop, pin, thought } = draft.content;
-  const relative = pinInCrop(pin, crop);
+export const toRecord = (draft: Draft, savedAt: Date): CaptureRecord => {
+  const { crop, description, due, pins, steps, title } = draft.content;
 
   return {
     capturedAt: draft.capturedAt.toISOString(),
@@ -483,11 +536,21 @@ export const toRecord = (draft: Draft, savedAt: Date): CaptureRecordV1 => {
       pixelsPerDip: draft.frame.ppd,
       widthPx: crop.width,
     },
+    description: description.trim(),
+    due,
     invokedVia: draft.via,
-    pin: { x: relative.x, y: relative.y },
-    schemaVersion: 1,
+    pins: pins.map((pin) => {
+      const relative = pinInCrop(pin, crop);
+
+      return { x: relative.x, y: relative.y };
+    }),
+    schemaVersion: SCHEMA_VERSION,
     source: { kind: "display", label: draft.anchor.display.label },
-    thought,
+    status: { kind: "active" },
+    steps: steps.flatMap((item) =>
+      item.text.trim() === "" ? [] : [{ ...item, text: item.text.trim() }]
+    ),
+    title: title.trim(),
     updatedAt: savedAt.toISOString(),
   };
 };
@@ -508,7 +571,7 @@ export type PublishResult =
 export interface DraftDeps {
   readonly capture: (display: DisplaySnapshot) => Promise<CaptureResult>;
   readonly publish: (
-    record: CaptureRecordV1,
+    record: CaptureRecord,
     png: Uint8Array
   ) => Promise<PublishResult>;
   readonly surface: DraftSurface;
@@ -516,6 +579,8 @@ export interface DraftDeps {
   readonly now: () => Date;
   readonly quit: () => void;
   readonly notify: (message: string) => void;
+  /** Gives up a new capture whose save may be on its way; it never shows in the library, even after a crash. */
+  readonly withdraw: (id: CaptureId) => Promise<void>;
 }
 
 export interface DraftController {
@@ -531,6 +596,8 @@ export interface DraftController {
   readonly view: () => CaptureView;
   readonly tray: () => TrayState;
   readonly frame: (id: CaptureId) => CapturedFrame | null;
+  /** Where the pointer was when the draft was captured, in the frame's pixels. */
+  readonly pointer: (id: CaptureId) => Point<"image"> | null;
   readonly subscribe: (listener: () => void) => () => void;
 }
 
@@ -558,6 +625,8 @@ export const createDraftController = (deps: DraftDeps): DraftController => {
   const listeners = new Set<() => void>();
   const queue: DraftEvent[] = [];
   let draining = false;
+  /** One limit at a time: a newer wait for a save restarts it. */
+  let deadline: ReturnType<typeof setTimeout> | undefined;
 
   const reconcileSurface = (
     before: SurfaceState,
@@ -614,7 +683,7 @@ export const createDraftController = (deps: DraftDeps): DraftController => {
     } catch (error) {
       dispatch({
         id: draft.id,
-        message: errorMessage(error),
+        message: saveErrorText(error),
         type: "publishFailed",
       });
     }
@@ -644,6 +713,19 @@ export const createDraftController = (deps: DraftDeps): DraftController => {
 
       case "notify": {
         deps.notify(effect.message);
+        break;
+      }
+
+      case "saveDeadline": {
+        clearTimeout(deadline);
+        deadline = setTimeout(() => {
+          dispatch({ type: "saveOverdue" });
+        }, LEAVE_SAVE_WAIT_MS);
+        break;
+      }
+
+      case "withdraw": {
+        void deps.withdraw(effect.id);
         break;
       }
 
@@ -706,6 +788,15 @@ export const createDraftController = (deps: DraftDeps): DraftController => {
       state.phase === "draft" && state.draft.id === id
         ? state.draft.frame
         : null,
+    pointer: (id) => {
+      if (state.phase !== "draft" || state.draft.id !== id) {
+        return null;
+      }
+
+      const { anchor, frame } = state.draft;
+
+      return screenToImage(anchor.point, anchor.display.bounds, frame.size);
+    },
     holdQuitIfNeeded: () => {
       if (mayQuit(state)) {
         return "allow";

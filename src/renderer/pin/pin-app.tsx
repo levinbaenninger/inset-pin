@@ -1,4 +1,5 @@
 import {
+  Alert02Icon,
   ArrowUpRight01Icon,
   Cancel01Icon,
   Image01Icon,
@@ -17,6 +18,24 @@ import { useExpiringState } from "@/shared/use-expiring-state";
 const api = pinBridge();
 
 const COPIED_MS = 1600;
+
+/** Long enough to read why nothing was copied. */
+const FAILED_MS = 4000;
+
+/** A refusal with Retry stays long enough to reach for the button. */
+const RETRY_MS = 8000;
+
+/** A copy refused for unsaved changes offers Retry, which saves them in the library. */
+type CopyOutcome =
+  | { readonly kind: "copied" }
+  | { readonly kind: "saved" }
+  | {
+      readonly kind: "failed";
+      readonly message: string;
+      readonly retry: boolean;
+    };
+
+const UNREACHABLE = "Inset couldn’t reach the app. Try again.";
 
 type Saved = Extract<CaptureDetail, { kind: "ok" }>;
 
@@ -41,18 +60,45 @@ const useCapture = (): Saved | null => {
   return capture;
 };
 
-const copyImage = async (onCopied: (copied: true) => void): Promise<void> => {
-  const result = await api.copyImage();
+const copyImage = async (
+  onDone: (outcome: CopyOutcome) => void
+): Promise<void> => {
+  const result = await api.copyImage().catch(() => ({
+    message: UNREACHABLE,
+    ok: false as const,
+    retry: false,
+  }));
 
-  if (result.ok) {
-    onCopied(true);
-  }
+  onDone(
+    result.ok
+      ? { kind: "copied" }
+      : { kind: "failed", message: result.message, retry: result.retry }
+  );
+};
+
+const retrySave = async (
+  onDone: (outcome: CopyOutcome) => void
+): Promise<void> => {
+  const result = await api.retrySave().catch(() => ({
+    message: UNREACHABLE,
+    ok: false as const,
+  }));
+
+  onDone(
+    result.ok
+      ? { kind: "saved" }
+      : {
+          kind: "failed",
+          message: `Couldn’t save your changes. ${result.message}`,
+          retry: true,
+        }
+  );
 };
 
 const percent = (value: number, total: number): string =>
-  `${(value / total) * 100}%`;
+  `${((value + 0.5) / total) * 100}%`;
 
-/** Round buttons on the image, shown while the pointer is over the pin. */
+/** Round buttons on the image, shown while the pointer is over the floating capture. */
 const ImageButton = ({
   children,
   label,
@@ -73,7 +119,7 @@ const ImageButton = ({
   </button>
 );
 
-/** The window's drag region gets no pointer events, so the buttons show while the pin has the keyboard, after a click. */
+/** The window's drag region gets no pointer events, so the buttons show while the window has the keyboard, after a click. */
 const useWindowFocused = (): boolean => {
   const [focused, setFocused] = useState(document.hasFocus());
 
@@ -94,14 +140,88 @@ const useWindowFocused = (): boolean => {
   return focused;
 };
 
+const COPY_BUTTON = {
+  copied: { icon: Tick02Icon, label: "Copied" },
+  failed: { icon: Alert02Icon, label: "Couldn’t copy" },
+  idle: { icon: Image01Icon, label: "Copy image" },
+  saved: { icon: Image01Icon, label: "Copy image" },
+} as const;
+
+const lifetimeOf = (outcome: CopyOutcome): number => {
+  if (outcome.kind !== "failed") {
+    return outcome.kind === "saved" ? FAILED_MS : COPIED_MS;
+  }
+
+  return outcome.retry ? RETRY_MS : FAILED_MS;
+};
+
+const NOTE =
+  "flex items-start gap-1.5 text-xs leading-snug font-medium wrap-break-word text-white";
+
+/** Under the image: the title, or how the last copy went. */
+const Caption = ({
+  onRetry,
+  outcome,
+  title,
+}: {
+  readonly outcome: CopyOutcome | null;
+  readonly title: string;
+  readonly onRetry: () => void;
+}) => {
+  if (outcome?.kind === "failed") {
+    return (
+      <p className={NOTE} data-testid="copy-failed" role="alert">
+        <HugeiconsIcon
+          className="text-destructive mt-px shrink-0"
+          icon={Alert02Icon}
+          size={13}
+        />
+        <span className="line-clamp-3">{outcome.message}</span>
+        {outcome.retry ? (
+          <button
+            className="app-no-drag focus-visible:ring-ring/50 pointer-events-auto ml-auto shrink-0 rounded-full bg-white/15 px-2 py-0.5 text-white outline-none hover:bg-white/25 focus-visible:ring-3"
+            data-testid="retry-save"
+            onClick={onRetry}
+            type="button"
+          >
+            Retry
+          </button>
+        ) : null}
+      </p>
+    );
+  }
+
+  if (outcome?.kind === "saved") {
+    return (
+      <output className={NOTE} data-testid="saved">
+        <HugeiconsIcon className="mt-px shrink-0" icon={Tick02Icon} size={13} />
+        <span className="line-clamp-3">Saved. You can copy it now.</span>
+      </output>
+    );
+  }
+
+  return (
+    <p className="line-clamp-2 text-xs leading-snug wrap-break-word text-white">
+      {title}
+    </p>
+  );
+};
+
 const Pin = ({ capture }: { readonly capture: Saved }) => {
-  const [copied, setCopied] = useExpiringState<true>(COPIED_MS);
+  const [lifetime, setLifetime] = useState(COPIED_MS);
+  const [copied, setCopied] = useExpiringState<CopyOutcome>(lifetime);
+  const button = COPY_BUTTON[copied?.kind ?? "idle"];
   const focused = useWindowFocused();
-  const { image, pin, thought } = capture;
+  const { image, pins, title } = capture;
 
   const close = useCallback((): void => {
     api.close();
   }, []);
+
+  const show = (outcome: CopyOutcome): void => {
+    setLifetime(lifetimeOf(outcome));
+    setCopied(outcome);
+  };
 
   useLocalKeys({ onEscape: close });
 
@@ -116,15 +236,21 @@ const Pin = ({ capture }: { readonly capture: Saved }) => {
         }}
       >
         <img
-          alt={thought}
+          alt={title}
           className="block size-full"
           draggable={false}
           src={image.url}
         />
-        <PinMarker
-          left={percent(pin.x, image.widthPx)}
-          top={percent(pin.y, image.heightPx)}
-        />
+        {pins.map((pin, index) => (
+          <PinMarker
+            // Pins have no identity beyond their number.
+            // oxlint-disable-next-line react/no-array-index-key
+            key={index}
+            left={percent(pin.x, image.widthPx)}
+            number={index + 1}
+            top={percent(pin.y, image.heightPx)}
+          />
+        ))}
       </div>
       <div
         className="absolute inset-x-1.5 top-1.5 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 data-focused:opacity-100"
@@ -135,15 +261,12 @@ const Pin = ({ capture }: { readonly capture: Saved }) => {
         </ImageButton>
         <span className="flex-1" />
         <ImageButton
-          label={copied === null ? "Copy image" : "Copied"}
+          label={button.label}
           onClick={() => {
-            void copyImage(setCopied);
+            void copyImage(show);
           }}
         >
-          <HugeiconsIcon
-            icon={copied === null ? Image01Icon : Tick02Icon}
-            size={14}
-          />
+          <HugeiconsIcon icon={button.icon} size={14} />
         </ImageButton>
         <ImageButton
           label="Show in library"
@@ -156,9 +279,13 @@ const Pin = ({ capture }: { readonly capture: Saved }) => {
       </div>
       {/* The padding sits outside the clamped text, or a third line would show through it. */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-linear-to-t from-black/80 to-transparent px-2.5 pt-6 pb-2">
-        <p className="line-clamp-2 text-xs leading-snug wrap-break-word text-white">
-          {thought}
-        </p>
+        <Caption
+          onRetry={() => {
+            void retrySave(show);
+          }}
+          outcome={copied}
+          title={title}
+        />
       </div>
     </main>
   );

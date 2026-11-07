@@ -1,37 +1,18 @@
 import type { PointVia } from "@shared/capture-record";
 import type { ReadOnlyWhy } from "@shared/contracts";
+import { clockTime, dayAndTime, dayHeading } from "@shared/dates";
 import { shortcutLabel } from "@shared/shortcut";
 
 import { isMac } from "@/shared/platform";
 
-const dateTime = new Intl.DateTimeFormat(undefined, {
-  dateStyle: "medium",
-  timeStyle: "short",
-});
+/** "Today, 10:42 AM" over a capture, in the system's locale, as the list and the chips read dates. */
+export const formatCaptureTime = (iso: string, now: Date): string =>
+  dayAndTime(new Date(iso), now);
 
-const time = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
+export const timeOfDay = (iso: string): string => clockTime(new Date(iso));
 
-const weekdayDate = new Intl.DateTimeFormat(undefined, {
-  day: "numeric",
-  month: "short",
-  weekday: "short",
-});
-
-export const formatCaptureTime = (iso: string): string =>
-  dateTime.format(new Date(iso));
-
-export const timeOfDay = (iso: string): string => time.format(new Date(iso));
-
-export const dayLabel = (
-  day: Date,
-  relative: "today" | "yesterday" | null
-): string => {
-  if (relative === "today") {
-    return "Today";
-  }
-
-  return relative === "yesterday" ? "Yesterday" : weekdayDate.format(day);
-};
+/** A day group's heading: Today, Yesterday, else the weekday and short date. */
+export const dayLabel = (day: Date, now: Date): string => dayHeading(day, now);
 
 export const sourceText = (label: string | null): string =>
   label ?? "Screen capture";

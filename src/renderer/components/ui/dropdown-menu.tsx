@@ -4,6 +4,8 @@ import { cn } from "cn";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import * as React from "react";
 
+import { keepKeysInMenu, MenuOpenReport } from "@/shared/menu-keys";
+
 const CONTENT =
   "bg-popover text-popover-foreground ring-foreground/10 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 z-50 max-h-(--radix-dropdown-menu-content-available-height) min-w-48 origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-lg p-1 shadow-md ring-1 duration-100";
 
@@ -35,17 +37,26 @@ function DropdownMenuContent({
   className,
   sideOffset = 4,
   collisionPadding = 6,
+  onKeyDownCapture,
+  children,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Content>) {
   return (
     <DropdownMenuPrimitive.Portal>
       <DropdownMenuPrimitive.Content
         data-slot="dropdown-menu-content"
+        onKeyDownCapture={(event) => {
+          onKeyDownCapture?.(event);
+          keepKeysInMenu(event);
+        }}
         collisionPadding={collisionPadding}
         sideOffset={sideOffset}
         className={cn(CONTENT, className)}
         {...props}
-      />
+      >
+        <MenuOpenReport />
+        {children}
+      </DropdownMenuPrimitive.Content>
     </DropdownMenuPrimitive.Portal>
   );
 }
@@ -144,7 +155,7 @@ function DropdownMenuShortcut({
     <span
       data-slot="dropdown-menu-shortcut"
       className={cn(
-        "text-muted-foreground ml-auto pl-4 text-xs tracking-wide",
+        "text-muted-foreground ml-auto pl-4 text-xs tabular-nums",
         className
       )}
       {...props}

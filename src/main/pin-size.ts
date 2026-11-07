@@ -1,4 +1,4 @@
-/** A pinned capture opens at its own size, within these bounds (DIP). */
+/** A floating capture opens at its own size, within these bounds (DIP). */
 const MAX_WIDTH = 420;
 const MAX_HEIGHT = 320;
 export const MIN_WIDTH = 120;

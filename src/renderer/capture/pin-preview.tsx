@@ -1,11 +1,7 @@
-import {
-  ArrowExpand01Icon,
-  ArrowShrink01Icon,
-} from "@hugeicons/core-free-icons";
+import { Location01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { DraftView } from "@shared/contracts";
 import {
-  clampPin,
   fitView,
   imageToPreview,
   isTightest,
@@ -25,6 +21,7 @@ import type {
   PreviewView,
   Rect,
 } from "@shared/geometry";
+import { addPin, movePin, pinAt } from "@shared/pins";
 import {
   useEffect,
   useEffectEvent,
@@ -32,16 +29,20 @@ import {
   useRef,
   useState,
 } from "react";
-import type { KeyboardEvent, PointerEvent, ReactNode, RefObject } from "react";
+import type { PointerEvent, ReactNode, RefObject } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Kbd } from "@/components/ui/kbd";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { PinMarker } from "@/shared/pin-marker";
+import { isTextField } from "@/shared/key-targets";
+import { PinMarker, pinHeadOffset } from "@/shared/pin-marker";
+
+const HELP_ID = "pin-preview-help";
 
 /** Panel content width: 380 − 2 × 12 padding. */
 const MAX_BOX_WIDTH = 356;
@@ -49,24 +50,31 @@ const MAX_BOX_WIDTH = 356;
 /** The preview keeps one shape, so the panel's height never changes while the crop does. */
 const BOX_ASPECT = 220 / 356;
 
-const NUDGE_FAR = 10;
-
 /** A trackpad pinch arrives as ctrl+wheel; this much delta doubles or halves the crop's width. */
 const PINCH_DOUBLING_DELTA = 120;
 
-/** A press that moves less than this is a click, which places the pin. */
+/** A press that moves less than this is a click, which places a pin. */
 const CLICK_SLOP = 3;
 
-/** How close to a corner, an edge or the pin a press must be to take it (preview pixels). */
+/** How close to a corner, an edge or a pin's head a press must be to take it (preview pixels). */
 const HANDLE_REACH = 10;
-const PIN_REACH = 12;
+const PIN_REACH = 11;
 
-const ARROWS = new Map([
-  ["ArrowDown", { x: 0, y: 1 }],
-  ["ArrowLeft", { x: -1, y: 0 }],
-  ["ArrowRight", { x: 1, y: 0 }],
-  ["ArrowUp", { x: 0, y: -1 }],
-]);
+/** The hint chip's height; it sits in the dimmed margin around the crop, off the frame and its handles. */
+const HINT_HEIGHT = 20;
+
+/** Where the hint goes: centred in the margin below the crop, else above it, else just inside the crop's bottom. */
+const hintTop = (crop: Rect<"preview">, boxHeight: number): number => {
+  const below = boxHeight - (crop.y + crop.height);
+
+  if (below >= HINT_HEIGHT + 2) {
+    return crop.y + crop.height + (below - HINT_HEIGHT) / 2;
+  }
+
+  return crop.y >= HINT_HEIGHT + 2
+    ? (crop.y - HINT_HEIGHT) / 2
+    : crop.y + crop.height - HINT_HEIGHT - HANDLE_REACH;
+};
 
 const CURSORS: Readonly<Record<CropHandle, string>> = {
   e: "cursor-ew-resize",
@@ -119,7 +127,7 @@ const useBoxWidth = (): [RefObject<HTMLDivElement | null>, number] => {
   return [ref, width];
 };
 
-/** Pinch on a trackpad (ctrl+wheel) scales the crop about the pin; plain scrolling is left alone. */
+/** Pinch on a trackpad (ctrl+wheel) scales the crop; plain scrolling is left alone. */
 const usePinch = (
   ref: RefObject<HTMLElement | null>,
   onScale: (factor: number) => void
@@ -147,7 +155,13 @@ const usePinch = (
 };
 
 /** What a press at this point would take hold of. */
-type Target = CropHandle | "pin" | "crop" | "outside";
+type Target =
+  | { readonly kind: "pin"; readonly index: number }
+  | { readonly kind: "handle"; readonly handle: CropHandle }
+  | { readonly kind: "crop" }
+  | { readonly kind: "outside" };
+
+const OUTSIDE: Target = { kind: "outside" };
 
 const near = (value: number, edge: number): boolean =>
   Math.abs(value - edge) <= HANDLE_REACH;
@@ -188,16 +202,18 @@ const handleAt = (
 const targetAt = (
   point: Point<"preview">,
   box: Rect<"preview">,
-  marker: Point<"preview">
+  heads: readonly Point<"preview">[]
 ): Target => {
-  if (Math.hypot(point.x - marker.x, point.y - marker.y) <= PIN_REACH) {
-    return "pin";
+  const pin = pinAt(heads, point, PIN_REACH);
+
+  if (pin !== null) {
+    return { index: pin, kind: "pin" };
   }
 
   const handle = handleAt(point, box);
 
   if (handle !== null) {
-    return handle;
+    return { handle, kind: "handle" };
   }
 
   const inside =
@@ -206,19 +222,39 @@ const targetAt = (
     point.y >= box.y &&
     point.y <= box.y + box.height;
 
-  return inside ? "crop" : "outside";
+  return inside ? { kind: "crop" } : OUTSIDE;
 };
 
-const cursorFor = (target: Target, dragging: boolean): string => {
-  if (target === "pin") {
-    return dragging ? "cursor-grabbing" : "cursor-grab";
-  }
+const cursorFor = (
+  target: Target,
+  dragging: boolean,
+  pinMode: boolean
+): string => {
+  switch (target.kind) {
+    case "pin": {
+      return dragging ? "cursor-grabbing" : "cursor-grab";
+    }
 
-  if (target === "crop") {
-    return dragging ? "cursor-grabbing" : "cursor-move";
-  }
+    case "crop": {
+      if (dragging) {
+        return "cursor-grabbing";
+      }
 
-  return target === "outside" ? "cursor-default" : CURSORS[target];
+      return pinMode ? "cursor-crosshair" : "cursor-move";
+    }
+
+    case "handle": {
+      return CURSORS[target.handle];
+    }
+
+    case "outside": {
+      return dragging ? "cursor-grabbing" : "cursor-default";
+    }
+
+    default: {
+      return "cursor-default";
+    }
+  }
 };
 
 /** A drag in progress; the view stays still under it, so what is dragged follows the pointer. */
@@ -228,37 +264,52 @@ interface Gesture {
   readonly from: Point<"preview">;
   readonly crop: Rect<"image">;
   readonly moved: boolean;
+  /** From the press to the held pin's tip, so the tip keeps that distance while dragged. */
+  readonly grip: Point<"preview">;
 }
 
-interface ZoomButtonProps {
+interface ToolButtonProps {
+  /** The button's name, short, as the e2e scripts and screen readers find it. */
   readonly label: string;
+  /** What the tooltip says it does. */
   readonly hint: string;
-  readonly icon: typeof ArrowExpand01Icon;
+  readonly keys: string;
   readonly disabled: boolean;
+  readonly pressed?: boolean;
   readonly onClick: () => void;
+  /** An icon (pin mode) or a word (Tighten, Widen). */
+  readonly children: ReactNode;
+  readonly face: "icon" | "word";
 }
 
-const ZoomButton = ({
+const ToolButton = ({
+  children,
   disabled,
   hint,
-  icon,
+  keys,
   label,
   onClick,
-}: ZoomButtonProps) => (
+  pressed,
+  face,
+}: ToolButtonProps) => (
   <Tooltip>
     <TooltipTrigger asChild>
       <Button
         aria-label={label}
+        aria-pressed={pressed}
         disabled={disabled}
         onClick={onClick}
-        size="icon-sm"
+        size={face === "icon" ? "icon-xs" : "xs"}
         type="button"
-        variant="ghost"
+        variant="tool"
       >
-        <HugeiconsIcon icon={icon} />
+        {children}
       </Button>
     </TooltipTrigger>
-    <TooltipContent side="bottom">{hint}</TooltipContent>
+    <TooltipContent side="bottom">
+      {hint}
+      <Kbd>{keys}</Kbd>
+    </TooltipContent>
   </Tooltip>
 );
 
@@ -267,8 +318,19 @@ export interface PinPreviewProps {
   readonly geometry: PinGeometry;
   readonly disabled: boolean;
   readonly onChange: (geometry: PinGeometry) => void;
-  /** Shown left of the context buttons, above the preview. */
+  readonly selected: number | null;
+  readonly onSelect: (index: number | null) => void;
+  readonly pinMode: boolean;
+  readonly onPinMode: (on: boolean) => void;
+  /** Where the pointer is over the image, for ⇧P; null when it is elsewhere. */
+  readonly pointerRef: RefObject<Point<"image"> | null>;
+  /** The preview, which takes the focus while a pin is selected. */
+  readonly previewRef: RefObject<HTMLDivElement | null>;
+  readonly keys: { readonly tighten: string; readonly widen: string };
+  /** Shown left of the tools, above the preview. */
   readonly caption: ReactNode;
+  /** A line under the caption and the tools, across the full width. */
+  readonly note?: ReactNode;
 }
 
 const pointIn = (event: PointerEvent<HTMLElement>): Point<"preview"> => {
@@ -277,23 +339,43 @@ const pointIn = (event: PointerEvent<HTMLElement>): Point<"preview"> => {
   return pt(event.clientX - box.left, event.clientY - box.top);
 };
 
+/** Tighten or widen the crop, from the buttons, ⌘= and ⌘− or a pinch. */
+export const rescaleCrop = (
+  geometry: PinGeometry,
+  frame: DraftView["frame"],
+  factor: number
+): PinGeometry => ({
+  crop: scaleCrop(geometry.crop, geometry.pins, factor, frame.size, frame.ppd),
+  pins: geometry.pins,
+});
+
 /**
- * The capture around the pin. The frame is what gets saved: drag it to move
- * it, drag its corners and edges to crop, and pinch to show more or less. A
- * click or a drag on the pin moves the pin.
+ * The capture around the pointer. The frame is what gets saved: drag it to
+ * move it, drag its corners and edges to crop, and pinch to show more or
+ * less. With pin mode on, a click inside the frame places the next numbered
+ * pin; a pin can be dragged, and a click selects it.
  */
 export const PinPreview = ({
   caption,
+  note,
   disabled,
   frame,
   geometry,
+  keys,
   onChange,
+  onPinMode,
+  onSelect,
+  pinMode,
+  pointerRef,
+  previewRef,
+  selected,
 }: PinPreviewProps) => {
-  const { crop, pin } = geometry;
+  const { crop, pins } = geometry;
   const [boxRef, boxWidth] = useBoxWidth();
-  const previewRef = useRef<HTMLButtonElement>(null);
   const [gesture, setGesture] = useState<Gesture | null>(null);
-  const [hover, setHover] = useState<Target>("outside");
+  /** A click in the frame while the title has the focus leaves it there, so typing goes on. */
+  const keepTyping = useRef(false);
+  const [hover, setHover] = useState<Target>(OUTSIDE);
   const box = size<"preview">(boxWidth, Math.round(boxWidth * BOX_ASPECT));
   const view = gesture?.view ?? fitView(crop, frame.size, box);
   const corner = imageToPreview(pt(crop.x, crop.y), view);
@@ -305,42 +387,58 @@ export const PinPreview = ({
     y: corner.y,
   };
 
-  const marker = imageToPreview(pin, view);
+  const markers = pins.map((pin) => imageToPreview(pin, view));
+
+  const heads = markers.map((tip) =>
+    pt<"preview">(tip.x, tip.y - pinHeadOffset())
+  );
+
   const widest = isWidest(crop, frame.size);
   const tightest = isTightest(crop, frame.size, frame.ppd);
 
   const rescale = (factor: number): void => {
-    onChange({
-      crop: scaleCrop(crop, pin, factor, frame.size, frame.ppd),
-      pin,
-    });
+    onChange(rescaleCrop(geometry, frame, factor));
   };
 
-  const placePin = (point: Point<"preview">, within: PreviewView): void => {
-    onChange({ crop, pin: clampPin(previewToImage(point, within), crop) });
-  };
-
-  const onPointerDown = (event: PointerEvent<HTMLButtonElement>): void => {
+  const onPointerDown = (event: PointerEvent<HTMLDivElement>): void => {
     if (disabled || event.button !== 0) {
       return;
     }
 
     const point = pointIn(event);
-    const target = targetAt(point, cropBox, marker);
+    const target = targetAt(point, cropBox, heads);
 
     event.currentTarget.setPointerCapture(event.pointerId);
-    setGesture({ crop, from: point, moved: false, target, view });
+    keepTyping.current =
+      target.kind !== "pin" && isTextField(document.activeElement);
 
-    if (target === "pin") {
-      placePin(point, view);
+    if (!keepTyping.current) {
+      event.currentTarget.focus({ preventScroll: true });
+    }
+
+    const tip = target.kind === "pin" ? markers[target.index] : undefined;
+
+    setGesture({
+      crop,
+      from: point,
+      grip: pt((tip?.x ?? point.x) - point.x, (tip?.y ?? point.y) - point.y),
+      moved: false,
+      target,
+      view,
+    });
+
+    if (target.kind === "pin") {
+      onSelect(target.index);
     }
   };
 
-  const onPointerMove = (event: PointerEvent<HTMLButtonElement>): void => {
+  const onPointerMove = (event: PointerEvent<HTMLDivElement>): void => {
     const point = pointIn(event);
 
+    pointerRef.current = previewToImage(point, gesture?.view ?? view);
+
     if (gesture === null) {
-      setHover(disabled ? "outside" : targetAt(point, cropBox, marker));
+      setHover(disabled ? OUTSIDE : targetAt(point, cropBox, heads));
 
       return;
     }
@@ -362,9 +460,23 @@ export const PinPreview = ({
 
     const { target } = gesture;
 
-    if (target === "pin") {
-      placePin(point, gesture.view);
-    } else if (target === "crop" || target === "outside") {
+    if (target.kind === "pin") {
+      // The press took the head, which sits above the tip: the tip keeps that distance.
+      const grip = pt<"preview">(
+        point.x + gesture.grip.x,
+        point.y + gesture.grip.y
+      );
+
+      onChange({
+        crop,
+        pins: movePin(
+          pins,
+          target.index,
+          previewToImage(grip, gesture.view),
+          crop
+        ),
+      });
+    } else if (target.kind === "crop" || target.kind === "outside") {
       const { scale } = gesture.view;
 
       onChange({
@@ -374,53 +486,49 @@ export const PinPreview = ({
             (point.x - gesture.from.x) / scale,
             (point.y - gesture.from.y) / scale
           ),
-          pin,
+          pins,
           frame.size
         ),
-        pin,
+        pins,
       });
     } else {
       onChange({
         crop: resizeCrop(
           gesture.crop,
-          target,
+          target.handle,
           previewToImage(point, gesture.view),
-          pin,
+          pins,
           frame.size,
           frame.ppd
         ),
-        pin,
+        pins,
       });
     }
   };
 
-  const onPointerUp = (event: PointerEvent<HTMLButtonElement>): void => {
-    // A click inside the frame places the pin there.
-    if (gesture !== null && !gesture.moved && gesture.target === "crop") {
-      placePin(pointIn(event), gesture.view);
+  const onPointerUp = (event: PointerEvent<HTMLDivElement>): void => {
+    if (gesture !== null && !gesture.moved) {
+      const { target } = gesture;
+
+      // A click inside the frame places the next pin; elsewhere it lets the selection go.
+      if (target.kind === "crop" && pinMode) {
+        const next = addPin(
+          pins,
+          previewToImage(pointIn(event), gesture.view),
+          crop
+        );
+
+        if (next !== null) {
+          onChange({ crop, pins: [...next] });
+          // Selected only where its keys work: with the focus kept in the title, typing goes on instead.
+          onSelect(keepTyping.current ? null : next.length - 1);
+        }
+      } else if (target.kind !== "pin") {
+        onSelect(null);
+      }
     }
 
     setGesture(null);
-  };
-
-  const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>): void => {
-    const direction = ARROWS.get(event.key);
-
-    if (disabled || direction === undefined) {
-      return;
-    }
-
-    event.preventDefault();
-
-    const step = frame.ppd * (event.shiftKey ? NUDGE_FAR : 1);
-
-    onChange({
-      crop,
-      pin: clampPin(
-        pt(pin.x + direction.x * step, pin.y + direction.y * step),
-        crop
-      ),
-    });
   };
 
   usePinch(previewRef, (factor) => {
@@ -429,56 +537,120 @@ export const PinPreview = ({
     }
   });
 
+  const offHint = pinMode
+    ? "Click to place pin 1"
+    : "Pin mode is off · press P";
+
+  const hint = pins.length === 0 ? offHint : null;
+
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex min-h-7 items-center justify-between gap-2">
         <div className="min-w-0 text-xs">{caption}</div>
-        <div className="flex shrink-0 items-center">
-          <ZoomButton
+        {/* One small group: pin mode, then the crop's two steps, named in words. */}
+        <fieldset
+          className="border-foreground/10 m-0 flex min-w-0 shrink-0 items-center gap-px rounded-lg border p-px"
+          data-testid="preview-tools"
+        >
+          <legend className="sr-only">Preview tools</legend>
+          <ToolButton
+            disabled={disabled}
+            hint={
+              pinMode ? "Pin mode: a click places a pin" : "Pin mode is off"
+            }
+            keys="P"
+            label="Pin mode"
+            onClick={() => {
+              onPinMode(!pinMode);
+            }}
+            pressed={pinMode}
+            face="icon"
+          >
+            <HugeiconsIcon className="size-3.5" icon={Location01Icon} />
+          </ToolButton>
+          <span
+            aria-hidden="true"
+            className="bg-foreground/10 mx-0.5 h-4 w-px"
+          />
+          <ToolButton
             disabled={disabled || tightest}
-            hint="Tighten: show less around the pin"
-            icon={ArrowShrink01Icon}
+            hint="Show less around the pins"
+            keys={keys.tighten}
             label="Tighten"
             onClick={() => {
               rescale(1 / WIDEN_STEP);
             }}
-          />
-          <ZoomButton
+            face="word"
+          >
+            Tighten
+          </ToolButton>
+          <ToolButton
             disabled={disabled || widest}
-            hint="Widen context: show more around the pin"
-            icon={ArrowExpand01Icon}
-            label="Widen context"
+            hint="Show more around the pins"
+            keys={keys.widen}
+            label="Widen"
             onClick={() => {
               rescale(WIDEN_STEP);
             }}
-          />
-        </div>
+            face="word"
+          >
+            Widen
+          </ToolButton>
+        </fieldset>
       </div>
+      {note === undefined ? null : (
+        <p className="text-muted-foreground -mt-1.5 text-xs leading-snug">
+          {note}
+        </p>
+      )}
+      <p className="sr-only" id={HELP_ID}>
+        Drag the frame or its edges to crop, pinch to show more or less. With
+        pin mode on, click to place a numbered pin; drag a pin to move it. Keys:
+        P pin mode, Shift+P drop a pin, 1 to 9 select a pin, arrows nudge it,
+        Backspace removes it.
+      </p>
       <div className="flex justify-center" ref={boxRef}>
-        <button
-          aria-label="Pin and crop. Click or drag to move the pin, drag the frame or its edges to crop, pinch to show more or less. Arrow keys move the pin; Shift moves it further."
-          aria-roledescription="pin preview"
+        {/* The preview is a canvas for the crop and its pins: it takes the pointer and, through usePinKeys, the keys. */}
+        {/* oxlint-disable-next-line jsx-a11y/no-noninteractive-element-interactions */}
+        <div
+          aria-describedby={HELP_ID}
+          aria-disabled={disabled}
+          aria-label={`Screenshot with ${pins.length === 1 ? "1 pin" : `${pins.length} pins`}`}
           className={cn(
-            "bg-muted focus-visible:ring-ring/50 relative h-(--box-h) w-(--box-w) touch-none overflow-hidden rounded-lg outline-none focus-visible:ring-3 disabled:cursor-default",
-            cursorFor(gesture?.target ?? hover, gesture !== null)
+            "bg-muted focus-visible:ring-ring/50 relative h-(--box-h) w-(--box-w) touch-none overflow-hidden rounded-lg outline-none select-none focus-visible:ring-3",
+            disabled
+              ? "cursor-default"
+              : cursorFor(gesture?.target ?? hover, gesture !== null, pinMode)
           )}
-          disabled={disabled}
-          onKeyDown={onKeyDown}
-          onPointerDown={onPointerDown}
-          onPointerLeave={() => {
-            setHover("outside");
+          data-testid="pin-preview"
+          // The selection lives here: once the focus leaves the preview, digits and ⌫ elsewhere leave pins alone.
+          onBlur={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget)) {
+              onSelect(null);
+            }
           }}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
+          onMouseDown={(event) => {
+            if (keepTyping.current) {
+              event.preventDefault();
+            }
+          }}
           onPointerCancel={() => {
             setGesture(null);
           }}
+          onPointerDown={onPointerDown}
+          onPointerLeave={() => {
+            setHover(OUTSIDE);
+            pointerRef.current = null;
+          }}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
           ref={previewRef}
+          role="application"
           style={{
             "--box-h": `${box.height}px`,
             "--box-w": `${box.width}px`,
           }}
-          type="button"
+          tabIndex={disabled ? -1 : 0}
         >
           {/* Settles on the new crop after a drag; follows the pointer exactly during one. */}
           <div
@@ -488,7 +660,7 @@ export const PinPreview = ({
             )}
           >
             <img
-              alt="Captured screen around the pin"
+              alt=""
               className="absolute top-(--img-y) left-(--img-x) h-(--img-h) w-(--img-w) max-w-none select-none"
               draggable={false}
               src={frame.url}
@@ -510,9 +682,37 @@ export const PinPreview = ({
                 "--crop-y": `${cropBox.y}px`,
               }}
             />
-            <PinMarker left={`${marker.x}px`} top={`${marker.y}px`} />
+            {markers.map((marker, index) => (
+              <PinMarker
+                // Pins have no identity beyond their number.
+                // oxlint-disable-next-line react/no-array-index-key
+                key={index}
+                left={`${marker.x}px`}
+                lifted={
+                  gesture?.moved === true &&
+                  gesture.target.kind === "pin" &&
+                  gesture.target.index === index
+                }
+                number={index + 1}
+                selected={selected === index}
+                top={`${marker.y}px`}
+              />
+            ))}
           </div>
-        </button>
+          {hint === null || disabled ? null : (
+            <p
+              aria-live="polite"
+              className="pointer-events-none absolute inset-x-0 top-(--hint-y) z-20 flex justify-center"
+              data-testid="pin-hint"
+              style={{ "--hint-y": `${hintTop(cropBox, box.height)}px` }}
+            >
+              <span className="flex h-5 items-center gap-1 rounded-full bg-black/75 px-2 text-xs leading-none font-medium text-white shadow-sm backdrop-blur-sm">
+                <HugeiconsIcon icon={Location01Icon} size={11} />
+                {hint}
+              </span>
+            </p>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -7,7 +7,7 @@ export type IconPlace = (typeof ICON_PLACES)[number];
 export const SettingsSchema = z.object({
   /** macOS: where the app's icon shows; menu bar only makes it an accessory app without its own menu bar. */
   iconIn: z.enum(ICON_PLACES),
-  /** A saved capture also goes to the clipboard: the image with its pin, and the thought as text. */
+  /** A saved capture also goes to the clipboard: the image with its pins, and its text. */
   copyAfterSave: z.boolean(),
 });
 
