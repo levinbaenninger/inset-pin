@@ -1,12 +1,10 @@
 import {
-  ArrowLeft01Icon,
-  ArrowRight01Icon,
   Calendar03Icon,
   CalendarRemove01Icon,
   Cancel01Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { longDate, monthTitle, shortDate, weekdayNames } from "@shared/dates";
+import { longDate, monthTitle, shortDate } from "@shared/dates";
 import {
   dueChipText,
   dueLongLabel,
@@ -15,11 +13,13 @@ import {
   dueState,
   fromDueDate,
   toDueDate,
+  weekStartDay,
 } from "@shared/due";
 import type { DueDate, DueState } from "@shared/due";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 
+import { Calendar } from "@/components/ui/calendar";
 import { Kbd } from "@/components/ui/kbd";
 import {
   Popover,
@@ -62,160 +62,69 @@ export const DueChip = ({
   </span>
 );
 
-const WEEKDAYS = weekdayNames();
+const WEEK_START = weekStartDay();
 
-const addDays = (date: Date, days: number): Date =>
-  new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
-
-/** Seven days to a row. */
-const weeksOf = (days: readonly Date[]): readonly (readonly Date[])[] =>
-  Array.from({ length: Math.ceil(days.length / 7) }, (_, week) =>
-    days.slice(week * 7, week * 7 + 7)
-  );
-
-/** The six weeks shown for a month, starting on a Monday. */
-const monthDays = (month: Date): readonly Date[] => {
-  const first = new Date(month.getFullYear(), month.getMonth(), 1);
-  const back = (first.getDay() + 6) % 7;
-  const start = addDays(first, -back);
-
-  return Array.from({ length: 42 }, (_, index) => addDays(start, index));
-};
-
-const KEY_DAYS = new Map([
-  ["ArrowDown", 7],
-  ["ArrowLeft", -1],
-  ["ArrowRight", 1],
-  ["ArrowUp", -7],
-]);
-
-/** A month to pick a day from; the arrow keys move the focus, Return picks. */
-const Calendar = ({
-  initial,
+/**
+ * A month to pick a day from: shadcn's Calendar, as in the Shelf, so the
+ * three Inset apps look alike. It focuses the Due day, else today; the arrow
+ * keys move, Return picks. The week starts on the system's first day.
+ */
+const DueCalendar = ({
+  due,
   now,
   onPick,
 }: {
-  readonly initial: DueDate | null;
+  readonly due: DueDate | null;
   readonly now: Date;
   readonly onPick: (due: DueDate) => void;
 }) => {
-  const [focused, setFocused] = useState(() =>
-    initial === null ? now : fromDueDate(initial)
-  );
-
-  const grid = useRef<HTMLTableSectionElement>(null);
-  const month = new Date(focused.getFullYear(), focused.getMonth(), 1);
-  const today = toDueDate(now);
-  const focusedKey = toDueDate(focused);
-
-  useEffect(() => {
-    grid.current
-      ?.querySelector<HTMLButtonElement>(`[data-day="${focusedKey}"]`)
-      ?.focus();
-  }, [focusedKey]);
-
-  const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>): void => {
-    const days = KEY_DAYS.get(event.key);
-
-    if (days !== undefined) {
-      event.preventDefault();
-      setFocused(addDays(focused, days));
-    }
-  };
-
-  const shiftMonth = (by: number): void => {
-    setFocused(
-      new Date(
-        focused.getFullYear(),
-        focused.getMonth() + by,
-        Math.min(focused.getDate(), 28)
-      )
-    );
-  };
+  const day = due === null ? undefined : fromDueDate(due);
 
   return (
-    <div className="flex w-60 flex-col gap-1 p-1">
-      <div className="flex items-center justify-between">
-        <button
-          aria-label="Previous month"
-          className="hover:bg-muted focus-visible:ring-ring/50 grid size-7 place-items-center rounded-md outline-none focus-visible:ring-3"
-          onClick={() => {
-            shiftMonth(-1);
-          }}
-          type="button"
-        >
-          <HugeiconsIcon icon={ArrowLeft01Icon} size={14} />
-        </button>
-        <p aria-live="polite" className="text-sm font-medium">
-          {monthTitle(month)}
-        </p>
-        <button
-          aria-label="Next month"
-          className="hover:bg-muted focus-visible:ring-ring/50 grid size-7 place-items-center rounded-md outline-none focus-visible:ring-3"
-          onClick={() => {
-            shiftMonth(1);
-          }}
-          type="button"
-        >
-          <HugeiconsIcon icon={ArrowRight01Icon} size={14} />
-        </button>
-      </div>
-      <table className="w-full border-separate border-spacing-0.5 text-center">
-        <thead>
-          <tr>
-            {WEEKDAYS.map((day) => (
-              <th
-                className="text-muted-foreground py-1 text-xs font-medium"
-                key={day}
-                scope="col"
-              >
-                {day}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody ref={grid}>
-          {weeksOf(monthDays(month)).map((week) => (
-            <tr key={toDueDate(week[0] ?? month)}>
-              {week.map((day) => {
-                const key = toDueDate(day);
-                const outside = day.getMonth() !== month.getMonth();
+    <Calendar
+      autoFocus
+      data-testid="due-calendar"
+      defaultMonth={day ?? now}
+      formatters={{
+        formatCaption: (month) => monthTitle(month),
+        formatWeekdayName: (weekday) =>
+          weekday.toLocaleDateString(undefined, { weekday: "narrow" }),
+      }}
+      labels={{
+        labelDayButton: (date, modifiers) =>
+          [
+            longDate(date),
+            modifiers.today === true ? "today" : "",
+            modifiers.selected === true ? "selected" : "",
+          ]
+            .filter((part) => part !== "")
+            .join(", "),
+        labelGrid: (month) => monthTitle(month),
+      }}
+      mode="single"
+      // A second click on the Due day picks it again rather than leaving none.
+      onSelect={(picked) => {
+        const value = picked === undefined ? due : toDueDate(picked);
 
-                return (
-                  <td className="p-0" key={key}>
-                    <button
-                      aria-label={longDate(day)}
-                      aria-pressed={key === initial}
-                      className={cn(
-                        "focus-visible:ring-ring/50 grid h-7 w-full place-items-center rounded-md text-xs tabular-nums outline-none focus-visible:ring-3",
-                        outside
-                          ? "text-muted-foreground/60"
-                          : "text-foreground",
-                        key === today && "text-pin-ink font-semibold",
-                        key === initial
-                          ? "bg-primary text-primary-foreground"
-                          : "hover:bg-muted"
-                      )}
-                      data-day={key}
-                      onClick={() => {
-                        onPick(key);
-                      }}
-                      onKeyDown={onKeyDown}
-                      tabIndex={key === focusedKey ? 0 : -1}
-                      type="button"
-                    >
-                      {day.getDate()}
-                    </button>
-                  </td>
-                );
-              })}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+        if (value !== null) {
+          onPick(value);
+        }
+      }}
+      selected={day}
+      today={now}
+      weekStartsOn={WEEK_START}
+    />
   );
 };
+
+/** The chip's day button: where focus goes once a day is picked. */
+const CHIP_CONTROL = "[data-due-control]";
+
+/** Where Due lives without a day: the panel's Add button, or the library's Due chip to add it. */
+const DUE_HOME = "[data-due-home]";
+
+const focusable = (selector: string): HTMLElement | null =>
+  document.querySelector<HTMLElement>(selector);
 
 const ITEM =
   "hover:bg-accent focus-visible:bg-accent flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-sm outline-none";
@@ -250,6 +159,10 @@ export const DuePicker = ({
 }) => {
   const [calendar, setCalendar] = useState(false);
   const list = useRef<HTMLDivElement>(null);
+  // Where the focus was when the picker opened, to go back to after Esc.
+  const returnTo = useRef<HTMLElement | null>(null);
+  const picked = useRef(false);
+  const outside = useRef(false);
 
   const onChange = (value: DueDate | null): void => {
     if (!disabled) {
@@ -258,8 +171,33 @@ export const DuePicker = ({
   };
 
   const pick = (value: DueDate | null): void => {
+    picked.current = value !== null;
     onChange(value);
     onOpenChange(false);
+  };
+
+  /**
+   * After a pick the focus goes to the chip, which may be a new one: Add
+   * becomes the chip once there is a day. After Esc it goes back where it
+   * was, and a click elsewhere keeps it there.
+   */
+  const returnFocus = (): void => {
+    const chosen = picked.current;
+    const before = returnTo.current;
+
+    picked.current = false;
+
+    if (outside.current) {
+      return;
+    }
+
+    const target = chosen ? focusable(CHIP_CONTROL) : before;
+
+    if (target?.isConnected === true) {
+      target.focus();
+    } else {
+      (focusable(CHIP_CONTROL) ?? focusable(DUE_HOME))?.focus();
+    }
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>): void => {
@@ -292,20 +230,33 @@ export const DuePicker = ({
     >
       <PopoverAnchor asChild>{anchor}</PopoverAnchor>
       <PopoverContent
-        aria-label="Due"
+        aria-label={calendar ? "Pick a Due date" : "Due"}
         className={calendar ? undefined : "w-52"}
         collisionPadding={8}
-        onOpenAutoFocus={(event) => {
+        onCloseAutoFocus={(event) => {
           event.preventDefault();
-          list.current?.querySelector<HTMLButtonElement>("button")?.focus();
+          returnFocus();
         }}
         // Escape closes only the picker, not the panel or the editor behind it.
         onEscapeKeyDown={(event) => {
           event.stopPropagation();
         }}
+        onInteractOutside={() => {
+          outside.current = true;
+        }}
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          returnTo.current =
+            document.activeElement instanceof HTMLElement
+              ? document.activeElement
+              : null;
+          outside.current = false;
+          list.current?.querySelector<HTMLButtonElement>("button")?.focus();
+        }}
+        size={calendar ? "fit" : "default"}
       >
         {calendar ? (
-          <Calendar initial={due} now={now} onPick={pick} />
+          <DueCalendar due={due} now={now} onPick={pick} />
         ) : (
           <div className="flex flex-col" data-testid="due-picker" ref={list}>
             <p className="text-muted-foreground flex items-center justify-between px-2 pt-1 pb-1.5 text-xs font-medium">
@@ -399,6 +350,7 @@ export const DueField = ({
       >
         <button
           aria-label={`${dueSentence(due, now)}. Change it (${shortcut})`}
+          data-due-control=""
           className="focus-visible:ring-ring/50 flex h-full items-center gap-1 rounded-md pr-0.5 pl-1.5 outline-none hover:brightness-95 focus-visible:ring-3 disabled:pointer-events-none dark:hover:brightness-125"
           disabled={disabled}
           onClick={() => {

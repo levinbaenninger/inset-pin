@@ -190,6 +190,7 @@ const AddMenu = ({
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
         <Button
+          data-due-home=""
           data-testid="add-menu"
           disabled={disabled}
           size="sm"
@@ -244,6 +245,7 @@ const AddChips = ({
     return item === undefined ? null : (
       <button
         className="text-muted-foreground hover:text-foreground hover:bg-foreground/5 focus-visible:ring-ring/50 inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-xs font-medium outline-none focus-visible:ring-3"
+        data-due-home={field === "due" ? "" : undefined}
         data-testid={`add-${field}`}
         key={field}
         onClick={() => {

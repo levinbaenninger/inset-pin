@@ -12,6 +12,7 @@ import {
   fromDueDate,
   matchesDueFilter,
   toDueDate,
+  weekStartDay,
 } from "./due";
 import type { DueFilter } from "./due";
 
@@ -147,6 +148,15 @@ describe(dueChipText, () => {
   it("writes the weekday in full aloud, while the chip keeps it short", () => {
     expect(dueChipText(day("2026-11-11"), now, "en-US")).toBe("Wed");
     expect(dueSentence(day("2026-11-11"), now, "en-US")).toBe("Due Wednesday");
+  });
+});
+
+describe(weekStartDay, () => {
+  it("starts the week on the locale's own first day", () => {
+    expect(weekStartDay("en-US")).toBe(0);
+    expect(weekStartDay("de-CH")).toBe(1);
+    expect(weekStartDay("en-GB")).toBe(1);
+    expect(weekStartDay("ar-EG")).toBe(6);
   });
 });
 

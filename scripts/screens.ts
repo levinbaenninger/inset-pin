@@ -665,6 +665,26 @@ const makeScenes = (
       page: "capture",
     },
     {
+      // Round 14: Pick a date… opens shadcn's Calendar, as in the Shelf, on today with the week from the locale's first day.
+      act: async (page, platform) => {
+        await page.getByTestId("title-field").focus();
+        await page.keyboard.press(`${mod(platform)}+Shift+D`);
+        await page.getByRole("button", { name: "Pick a date…" }).click();
+        await page.getByTestId("due-calendar").waitFor();
+        // The pointer leaves the grid, so no day shows a hover.
+        await page.mouse.move(0, 0);
+      },
+      data: {
+        view: draftView(desktop, {
+          pins: pinned.slice(0, 1),
+          title: "Chairs are CHF 280 over the cap",
+        }),
+      },
+      fit: true,
+      name: "capture-12-due-calendar",
+      page: "capture",
+    },
+    {
       // Round 14: an explicit Save locks steps and Due with the title, as main takes no edits until it lands.
       data: { view: { ...filled, write: { kind: "saving" } } },
       fit: true,
@@ -818,6 +838,21 @@ const makeScenes = (
       data: library(),
       hash: `/captures/${uuid(1)}`,
       name: "library-9-due-picker",
+      page: "library",
+      platforms: ["macos"],
+    },
+    {
+      // Round 14: the calendar opens on the Due day, which it marks.
+      act: async (page) => {
+        await page.getByTestId("due-chip").getByRole("button").first().click();
+        await page.getByRole("button", { name: "Pick a date…" }).click();
+        await page.getByTestId("due-calendar").waitFor();
+        // The pointer leaves the grid, so no day shows a hover.
+        await page.mouse.move(0, 0);
+      },
+      data: library(),
+      hash: `/captures/${uuid(2)}`,
+      name: "library-29-due-calendar",
       page: "library",
       platforms: ["macos"],
     },
@@ -5081,6 +5116,151 @@ const checkSaveLock = async (
   return failures;
 };
 
+/** The day the calendar names a date by, as the page writes it in en-US. */
+const longDay = (offset: number): string =>
+  new Date(
+    NOW.getFullYear(),
+    NOW.getMonth(),
+    NOW.getDate() + offset
+  ).toLocaleDateString("en-US", {
+    day: "numeric",
+    month: "long",
+    weekday: "long",
+    year: "numeric",
+  });
+
+/** What has the focus: its name, or its words. */
+const focusName = async (page: Page) =>
+  await page.evaluate(() => {
+    const focused = document.activeElement;
+
+    return focused instanceof HTMLElement
+      ? (focused.getAttribute("aria-label") ??
+          focused.dataset.testid ??
+          focused.textContent)
+      : null;
+  });
+
+/**
+ * Round 14: Due's Pick a date… opens shadcn's Calendar, as in the Shelf.
+ * It focuses today (or the Due day), the week starts on the locale's first
+ * day (Sunday in en-US), the arrows move, Return picks and focus lands on the
+ * chip, which replaces the Add button it opened from. Esc closes only the
+ * calendar and gives the focus back; the next Esc sets the panel aside.
+ */
+const checkDueCalendar = async (
+  browser: Browser,
+  origin: string,
+  desktop: Targets,
+  platform: Platform
+): Promise<string[]> => {
+  const { expectSame, failures } = makeReport(platform);
+  const m = mod(platform);
+
+  const { context, page } = await openPanel(
+    browser,
+    origin,
+    platform,
+    draftView(desktop, { title: "Chairs are CHF 280 over the cap" })
+  );
+
+  const calendar = page.getByTestId("due-calendar");
+
+  const pickADate = async (): Promise<void> => {
+    await page.getByRole("button", { name: "Pick a date…" }).click();
+    await calendar.waitFor();
+    await page.waitForTimeout(150);
+  };
+
+  await page.getByTestId("title-field").focus();
+  await page.keyboard.press(`${m}+Shift+d`);
+  await page.getByTestId("due-picker").waitFor();
+  await pickADate();
+
+  const opened = {
+    firstWeekday: await calendar
+      .locator("thead th")
+      .first()
+      .getAttribute("aria-label"),
+    focus: await focusName(page),
+  };
+
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowLeft");
+
+  const moved = await focusName(page);
+
+  await page.evaluate(() => {
+    globalThis.__panelCalls = [];
+  });
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(250);
+
+  expectSame(
+    "Pick a date… opens the calendar on today, starting the week on Sunday in en-US; the arrows move, Return picks, and focus lands on the new chip",
+    {
+      calendar: await calendar.count(),
+      calls: await page.evaluate(() => globalThis.__panelCalls ?? []),
+      chip: await page.getByTestId("due-chip").textContent(),
+      focus: await focusName(page),
+      moved,
+      opened,
+    },
+    {
+      calendar: 0,
+      calls: ["edit"],
+      chip: "Tomorrow",
+      focus: `Due tomorrow. Change it (${platform === "macos" ? "⇧⌘D" : "Ctrl+Shift+D"})`,
+      moved: longDay(1),
+      opened: { firstWeekday: "Sunday", focus: `${longDay(0)}, today` },
+    }
+  );
+
+  await page.getByTestId("due-chip").getByRole("button").first().click();
+  await page.getByTestId("due-picker").waitFor();
+  await pickADate();
+
+  const onDueDay = await focusName(page);
+
+  await page.evaluate(() => {
+    globalThis.__panelCalls = [];
+  });
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(250);
+
+  const firstEscape = {
+    calendar: await calendar.count(),
+    calls: await page.evaluate(() => globalThis.__panelCalls ?? []),
+    focus: await focusName(page),
+  };
+
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(150);
+
+  expectSame(
+    "the calendar opens on the Due day; the first Esc closes only it and gives the focus back to the chip, the next sets the panel aside",
+    {
+      firstEscape,
+      onDueDay,
+      secondEscape: await page.evaluate(() => globalThis.__panelCalls ?? []),
+    },
+    {
+      firstEscape: {
+        calendar: 0,
+        calls: [],
+        focus: `Due tomorrow. Change it (${platform === "macos" ? "⇧⌘D" : "Ctrl+Shift+D"})`,
+      },
+      onDueDay: `${longDay(1)}, selected`,
+      secondEscape: ["dismiss"],
+    }
+  );
+
+  await context.close();
+
+  return failures;
+};
+
 const runChecks = async (
   browser: Browser,
   origin: string,
@@ -5115,6 +5295,10 @@ const runChecks = async (
       ...(await guarded(
         "add menu",
         async () => await checkAddMenu(browser, origin, desktop, platform)
+      )),
+      ...(await guarded(
+        "due calendar",
+        async () => await checkDueCalendar(browser, origin, desktop, platform)
       )),
       ...(await guarded(
         "save lock",
@@ -5222,11 +5406,20 @@ const main = async () => {
   );
   const scenes = makeScenes(captures, desktop);
 
-  const shots: Shot[] = scenes.flatMap((scene) =>
-    (scene.platforms ?? (["macos", "windows"] as const)).flatMap((platform) =>
-      (["light", "dark"] as const).map((theme) => ({ platform, scene, theme }))
-    )
-  );
+  // SCREENS_SCENE="calendar" shoots only the scenes whose name holds it, for a quick look at one.
+  const only = process.env.SCREENS_SCENE;
+
+  const shots: Shot[] = scenes
+    .filter((scene) => only === undefined || scene.name.includes(only))
+    .flatMap((scene) =>
+      (scene.platforms ?? (["macos", "windows"] as const)).flatMap((platform) =>
+        (["light", "dark"] as const).map((theme) => ({
+          platform,
+          scene,
+          theme,
+        }))
+      )
+    );
 
   const { origin, server } = await serve();
   const checkFailures = await runChecks(browser, origin, captures, desktop);

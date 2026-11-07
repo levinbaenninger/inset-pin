@@ -95,12 +95,3 @@ export const longDate = (date: Date, locale?: Locale): string =>
 /** "November 2026", over a month of the date picker. */
 export const monthTitle = (date: Date, locale?: Locale): string =>
   date.toLocaleDateString(locale, { month: "long", year: "numeric" });
-
-/** The weekdays' short names from Monday, as the date picker's columns run. */
-export const weekdayNames = (locale?: Locale): readonly string[] =>
-  Array.from({ length: 7 }, (_, index) =>
-    // 2 January 2023 was a Monday.
-    new Date(2023, 0, 2 + index).toLocaleDateString(locale, {
-      weekday: "short",
-    })
-  );
