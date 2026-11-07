@@ -58,7 +58,7 @@ export interface FieldsUi {
   readonly setDueOpen: (open: boolean) => void;
   readonly focusStep: string | null;
   readonly clearFocusStep: () => void;
-  /** ⌘D, ⇧⌘D and ⇧⌘S, and the Add… menu: show the field and put the focus in it. */
+  /** ⌘D, ⇧⌘D and ⇧⌘S, and the Add menu: show the field and put the focus in it. */
   readonly run: (
     action: Field,
     value: FieldsValue,
@@ -163,19 +163,19 @@ const ADD_ITEMS: readonly {
     icon: CheckListIcon,
     label: "Next steps",
   },
-  { chip: "Due", field: "due", icon: Calendar03Icon, label: "Due…" },
+  { chip: "Due", field: "due", icon: Calendar03Icon, label: "Due" },
 ];
 
 const keyOf = (field: Field): string => keyLabels(isMac)[field];
 
-/** ⌘D, ⇧⌘S and ⇧⌘D in the open Add… menu pick the field they show beside. */
+/** ⌘D, ⇧⌘S and ⇧⌘D in the open Add menu pick the field they show beside. */
 const onAddKey = pickShownItem((event) => {
   const field = fieldKeyAction(event, isMac);
 
   return field !== null && isFieldAction(field) ? field : null;
 });
 
-/** The narrow editors' one Add… button; a field already shown is focused instead. */
+/** The narrow editors' one Add button; a field already shown is focused instead. */
 const AddMenu = ({
   disabled,
   onAdd,
@@ -198,7 +198,7 @@ const AddMenu = ({
           variant="quiet"
         >
           <HugeiconsIcon data-icon="inline-start" icon={Add01Icon} />
-          Add…
+          Add
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
@@ -303,7 +303,7 @@ export interface EntryFieldsProps {
 
 /**
  * Title, then Description, Next steps and Due, each taking space only once it
- * has something in it. The panel adds them from one Add… button, the library
+ * has something in it. The panel adds them from one Add button, the library
  * from a row of chips; both answer the same keys.
  */
 export const EntryFields = ({
@@ -356,7 +356,7 @@ export const EntryFields = ({
       />
     );
 
-  // Without a due date, the picker opens beside the Add… button or the chips.
+  // Without a due date, the picker opens beside the Add button or the chips.
   const pickerAnchor = (child: ReactNode): ReactNode =>
     value.due === null ? (
       <DuePicker

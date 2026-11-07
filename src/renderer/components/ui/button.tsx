@@ -26,7 +26,7 @@ const buttonVariants = cva(
         link: "text-primary underline-offset-4 hover:underline",
         // A ghost tool that stays lit while it is on, such as pin mode.
         tool: "text-foreground hover:bg-muted aria-pressed:bg-pin-soft aria-pressed:text-pin-ink aria-pressed:hover:bg-pin-soft dark:hover:bg-muted/50",
-        // A ghost button that reads as secondary until hovered, such as Add….
+        // A ghost button that reads as secondary until hovered, such as Add.
         quiet:
           "text-muted-foreground hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:hover:bg-muted/50",
       },

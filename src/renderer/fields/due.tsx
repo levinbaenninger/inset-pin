@@ -152,7 +152,7 @@ export const DuePicker = ({
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly onChange: (due: DueDate | null) => void;
-  /** What the picker opens beside: the chip, or the Add… button. */
+  /** What the picker opens beside: the chip, or the Add button. */
   readonly anchor: ReactNode;
   /** The key that opens it, shown in its header. */
   readonly shortcut: string;

@@ -44,7 +44,7 @@ The capture flow was tested on Windows 11 with real input. [IMPLEMENTATION_REPOR
 1. Move the pointer over the detail that matters, in any app.
 2. Press `⌥⌘P` on macOS or `Ctrl+Alt+P` on Windows. A small panel opens beside the pointer with a crop around that point. It has no pin yet.
 3. Click in the preview to place pin 1 ("Click to place pin 1" shows until you do). Each further click places the next numbered pin, and the title keeps the keyboard, so you can type on. Drag a pin to move it; click one, or press `1`–`9`, to select it, then nudge it with the arrow keys (one image pixel, `Shift` for 10) or remove it with `⌫`. `P` turns pin mode off and on, and `⇧P` drops a pin under the pointer.
-4. Type a **Title**. **Add…** adds a **Description** (`⌘D`), **Next steps** (`⇧⌘S`) and **Due** (`⇧⌘D`: Today, Tomorrow, This weekend, Next week, or Pick a date…). On Windows the keys use `Ctrl`.
+4. Type a **Title**. **Add** adds a **Description** (`⌘D`), **Next steps** (`⇧⌘S`) and **Due** (`⇧⌘D`: Today, Tomorrow, This weekend, Next week, or Pick a date…). On Windows the keys use `Ctrl`.
 5. Optional: adjust the crop. Drag the frame to move it, drag a corner or an edge, or pinch; **Tighten** (`⌘=`) and **Widen** (`⌘−`) do it in steps. The crop always keeps every pin inside.
 6. Press `⌘↩` or `Ctrl+Enter`, or click **Save**. Saving needs a title.
 
