@@ -889,6 +889,31 @@ const makeScenes = (
       platforms: ["macos"],
     },
     {
+      // Round 14: a row's menu was open, and a click on search went straight to search.
+      act: async (page) => {
+        await page
+          .locator("[data-testid='capture-row']")
+          .nth(1)
+          .click({ button: "right" });
+        await page.getByRole("menu").waitFor();
+        await page.waitForTimeout(150);
+
+        const box = await page.getByTestId("search").boundingBox();
+
+        await page.mouse.click(
+          (box?.x ?? 0) + (box?.width ?? 0) / 2,
+          (box?.y ?? 0) + (box?.height ?? 0) / 2
+        );
+        await page.getByRole("menu").waitFor({ state: "detached" });
+        await page.mouse.move(0, 400);
+      },
+      data: library(),
+      hash: `/captures/${uuid(1)}`,
+      name: "library-32-menu-click-away",
+      page: "library",
+      platforms: ["macos"],
+    },
+    {
       act: async (page) => {
         await page.getByTestId("pin-tool").click();
       },
@@ -5671,6 +5696,190 @@ const checkLibraryPolish = async (
 };
 
 /**
+ * Round 14, item 8 with a menu open, as in the Shelf and Window Links: the
+ * library's menus don't hold the page. A click on search or a field closes
+ * the menu and lands there at once; a click on empty space, Esc or a command
+ * closes it and gives the focus back to the menu's owner.
+ */
+const checkMenuClickAway = async (
+  browser: Browser,
+  origin: string,
+  captures: readonly Capture[],
+  platform: Platform
+): Promise<string[]> => {
+  const { expectSame, failures } = makeReport(platform);
+
+  const { context, page } = await openLibrary(
+    browser,
+    origin,
+    { captures: structuredClone(captures), page: "library" },
+    platform,
+    `/captures/${uuid(1)}`
+  );
+
+  // Where a person's pointer lands: a locator click would wait out a modal menu instead of trying.
+  const clickOn = async (locator: Locator): Promise<void> => {
+    const box = await locator.boundingBox();
+
+    if (box === null) {
+      throw new Error("nothing to click on");
+    }
+
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  };
+
+  const opens = {
+    filter: async () => {
+      await page.getByRole("button", { name: "Due filters" }).click();
+    },
+    more: async () => {
+      await page.getByTestId("more").click();
+    },
+    row: async () => {
+      await page.locator(ROW).nth(1).click({ button: "right" });
+    },
+  };
+
+  const ends = {
+    copy: async () => {
+      await page.getByRole("menuitem", { name: /^Copy Text/u }).click();
+    },
+    empty: async () => {
+      await clickOn(page.getByTestId("capture-footer"));
+    },
+    escape: async () => {
+      await page.keyboard.press("Escape");
+    },
+    search: async () => {
+      await clickOn(page.getByTestId("search"));
+    },
+    title: async () => {
+      await clickOn(page.getByTestId("title-field"));
+    },
+  };
+
+  const cases = [
+    ["row", "search"],
+    ["row", "title"],
+    ["row", "empty"],
+    ["row", "escape"],
+    ["row", "copy"],
+    ["more", "title"],
+    ["more", "search"],
+    ["more", "empty"],
+    ["more", "escape"],
+    ["more", "copy"],
+    ["filter", "title"],
+    ["filter", "empty"],
+    ["filter", "escape"],
+  ] as const;
+
+  const landed: Record<string, string | null> = {};
+
+  for (const [menu, end] of cases) {
+    // One at a time: each opens a menu after the last one has gone.
+    // oxlint-disable-next-line no-await-in-loop
+    await opens[menu]();
+    // oxlint-disable-next-line no-await-in-loop
+    await page.getByRole("menu").waitFor();
+    // Radix listens for a click outside only a moment after the menu mounts; a person is never that fast.
+    // oxlint-disable-next-line no-await-in-loop
+    await page.waitForTimeout(150);
+    // oxlint-disable-next-line no-await-in-loop
+    await ends[end]();
+
+    // oxlint-disable-next-line no-await-in-loop
+    const closed = await settles(page.getByRole("menu"), "detached", 1500);
+
+    // oxlint-disable-next-line no-await-in-loop
+    await page.waitForTimeout(250);
+    // oxlint-disable-next-line no-await-in-loop
+    landed[`${menu} then ${end}`] = closed ? await focusPlace(page) : "open";
+
+    if (!closed) {
+      // oxlint-disable-next-line no-await-in-loop
+      await page.keyboard.press("Escape");
+    }
+  }
+
+  expectSame(
+    "with a menu open, a click on search or a field lands there at once; empty space, Esc and a command give the focus back to the menu's owner",
+    landed,
+    {
+      "filter then empty": "search",
+      "filter then escape": "search",
+      "filter then title": "title-field",
+      "more then copy": "more",
+      "more then empty": "more",
+      "more then escape": "more",
+      "more then search": "search",
+      "more then title": "title-field",
+      "row then copy": "row",
+      "row then empty": "row",
+      "row then escape": "row",
+      "row then search": "search",
+      "row then title": "title-field",
+    }
+  );
+
+  await context.close();
+
+  return failures;
+};
+
+/**
+ * Round 14: Due opens on its quick choices every time, as in the Shelf and
+ * Window Links, also after a day was picked on the library's calendar.
+ */
+const checkDueReopen = async (
+  browser: Browser,
+  origin: string,
+  captures: readonly Capture[],
+  platform: Platform
+): Promise<string[]> => {
+  const { expectSame, failures } = makeReport(platform);
+
+  const { context, page } = await openLibrary(
+    browser,
+    origin,
+    { captures: structuredClone(captures), page: "library" },
+    platform,
+    `/captures/${uuid(2)}`
+  );
+
+  const chip = page.getByTestId("due-chip").getByRole("button").first();
+  const calendar = page.getByTestId("due-calendar");
+
+  await chip.click();
+  await page.getByRole("button", { name: "Pick a date…" }).click();
+  await calendar.waitFor();
+  await page.waitForTimeout(150);
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("Enter");
+  await calendar.waitFor({ state: "detached" });
+  await page.waitForTimeout(250);
+  await chip.click();
+  await page.waitForTimeout(250);
+
+  expectSame(
+    "after a day is picked on the library's calendar, Due opens again on its quick choices, Clear among them, with Today in focus",
+    {
+      calendar: await calendar.count(),
+      clear: await page
+        .getByRole("button", { exact: true, name: "Clear" })
+        .count(),
+      focus: ((await focusName(page)) ?? "").startsWith("Today"),
+      quick: await page.getByTestId("due-picker").count(),
+    },
+    { calendar: 0, clear: 1, focus: true, quick: 1 }
+  );
+
+  await context.close();
+
+  return failures;
+};
+
+/**
  * Round 14 in the capture panel: a click on the panel's empty space or on
  * the title lets go of a selected pin, and empty space also lets go of a
  * step being typed in.
@@ -5777,6 +5986,15 @@ const runChecks = async (
         "library polish",
         async () =>
           await checkLibraryPolish(browser, origin, captures, platform)
+      )),
+      ...(await guarded(
+        "menu click away",
+        async () =>
+          await checkMenuClickAway(browser, origin, captures, platform)
+      )),
+      ...(await guarded(
+        "due reopen",
+        async () => await checkDueReopen(browser, origin, captures, platform)
       )),
       ...(await guarded(
         "panel click away",
