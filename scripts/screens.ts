@@ -11,6 +11,7 @@
  *   pnpm screens            # builds, then writes release/screens/*.png
  *   node scripts/screens.ts [output folder]   # after pnpm build
  *   SCREENS_ONLY=checks node scripts/screens.ts /tmp/out   # the checks alone
+ *   SCREENS_CHECK="due calendar" SCREENS_SCENE=calendar pnpm screens   # one check, some scenes
  */
 import { once } from "node:events";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -22,6 +23,7 @@ import { chromium } from "playwright";
 import type { Browser, Locator, Page } from "playwright";
 import { z } from "zod";
 
+import { dayAndTime } from "../src/shared/dates.ts";
 import { drawPins, pinSprite } from "../src/shared/pin-sprite.ts";
 import { installBridge } from "./fixtures/screens-bridge.ts";
 import type { BridgeInput, OwedFixture } from "./fixtures/screens-bridge.ts";
@@ -846,6 +848,28 @@ const makeScenes = (
       data: library(),
       hash: `/captures/${uuid(1)}`,
       name: "library-9-due-picker",
+      page: "library",
+      platforms: ["macos"],
+    },
+    {
+      // Round 14: the capture's time and source, a quiet footer at the foot of the view.
+      data: library(),
+      hash: `/captures/${uuid(2)}`,
+      name: "library-30-footer",
+      page: "library",
+      platforms: ["macos"],
+    },
+    {
+      // Round 14: pin 2 was selected, then a click on empty space let it go.
+      act: async (page) => {
+        await page.getByTestId("image-editor").focus();
+        await page.keyboard.press("2");
+        await page.getByTestId("capture-footer").click();
+        await page.mouse.move(0, 400);
+      },
+      data: library(),
+      hash: `/captures/${uuid(2)}`,
+      name: "library-31-click-away",
       page: "library",
       platforms: ["macos"],
     },
@@ -5347,6 +5371,343 @@ const checkPanelHeader = async (
   return failures;
 };
 
+/** Where the focus is: in a capture row, in the image or its pins, else the element's test id or tag. */
+const focusPlace = async (page: Page) =>
+  await page.evaluate(() => {
+    const focused = document.activeElement;
+
+    if (focused?.closest("[data-capture-id]")) {
+      return "row";
+    }
+
+    if (focused?.closest("[data-pin-area]")) {
+      return "image";
+    }
+
+    return focused instanceof HTMLElement
+      ? (focused.dataset.testid ?? focused.tagName)
+      : null;
+  });
+
+/**
+ * Round 14 in the library, as the Shelf's feedback asked:
+ * - the capture's time and source sit in a quiet footer at the foot of the
+ *   capture, or of the view when the capture is short;
+ * - a step row's circle, words and × share one centre line, with no jump on focus;
+ * - the Done row's › ends where the rows' Due chips end, once the classic
+ *   scrollbar the harness reserves is set aside (macOS overlays it);
+ * - a click on search or empty space lets go of a selected pin and of a
+ *   focused row, and ↓ still moves through the list;
+ * - Esc in a pin's label takes back only the typing, so ⌘Z then undoes the
+ *   change before it.
+ */
+const checkLibraryPolish = async (
+  browser: Browser,
+  origin: string,
+  captures: readonly Capture[],
+  platform: Platform
+): Promise<string[]> => {
+  const { expectSame, failures } = makeReport(platform);
+  const m = mod(platform);
+
+  const footerText = (id: string): string => {
+    const one = captures.find((item) => item.id === id);
+
+    return `${dayAndTime(new Date(one?.capturedAt ?? ""), new Date(), "en-US")} · Studio Display`;
+  };
+
+  const { context, page } = await openLibrary(
+    browser,
+    origin,
+    { captures: structuredClone(captures), page: "library" },
+    platform,
+    `/captures/${uuid(2)}`
+  );
+
+  const footerAt = async () =>
+    await page.evaluate(() => {
+      const footer = document.querySelector("[data-testid='capture-footer']");
+      const main = footer?.closest("main") ?? null;
+
+      if (footer === null || main === null) {
+        return null;
+      }
+
+      main.scrollTop = main.scrollHeight;
+
+      return {
+        gap: Math.round(
+          main.getBoundingClientRect().bottom -
+            footer.getBoundingClientRect().bottom
+        ),
+        header: main.previousElementSibling?.textContent ?? null,
+        last: footer.parentElement?.lastElementChild === footer,
+        text: footer.textContent,
+      };
+    });
+
+  const short = await footerAt();
+
+  await page.locator(`[data-capture-id='${uuid(1)}']`).click();
+  await page.getByLabel("Label for pin 1").waitFor();
+
+  expectSame(
+    "the capture's time and source are a quiet footer at the foot of the view (short capture) or of the capture (long one), not in the header",
+    { long: await footerAt(), short },
+    {
+      long: { gap: 24, header: "", last: true, text: footerText(uuid(1)) },
+      short: { gap: 24, header: "", last: true, text: footerText(uuid(2)) },
+    }
+  );
+
+  const stepRow = async () =>
+    await page.evaluate(() => {
+      const input = document.querySelector("[aria-label='Next step 2']");
+      const row = input?.closest("li");
+
+      // Inside the page: evaluate serializes this function, so the helper can't live outside it.
+      // oxlint-disable-next-line unicorn/consistent-function-scoping
+      const centre = (element: Element | null | undefined): number => {
+        const box = element?.getBoundingClientRect();
+
+        return box === undefined ? Number.NaN : box.top + box.height / 2;
+      };
+
+      const centres = [
+        row?.querySelector("[role='checkbox']"),
+        input,
+        row?.querySelector("[aria-label='Remove next step 2']"),
+      ].map(centre);
+
+      return {
+        height: row?.getBoundingClientRect().height ?? 0,
+        spread: Math.max(...centres) - Math.min(...centres),
+      };
+    });
+
+  const viewing = await stepRow();
+
+  await page.getByLabel("Next step 2", { exact: true }).focus();
+
+  const editing = await stepRow();
+
+  expectSame(
+    "a step row's circle, words and × share one centre line, viewing or editing, at the same height",
+    {
+      centred: viewing.spread <= 0.5 && editing.spread <= 0.5,
+      heights: [viewing.height, editing.height],
+    },
+    { centred: true, heights: [32, 32] }
+  );
+
+  const trailing = await page.evaluate(() => {
+    const sidebar = document.querySelector("aside")?.getBoundingClientRect();
+    const nav = document.querySelector("aside nav");
+
+    const chevron = document
+      .querySelector("[data-testid='open-done'] svg:last-of-type")
+      ?.getBoundingClientRect();
+
+    const chip = document
+      .querySelector("[data-testid='capture-row'] [data-due-state]")
+      ?.getBoundingClientRect();
+
+    const gutter =
+      nav instanceof HTMLElement ? nav.offsetWidth - nav.clientWidth : 0;
+
+    return {
+      chevron: Math.round((sidebar?.right ?? 0) - (chevron?.right ?? 0)),
+      chip: Math.round((sidebar?.right ?? 0) - (chip?.right ?? 0) - gutter),
+    };
+  });
+
+  expectSame(
+    "the Done row's › sits flush right, as far in as the rows' Due chips",
+    trailing,
+    { chevron: 16, chip: 16 }
+  );
+
+  const selectedPins = async () =>
+    await page.locator("[data-testid='image-editor'] .pin-selection").count();
+
+  const pinLeft = async () =>
+    await page
+      .locator("[data-testid='image-editor'] [data-pin='1']")
+      .evaluate((pin: HTMLElement) => pin.style.getPropertyValue("--pin-x"));
+
+  await page.getByTestId("image-editor").focus();
+  await page.keyboard.press("1");
+
+  const picked = await selectedPins();
+
+  await page.getByTestId("search").click();
+
+  const onSearch = {
+    focus: await focusPlace(page),
+    pins: await selectedPins(),
+  };
+
+  await page.getByTestId("image-editor").focus();
+  await page.keyboard.press("2");
+  await page.getByTestId("capture-footer").click();
+
+  const onEmpty = { focus: await focusPlace(page), pins: await selectedPins() };
+
+  await page.locator(ROW).nth(1).focus();
+
+  const rowFirst = await focusPlace(page);
+
+  await page.getByTestId("capture-footer").click();
+
+  const rowAfter = await focusPlace(page);
+  const before = await page.evaluate(() => location.hash);
+
+  await page.keyboard.press("ArrowDown");
+  await page.waitForTimeout(150);
+
+  expectSame(
+    "a click on search or on empty space lets go of the selected pin and of a focused row, and ↓ still moves through the list",
+    {
+      moved: (await page.evaluate(() => location.hash)) !== before,
+      onEmpty,
+      onSearch,
+      picked,
+      row: [rowFirst, rowAfter],
+    },
+    {
+      moved: true,
+      onEmpty: { focus: "BODY", pins: 0 },
+      onSearch: { focus: "search", pins: 0 },
+      picked: 1,
+      row: ["row", "BODY"],
+    }
+  );
+
+  await page.locator(`[data-capture-id='${uuid(1)}']`).click();
+  await page.getByLabel("Label for pin 1").waitFor();
+
+  const label = page.getByLabel("Label for pin 1");
+  const original = await label.inputValue();
+  const left = await pinLeft();
+
+  await page.getByTestId("image-editor").focus();
+  await page.keyboard.press("1");
+  await page.keyboard.press("Shift+ArrowRight");
+
+  const nudged = await pinLeft();
+
+  await label.click();
+  await page.keyboard.press("End");
+  await page.keyboard.type(" (typed)");
+  await page.keyboard.press("Escape");
+
+  const escaped = {
+    focus: await focusPlace(page),
+    pin: (await pinLeft()) === nudged,
+    value: await label.inputValue(),
+  };
+
+  await page.keyboard.press(`${m}+z`);
+
+  const undone = {
+    pin: (await pinLeft()) === left,
+    value: await label.inputValue(),
+  };
+
+  await label.click();
+  await page.keyboard.press("End");
+  await page.keyboard.type(" kept");
+  await page.keyboard.press("Enter");
+
+  expectSame(
+    "Esc in a pin's label takes back only the typing and leaves it as text; ⌘Z then undoes the nudge before it; Return keeps what was typed",
+    {
+      escaped,
+      kept: await label.inputValue(),
+      nudgedMoved: nudged !== left,
+      undone,
+    },
+    {
+      escaped: { focus: "BODY", pin: true, value: original },
+      kept: `${original} kept`,
+      nudgedMoved: true,
+      undone: { pin: true, value: original },
+    }
+  );
+
+  await context.close();
+
+  return failures;
+};
+
+/**
+ * Round 14 in the capture panel: a click on the panel's empty space or on
+ * the title lets go of a selected pin, and empty space also lets go of a
+ * step being typed in.
+ */
+const checkPanelClickAway = async (
+  browser: Browser,
+  origin: string,
+  desktop: Targets,
+  platform: Platform
+): Promise<string[]> => {
+  const { expectSame, failures } = makeReport(platform);
+
+  const pins = [desktop.chairs, desktop.delivery].flatMap((point) =>
+    point === undefined ? [] : [point]
+  );
+
+  const { context, page } = await openPanel(
+    browser,
+    origin,
+    platform,
+    draftView(desktop, {
+      pins,
+      steps: [step(1, "Ask Rieder")],
+      title: "Chairs are CHF 280 over the cap",
+    })
+  );
+
+  const selectedPins = async () =>
+    await page.locator("[data-testid='pin-preview'] .pin-selection").count();
+
+  const preview = page.getByTestId("pin-preview");
+
+  await preview.focus();
+  await page.keyboard.press("2");
+
+  const picked = await selectedPins();
+
+  // The form's left padding: empty space, beside the preview.
+  await page.mouse.click(4, 300);
+
+  const onEmpty = { focus: await focusPlace(page), pins: await selectedPins() };
+
+  await preview.focus();
+  await page.keyboard.press("1");
+  await page.getByTestId("title-field").click();
+
+  const onTitle = { focus: await focusPlace(page), pins: await selectedPins() };
+
+  await page.getByLabel("Next step 1", { exact: true }).click();
+  await page.mouse.click(4, 300);
+
+  expectSame(
+    "a click on the panel's empty space or its title lets go of the selected pin, and empty space lets go of a step being typed in",
+    { onEmpty, onStep: await focusPlace(page), onTitle, picked },
+    {
+      onEmpty: { focus: "BODY", pins: 0 },
+      onStep: "BODY",
+      onTitle: { focus: "title-field", pins: 0 },
+      picked: 1,
+    }
+  );
+
+  await context.close();
+
+  return failures;
+};
+
 const runChecks = async (
   browser: Browser,
   origin: string,
@@ -5381,6 +5742,16 @@ const runChecks = async (
       ...(await guarded(
         "add menu",
         async () => await checkAddMenu(browser, origin, desktop, platform)
+      )),
+      ...(await guarded(
+        "library polish",
+        async () =>
+          await checkLibraryPolish(browser, origin, captures, platform)
+      )),
+      ...(await guarded(
+        "panel click away",
+        async () =>
+          await checkPanelClickAway(browser, origin, desktop, platform)
       )),
       ...(await guarded(
         "panel header",

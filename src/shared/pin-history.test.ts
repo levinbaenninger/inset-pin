@@ -5,6 +5,7 @@ import {
   endGesture,
   recordPins,
   redoPins,
+  undoGesture,
   undoPins,
 } from "./pin-history";
 
@@ -69,5 +70,15 @@ describe("pin history", () => {
 
     history = recordPins(endGesture(history), [{ x: 12, y: 10 }], "nudge:0");
     expect(history.undo).toHaveLength(2);
+  });
+
+  it("takes back only the gesture still going on, as Esc does in a pin's label", () => {
+    const { history, pins } = drag();
+    const typed = recordPins(history, pins, "label:0");
+    const labelled: readonly Pin[] = [{ x: 30, y: 10 }];
+
+    expect(undoGesture(typed, labelled, "label:0")?.pins).toStrictEqual(pins);
+    expect(undoGesture(typed, labelled, "label:1")).toBeNull();
+    expect(undoGesture(endGesture(typed), labelled, "label:0")).toBeNull();
   });
 });

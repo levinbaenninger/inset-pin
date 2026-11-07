@@ -67,6 +67,8 @@ export interface ImageEditorProps {
   readonly onDragOut: () => void;
   readonly onCopy: () => void;
   readonly onLeaveLabel: () => void;
+  /** Esc in a label: what was typed since it took the focus goes. */
+  readonly onCancelLabel: (index: number) => void;
   readonly pointerRef: RefObject<{
     readonly x: number;
     readonly y: number;
@@ -77,6 +79,7 @@ export interface ImageEditorProps {
 
 /** The pins as a numbered list under the image, each with an optional label: "1 · label". */
 const PinList = ({
+  onCancelLabel,
   onChange,
   onLeaveLabel,
   onSelect,
@@ -84,7 +87,12 @@ const PinList = ({
   selected,
 }: Pick<
   ImageEditorProps,
-  "pins" | "selected" | "onSelect" | "onChange" | "onLeaveLabel"
+  | "pins"
+  | "selected"
+  | "onSelect"
+  | "onChange"
+  | "onLeaveLabel"
+  | "onCancelLabel"
 >) => (
   <ol aria-label="Pins" className="flex flex-col" data-testid="pin-list">
     {pins.map((pin, index) => (
@@ -116,10 +124,20 @@ const PinList = ({
           onFocus={() => {
             onSelect(index);
           }}
+          // Return keeps the label and Esc takes the typing back; either way the label reads as text again.
           onKeyDown={(event) => {
+            if (event.nativeEvent.isComposing) {
+              return;
+            }
+
             if (event.key === "Escape" || event.key === "Enter") {
               event.preventDefault();
               event.stopPropagation();
+
+              if (event.key === "Escape") {
+                onCancelLabel(index);
+              }
+
               event.currentTarget.blur();
             }
           }}
@@ -151,6 +169,7 @@ const PinList = ({
 export const ImageEditor = ({
   image,
   imageRef,
+  onCancelLabel,
   onChange,
   onCopy,
   onDragOut,
@@ -427,6 +446,7 @@ export const ImageEditor = ({
       </div>
       {pins.length > 0 ? (
         <PinList
+          onCancelLabel={onCancelLabel}
           onChange={onChange}
           onLeaveLabel={onLeaveLabel}
           onSelect={onSelect}

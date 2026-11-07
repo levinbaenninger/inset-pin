@@ -14,6 +14,7 @@ import {
   endGesture,
   recordPins,
   redoPins,
+  undoGesture,
   undoPins,
 } from "@shared/pin-history";
 import type { HistoryStep } from "@shared/pin-history";
@@ -396,12 +397,7 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
   return (
     <>
       <PaneHeader>
-        <p
-          className="text-muted-foreground mr-auto min-w-0 truncate text-xs"
-          title={meta}
-        >
-          {meta}
-        </p>
+        <span className="flex-1" />
         <IconButton
           data-testid="toggle-done"
           icon={done ? Undo02Icon : CheckmarkCircle02Icon}
@@ -436,8 +432,8 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
         </DropdownMenu>
         {dialog}
       </PaneHeader>
-      <main className="min-h-0 flex-1 [scrollbar-gutter:stable] overflow-y-auto">
-        <article className="mx-auto flex max-w-3xl flex-col gap-6 px-8 pt-3 pb-16">
+      <main className="flex min-h-0 flex-1 [scrollbar-gutter:stable] flex-col overflow-y-auto">
+        <article className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 px-8 pt-3 pb-6">
           <div className="flex flex-col gap-1">
             <EntryFields
               addable={!done}
@@ -487,6 +483,9 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
                 title: canSaveTitle(value.title) ? value.title : saved.title,
               });
             }}
+            onCancelLabel={(index) => {
+              restore(undoGesture(history, value.pins, `label:${index}`));
+            }}
             onLeaveLabel={() => {
               setHistory(endGesture);
               drafts.flush(id);
@@ -498,6 +497,13 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
             pointerRef={pointerRef}
             selected={selected}
           />
+          {/* When and where it was captured: a quiet line at the foot of the capture, or of the view when the capture is short. */}
+          <footer
+            className="text-muted-foreground/80 mt-auto pt-4 text-xs"
+            data-testid="capture-footer"
+          >
+            {meta}
+          </footer>
         </article>
       </main>
     </>

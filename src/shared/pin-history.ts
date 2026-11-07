@@ -74,3 +74,15 @@ export const redoPins = <P>(
         pins: next,
       };
 };
+
+/**
+ * Takes back the gesture still going on, and only that one, as Esc does in a
+ * pin's label: the label goes back to what it held when it took the focus.
+ * Null when that gesture made no change.
+ */
+export const undoGesture = <P>(
+  history: PinHistory<P>,
+  current: readonly P[],
+  gesture: string
+): HistoryStep<P> | null =>
+  history.gesture === gesture ? undoPins(history, current) : null;
