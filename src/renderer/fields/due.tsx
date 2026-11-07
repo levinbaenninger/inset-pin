@@ -157,7 +157,19 @@ export const DuePicker = ({
   /** The key that opens it, shown in its header. */
   readonly shortcut: string;
 }) => {
+  const shown = open && !disabled;
   const [calendar, setCalendar] = useState(false);
+  const [wasShown, setWasShown] = useState(shown);
+
+  // Every open starts on the quick choices, however the last one closed: a pick, Esc or a click away.
+  if (shown !== wasShown) {
+    setWasShown(shown);
+
+    if (shown) {
+      setCalendar(false);
+    }
+  }
+
   const list = useRef<HTMLDivElement>(null);
   // Where the focus was when the picker opened, to go back to after Esc.
   const returnTo = useRef<HTMLElement | null>(null);
@@ -224,16 +236,7 @@ export const DuePicker = ({
   };
 
   return (
-    <Popover
-      onOpenChange={(next) => {
-        onOpenChange(next);
-
-        if (!next) {
-          setCalendar(false);
-        }
-      }}
-      open={open && !disabled}
-    >
+    <Popover onOpenChange={onOpenChange} open={shown}>
       <PopoverAnchor asChild>{anchor}</PopoverAnchor>
       <PopoverContent
         aria-label={calendar ? "Pick a Due date" : "Due"}
