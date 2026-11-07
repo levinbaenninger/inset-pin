@@ -5202,6 +5202,19 @@ const checkDueCalendar = async (
     await page.waitForTimeout(150);
   };
 
+  // The mouse path: Add, then Due, then Esc gives the focus back to Add.
+  await page.getByTestId("add-menu").click();
+  await page.getByRole("menuitem", { name: /^Due/u }).click();
+  await page.getByTestId("due-picker").waitFor();
+  await page.waitForTimeout(150);
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(250);
+
+  const fromAdd = {
+    focus: await focusName(page),
+    picker: await page.getByTestId("due-picker").count(),
+  };
+
   await page.getByTestId("title-field").focus();
   await page.keyboard.press(`${m}+Shift+d`);
   await page.getByTestId("due-picker").waitFor();
@@ -5228,12 +5241,13 @@ const checkDueCalendar = async (
   await page.waitForTimeout(250);
 
   expectSame(
-    "Pick a date… opens the calendar on today, starting the week on Sunday in en-US; the arrows move, Return picks, and focus lands on the new chip",
+    "Esc after Add, then Due, gives the focus back to Add; Pick a date… opens the calendar on today, starting the week on Sunday in en-US; the arrows move, Return picks, and focus lands on the new chip",
     {
       calendar: await calendar.count(),
       calls: await page.evaluate(() => globalThis.__panelCalls ?? []),
       chip: await page.getByTestId("due-chip").textContent(),
       focus: await focusName(page),
+      fromAdd,
       moved,
       opened,
     },
@@ -5242,6 +5256,7 @@ const checkDueCalendar = async (
       calls: ["edit"],
       chip: "Tomorrow",
       focus: `Due tomorrow. Change it (${platform === "macos" ? "⇧⌘D" : "Ctrl+Shift+D"})`,
+      fromAdd: { focus: "add-menu", picker: 0 },
       moved: longDay(1),
       opened: { firstWeekday: "Sunday", focus: `${longDay(0)}, today` },
     }
@@ -5284,6 +5299,21 @@ const checkDueCalendar = async (
       onDueDay: `${longDay(1)}, selected`,
       secondEscape: ["dismiss"],
     }
+  );
+
+  await page.getByTestId("due-chip").getByRole("button").first().click();
+  await page.getByTestId("due-picker").waitFor();
+  await page.waitForTimeout(150);
+  await page.getByTestId("title-field").click();
+  await page.waitForTimeout(250);
+
+  expectSame(
+    "a click on the title while the picker is open closes it and leaves the focus in the title",
+    {
+      focus: await focusName(page),
+      picker: await page.getByTestId("due-picker").count(),
+    },
+    { focus: "Title", picker: 0 }
   );
 
   await context.close();

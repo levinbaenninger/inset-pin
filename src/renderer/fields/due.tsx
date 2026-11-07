@@ -179,15 +179,21 @@ export const DuePicker = ({
   /**
    * After a pick the focus goes to the chip, which may be a new one: Add
    * becomes the chip once there is a day. After Esc it goes back where it
-   * was, and a click elsewhere keeps it there.
+   * was. A click elsewhere, or a Tab out, leaves it where it went.
    */
   const returnFocus = (): void => {
     const chosen = picked.current;
     const before = returnTo.current;
+    const landed = document.activeElement;
 
     picked.current = false;
 
-    if (outside.current) {
+    if (
+      outside.current ||
+      (landed instanceof HTMLElement &&
+        landed !== document.body &&
+        landed.isConnected)
+    ) {
       return;
     }
 
@@ -241,13 +247,16 @@ export const DuePicker = ({
         onEscapeKeyDown={(event) => {
           event.stopPropagation();
         }}
-        onInteractOutside={() => {
+        // Only a press counts: the Add menu closing as the picker opens takes the focus for a moment too.
+        onPointerDownOutside={() => {
           outside.current = true;
         }}
         onOpenAutoFocus={(event) => {
           event.preventDefault();
+          // Opened from the Add menu, the focus is on nothing (the body): Esc then falls back to Add.
           returnTo.current =
-            document.activeElement instanceof HTMLElement
+            document.activeElement instanceof HTMLElement &&
+            document.activeElement !== document.body
               ? document.activeElement
               : null;
           outside.current = false;
