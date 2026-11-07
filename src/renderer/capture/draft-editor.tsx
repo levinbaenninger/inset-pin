@@ -445,7 +445,7 @@ export const DraftEditor = ({ view }: DraftEditorProps) => {
   }, [fieldsUi.titleRef]);
 
   // The panel's window is as tall as its content, so the list replaces the form and the panel grows to fit it.
-  if (sheetOpen) {
+  if (sheetOpen && !view.quitting) {
     return (
       <PanelShortcuts
         onClose={() => {

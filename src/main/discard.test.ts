@@ -623,6 +623,69 @@ describe("Discard changes never writes content to undo a save (SPEC round 8)", (
     }).toStrictEqual({ disk: BASE.due, shown: BASE.due });
   });
 
+  it("retries the failed draft after installing an edit and rolling back both fail", async () => {
+    const drafts = openDrafts();
+
+    disk.installLocked = true;
+    disk.restoreLocked = true;
+    drafts.edit(ID, DISCARDED, BASE, { now: true });
+    await vi.waitFor(() => {
+      expect(drafts.get(ID)?.kind).toBe("failed");
+    });
+    expect(shown(drafts)).toStrictEqual(DISCARDED);
+    await expect(onDisk()).rejects.toMatchObject({ code: "ENOENT" });
+
+    disk.installLocked = false;
+    disk.restoreLocked = false;
+
+    await expect(drafts.retry(ID)).resolves.toStrictEqual({ ok: true });
+    expect({
+      disk: fieldsOf(await onDisk()),
+      draft: drafts.get(ID),
+      owed: store.owed(),
+      shown: shown(drafts),
+    }).toStrictEqual({
+      disk: DISCARDED,
+      draft: undefined,
+      owed: [],
+      shown: DISCARDED,
+    });
+  });
+
+  it("discards owed recovery after installing an edit and rolling back both fail", async () => {
+    disk.installLocked = true;
+    disk.restoreLocked = true;
+    await expect(
+      store.update(ID, DISCARDED, { epoch: "page.1", seq: 1 })
+    ).resolves.toMatchObject({ ok: false });
+
+    const fresh = openDrafts();
+
+    fresh.owe(store.owed());
+    expect(fresh.get(ID)?.error?.during).toBe("discard");
+
+    const writes = disk.writes.length;
+
+    disk.installLocked = false;
+    disk.restoreLocked = false;
+    fresh.discard(ID);
+    await settle();
+
+    expect({
+      disk: fieldsOf(await onDisk()),
+      draft: fresh.get(ID),
+      owed: store.owed(),
+      shown: shown(fresh),
+      writes: contentOf(disk.writes.slice(writes)),
+    }).toStrictEqual({
+      disk: BASE,
+      draft: undefined,
+      owed: [],
+      shown: BASE,
+      writes: [],
+    });
+  });
+
   it("copies what the capture showed as each copy started while a Discard is on its way, never typing done during the wait", async () => {
     const { answers, drafts } = await landed();
     const pasted: string[] = [];

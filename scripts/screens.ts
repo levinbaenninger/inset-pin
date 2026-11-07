@@ -4747,10 +4747,10 @@ const checkCaptureQuit = async (
 ): Promise<string[]> => {
   const { expectSame, failures } = makeReport(platform);
 
-  const open = async (write: {
-    readonly kind: string;
-    readonly message?: string;
-  }) => {
+  const open = async (
+    write: { readonly kind: string; readonly message?: string },
+    quitting = true
+  ) => {
     const context = await browser.newContext({
       userAgent: USER_AGENT[platform],
       viewport: SIZES.capture,
@@ -4765,18 +4765,73 @@ const checkCaptureQuit = async (
           description: "Keep this thought",
           title: "Chairs are CHF 280 over the cap",
         }),
-        quitting: true,
+        quitting,
         write,
       },
     };
 
     await page.addInitScript(installBridge, input);
     await page.goto(`${origin}/capture.html`);
-    await page.getByTestId("quit-prompt").waitFor();
+    await page.getByTestId(quitting ? "quit-prompt" : "title-field").waitFor();
     await page.waitForTimeout(200);
 
     return { context, page };
   };
+
+  const shortcuts = await open({ kind: "editing" }, false);
+
+  await shortcuts.page
+    .getByRole("button", { name: "Keyboard shortcuts" })
+    .click();
+  await shortcuts.page.getByTestId("shortcut-sheet").waitFor();
+
+  const setQuitting = async (quitting: boolean): Promise<void> => {
+    await shortcuts.page.evaluate(
+      (view) => {
+        type EmitView = NonNullable<typeof globalThis.__emit> &
+          ((name: "view", payload: typeof view) => void);
+
+        // SAFETY: installBridge forwards view events unchanged; its Payload type only models library events.
+        // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- capture's view event uses the same fixture emitter.
+        const emit = globalThis.__emit as EmitView;
+
+        emit("view", view);
+      },
+      { ...draftView(desktop), quitting }
+    );
+  };
+
+  await setQuitting(true);
+  expectSame(
+    "quitting on the same surface takes precedence over the open shortcut sheet",
+    {
+      prompt: await settles(
+        shortcuts.page.getByTestId("quit-prompt"),
+        "visible",
+        1500
+      ),
+      sheet: await shortcuts.page.getByTestId("shortcut-sheet").count(),
+      focus: await shortcuts.page.evaluate(
+        () => document.activeElement?.textContent
+      ),
+    },
+    { prompt: true, sheet: 0, focus: "Save" }
+  );
+  await shortcuts.page.keyboard.press("Escape");
+  expectSame(
+    "Escape answers the quit, not the shortcut sheet",
+    await shortcuts.page.evaluate(() => globalThis.__calls ?? []),
+    ["answerQuit:cancel"]
+  );
+  await setQuitting(false);
+  await shortcuts.page.getByTestId("shortcut-sheet").waitFor();
+  await shortcuts.page.keyboard.press("Escape");
+  expectSame(
+    "canceling quit keeps the shortcut sheet and the draft's local content",
+    await shortcuts.page.getByTestId("title-field").inputValue(),
+    "Chairs are CHF 280 over the cap"
+  );
+  await shortcuts.context.close();
 
   const prompt = await open({ kind: "editing" });
 

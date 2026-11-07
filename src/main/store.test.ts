@@ -521,6 +521,71 @@ describe(openCaptureStore, () => {
     ]);
   });
 
+  it.each(["retry", "discard"] as const)(
+    "recovers in the same session on %s after installing an edit and rolling back both fail",
+    async (action) => {
+      const fault = createFaultFs();
+      const store = await open(fault.fs);
+      const tag = saveTag();
+      const change = fields({ title: "Retried edit" });
+
+      await store.publish(record, PNG);
+      fault.control.code = "EPERM";
+      fault.control.failWhen = (op, target) =>
+        op === "rename" && target.endsWith("capture.json");
+
+      await expect(store.update(ID, change, tag)).resolves.toMatchObject({
+        error: "writeFailed",
+        ok: false,
+      });
+      await expect(readText(ID, "capture.json")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect({
+        backup: await readText(ID, "capture.json.prev"),
+        shown: store.get(ID),
+      }).toStrictEqual({
+        backup: JSON.stringify(record, null, 2),
+        shown: { id: ID, kind: "ok", migratedFrom: null, record },
+      });
+
+      fault.control.failWhen = null;
+
+      const updated = {
+        ...record,
+        ...change,
+        updatedAt: EDIT_TIME.toISOString(),
+      };
+
+      const retryResult =
+        action === "retry" ? await store.update(ID, change, tag) : null;
+
+      expect({
+        disk: action === "retry" ? await readText(ID, "capture.json") : null,
+        retryResult,
+      }).toStrictEqual({
+        disk: action === "retry" ? JSON.stringify(updated, null, 2) : null,
+        retryResult: action === "retry" ? { ok: true, value: updated } : null,
+      });
+
+      const discarded = await store.discard(ID, tag);
+
+      expect({
+        discarded,
+        disk: await readText(ID, "capture.json"),
+        left: await listDir(ID),
+        owed: store.owed(),
+        shown: store.get(ID),
+      }).toStrictEqual({
+        discarded: { ok: true, value: null },
+        disk: JSON.stringify(record, null, 2),
+        left: ["capture.json", "crop.png"],
+        owed: [],
+        shown: { id: ID, kind: "ok", migratedFrom: null, record },
+      });
+    }
+  );
+
   it("refuses a blank title and a pin outside the crop", async () => {
     const store = await open();
 

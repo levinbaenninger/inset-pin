@@ -254,8 +254,8 @@ type OkEntry = StoredEntry & { readonly kind: "ok" };
 
 /**
  * The library save that last replaced an entry's capture.json, and the entry
- * capture.json.prev holds, which Discard changes puts back. Marked once a
- * Discard asked for that and it isn't done yet; its marker may be on disk.
+ * capture.json.prev holds, which Discard changes puts back. Marked while a
+ * rollback or Discard is still owed; its marker may be on disk.
  */
 interface Undo {
   readonly tag: SaveTag;
@@ -837,8 +837,18 @@ export const openCaptureStore = async (
       if (owed !== undefined && keeps) {
         undo.set(id, { ...owed, marked: true });
       } else {
-        undo.delete(id);
-        await quietly(renameWithRetry(backup, current));
+        try {
+          await renameWithRetry(backup, current);
+          undo.delete(id);
+        } catch (rollbackError) {
+          // The backup is still the saved record: Retry must keep it, and Discard can put it back.
+          undo.set(id, {
+            ...mine,
+            failure: saveErrorText(rollbackError, "undo"),
+            marked: true,
+          });
+          await mark(id);
+        }
       }
 
       return failure("writeFailed", saveErrorText(error));

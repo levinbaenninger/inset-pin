@@ -15,6 +15,8 @@ export const drafts = new DraftStore(libraryBridge());
 export const leaveHold = createLeaveHold({
   drafts,
   resume: () => {
+    // The hold hears a completed save before the count reporter does.
+    libraryBridge().unsavedCount(drafts.unsaved()?.count ?? 0);
     libraryBridge().resumeLeaving();
   },
   shown: () => {
