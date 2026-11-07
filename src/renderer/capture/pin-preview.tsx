@@ -329,6 +329,8 @@ export interface PinPreviewProps {
   readonly keys: { readonly tighten: string; readonly widen: string };
   /** Shown left of the tools, above the preview. */
   readonly caption: ReactNode;
+  /** A line under the caption and the tools, across the full width. */
+  readonly note?: ReactNode;
 }
 
 const pointIn = (event: PointerEvent<HTMLElement>): Point<"preview"> => {
@@ -355,6 +357,7 @@ export const rescaleCrop = (
  */
 export const PinPreview = ({
   caption,
+  note,
   disabled,
   frame,
   geometry,
@@ -595,6 +598,11 @@ export const PinPreview = ({
           </ToolButton>
         </fieldset>
       </div>
+      {note === undefined ? null : (
+        <p className="text-muted-foreground -mt-1.5 text-xs leading-snug">
+          {note}
+        </p>
+      )}
       <p className="sr-only" id={HELP_ID}>
         Drag the frame or its edges to crop, pinch to show more or less. With
         pin mode on, click to place a numbered pin; drag a pin to move it. Keys:

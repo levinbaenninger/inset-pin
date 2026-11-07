@@ -86,13 +86,8 @@ const DraftCaption = ({ view }: { readonly view: DraftView }) => {
 
   if (view.reopened) {
     return (
-      <p className="leading-snug">
-        <span className="text-foreground font-medium">
-          Unsaved draft from {time}
-        </span>
-        <span className="text-muted-foreground block">
-          Save or discard it to capture something new.
-        </span>
+      <p className="text-foreground truncate font-medium">
+        Unsaved draft from {time}
       </p>
     );
   }
@@ -465,6 +460,11 @@ export const DraftEditor = ({ view }: DraftEditorProps) => {
     >
       <PinPreview
         caption={<DraftCaption view={view} />}
+        note={
+          view.reopened
+            ? "Save or discard it to capture something new."
+            : undefined
+        }
         disabled={locked}
         frame={frame}
         geometry={content}
