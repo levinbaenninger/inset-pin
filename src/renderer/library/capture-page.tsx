@@ -35,6 +35,7 @@ import type { FieldsValue } from "@/fields/entry-fields";
 import { libraryBridge } from "@/shared/bridge";
 import { IconButton } from "@/shared/icon-button";
 import { inLayer, isTextField, promptOpen } from "@/shared/key-targets";
+import { focusOwnerUnlessTaken } from "@/shared/menu-keys";
 import { isMac } from "@/shared/platform";
 import { usePinKeys } from "@/shared/use-pin-keys";
 
@@ -128,6 +129,7 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
   const [retrying, setRetrying] = useState(false);
   const pointerRef = useRef<{ x: number; y: number } | null>(null);
   const imageRef = useRef<HTMLDivElement>(null);
+  const moreRef = useRef<HTMLButtonElement>(null);
   const done = capture.status.kind === "done";
 
   const area = {
@@ -414,17 +416,24 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
             commands.float();
           }}
         />
-        <DropdownMenu>
+        {/* Not modal: a click on search or a field while the menu is open goes there. */}
+        <DropdownMenu modal={false}>
           <DropdownMenuTrigger asChild>
             <IconButton
               data-testid="more"
               icon={MoreHorizontalIcon}
               label="More"
+              ref={moreRef}
             />
           </DropdownMenuTrigger>
           <DropdownMenuContent
             align="end"
             className="min-w-56"
+            onCloseAutoFocus={(event) => {
+              focusOwnerUnlessTaken(event, () => {
+                moreRef.current?.focus();
+              });
+            }}
             onKeyDownCapture={onMenuKey}
           >
             <MenuEntries entries={entries} kind="dropdown" />

@@ -43,6 +43,7 @@ import {
 } from "@/components/ui/input-group";
 import { DueChip } from "@/fields/due";
 import { cn } from "@/lib/utils";
+import { focusOwnerUnlessTaken } from "@/shared/menu-keys";
 import { isMac } from "@/shared/platform";
 
 import { MenuEntries, onMenuKey, useCaptureCommands } from "./capture-commands";
@@ -227,7 +228,8 @@ const CaptureRow = ({
 
   return (
     <li>
-      <ContextMenu>
+      {/* Not modal: a click on search or a field while the menu is open goes there. */}
+      <ContextMenu modal={false}>
         <ContextMenuTrigger asChild>
           <Link
             aria-current={active ? "page" : undefined}
@@ -300,8 +302,7 @@ const CaptureRow = ({
         <ContextMenuContent
           className="min-w-52"
           onCloseAutoFocus={(event) => {
-            event.preventDefault();
-            focus.land();
+            focusOwnerUnlessTaken(event, focus.land);
           }}
           onKeyDownCapture={onMenuKey}
         >
@@ -393,8 +394,9 @@ const FilterMenu = () => {
         align="end"
         className="min-w-52"
         onCloseAutoFocus={(event) => {
-          event.preventDefault();
-          searchRef.current?.focus();
+          focusOwnerUnlessTaken(event, () => {
+            searchRef.current?.focus();
+          });
         }}
       >
         <DropdownMenuLabel>Show captures</DropdownMenuLabel>

@@ -73,6 +73,48 @@ export const pickShownItem =
   };
 
 /**
+ * Runs `run` once no menu is on screen, not even fading out, and the last
+ * one has handed the focus back to its owner. A dialog a menu item opens
+ * waits for this, so it opens from the owner and can give the focus back.
+ */
+export const afterMenusClose = (run: () => void): void => {
+  if (openMenus === 0) {
+    run();
+
+    return;
+  }
+
+  const wait = (): void => {
+    if (openMenus === 0) {
+      // The closed menu's focus goes back in a task of its own; this one queues after it.
+      setTimeout(run, 0);
+    } else {
+      requestAnimationFrame(wait);
+    }
+  };
+
+  requestAnimationFrame(wait);
+};
+
+/**
+ * A non-modal menu's `onCloseAutoFocus`, as in the Shelf: Esc, a command or
+ * a click on empty space gives the focus back to the menu's owner, while a
+ * click on search or a field keeps it there, so that first click counts.
+ */
+export const focusOwnerUnlessTaken = (
+  event: Event,
+  focusOwner: () => void
+): void => {
+  event.preventDefault();
+
+  const taken = document.activeElement;
+
+  if (taken === null || taken === document.body) {
+    focusOwner();
+  }
+};
+
+/**
  * While a menu is open its keys stay in it, as in a native menu: a key it
  * picked an item with, and every other ⌘ or Ctrl chord, never reach the page
  * underneath. The arrows, Space, Return, Escape and typing go on to the menu.

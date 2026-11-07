@@ -18,7 +18,7 @@ import {
   useParams,
   useRouter,
 } from "@tanstack/react-router";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import {
   AlertDialog,
@@ -42,7 +42,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { libraryBridge } from "@/shared/bridge";
 import type { Icon } from "@/shared/icon-button";
-import { pickShownItem } from "@/shared/menu-keys";
+import { afterMenusClose, pickShownItem } from "@/shared/menu-keys";
 import { isMac } from "@/shared/platform";
 
 import { drafts } from "./library-drafts";
@@ -115,6 +115,8 @@ export const useCaptureCommands = (capture: SavedCapture, focus?: RowFocus) => {
   const { list, now, parsed, query } = useLibraryState();
   const say = useNotice();
   const [confirming, setConfirming] = useState(false);
+  // Where the focus was as Delete asked, for a dialog without a row to land on.
+  const askedFrom = useRef<Element | null>(null);
   const done = capture.status.kind === "done";
 
   const report = (
@@ -231,8 +233,12 @@ export const useCaptureCommands = (capture: SavedCapture, focus?: RowFocus) => {
   };
 
   const commands = {
+    // From a menu it asks once the menu has gone and given the focus back to its owner.
     askDelete: () => {
-      setConfirming(true);
+      afterMenusClose(() => {
+        askedFrom.current = document.activeElement;
+        setConfirming(true);
+      });
     },
     copyDetails: () => {
       void copy(
@@ -316,9 +322,14 @@ export const useCaptureCommands = (capture: SavedCapture, focus?: RowFocus) => {
     <AlertDialog onOpenChange={setConfirming} open={confirming}>
       <AlertDialogContent
         onCloseAutoFocus={(event) => {
+          event.preventDefault();
+
+          const from = askedFrom.current;
+
           if (focus !== undefined) {
-            event.preventDefault();
             focus.land();
+          } else if (from instanceof HTMLElement && from.isConnected) {
+            from.focus();
           }
         }}
       >
@@ -337,6 +348,7 @@ export const useCaptureCommands = (capture: SavedCapture, focus?: RowFocus) => {
           <AlertDialogAction
             onClick={() => {
               focus?.leaving();
+              askedFrom.current = null;
               void remove();
             }}
             variant="destructive"

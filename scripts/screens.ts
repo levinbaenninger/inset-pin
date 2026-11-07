@@ -1655,10 +1655,17 @@ const checkRowMenu = async (
   );
 
   await openMenu(bIndex);
-  await page.mouse.click(760, 640);
+
+  const footer = await page.getByTestId("capture-footer").boundingBox();
+
+  // Empty space: the menu isn't modal, so a click on a field or the image would land there instead.
+  await page.mouse.click(
+    (footer?.x ?? 0) + (footer?.width ?? 0) / 2,
+    (footer?.y ?? 0) + (footer?.height ?? 0) / 2
+  );
   closed = await settled();
   expectSame(
-    "a click outside closes row B's menu onto row B",
+    "a click on empty space closes row B's menu onto row B",
     { calls: await takeCalls(), closed, focus: await focused() },
     { calls: [], closed: true, focus: b }
   );
@@ -5758,20 +5765,21 @@ const checkMenuClickAway = async (
     },
   };
 
+  // In the order the report lists them, which compares as written.
   const cases = [
-    ["row", "search"],
-    ["row", "title"],
-    ["row", "empty"],
-    ["row", "escape"],
-    ["row", "copy"],
-    ["more", "title"],
-    ["more", "search"],
-    ["more", "empty"],
-    ["more", "escape"],
-    ["more", "copy"],
-    ["filter", "title"],
     ["filter", "empty"],
     ["filter", "escape"],
+    ["filter", "title"],
+    ["more", "copy"],
+    ["more", "empty"],
+    ["more", "escape"],
+    ["more", "search"],
+    ["more", "title"],
+    ["row", "copy"],
+    ["row", "empty"],
+    ["row", "escape"],
+    ["row", "search"],
+    ["row", "title"],
   ] as const;
 
   const landed: Record<string, string | null> = {};
