@@ -4024,8 +4024,8 @@ const checkDrafts = async (
             resumed: [],
             shown: { failure, title: `${aTitle} (typed)` },
           },
-          // The page reports at once when it loads, so main never goes by a count a crashed or reloaded page left.
-          counts: [0, 1, 0],
+          // Report on load, typing, and before resuming, then the count listener also hears the completed save.
+          counts: [0, 1, 0, 0],
           nothingTyped: { fields: null, ok: true },
           retried: {
             resumed: ["resumeLeaving"],
@@ -4196,8 +4196,8 @@ const checkDrafts = async (
         },
         {
           again: { fields: null, ok: true },
-          // The page reports at once when it loads, so main never goes by a count a crashed or reloaded page left.
-          counts: [0, 1, 0],
+          // Discard reports clean; resuming confirms that count before main starts its final disk wait.
+          counts: [0, 1, 0, 0],
           escape: kept,
           spaceOnCancel: kept,
           spaceOnDiscard: {
