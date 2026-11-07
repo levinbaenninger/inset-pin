@@ -655,13 +655,21 @@ const makeScenes = (
       page: "capture",
     },
     {
-      act: async (page) => {
-        await page.getByRole("button", { name: "Keyboard shortcuts" }).click();
+      // Round 14: the panel has no shortcuts button any more; ⌘/ opens the sheet.
+      act: async (page, platform) => {
+        await page.keyboard.press(`${mod(platform)}+/`);
         await page.getByTestId("shortcut-sheet").waitFor();
       },
       data: { view: filled },
       fit: true,
       name: "capture-6-shortcuts",
+      page: "capture",
+    },
+    {
+      // Round 14: the header's one tool group (pin mode, Tighten, Widen) beside the longest caption, a set-aside draft's.
+      data: { view: { ...filled, reopened: true } },
+      fit: true,
+      name: "capture-13-reopened-header",
       page: "capture",
     },
     {
@@ -4706,7 +4714,7 @@ const checkSidebarWidths = async (
   return failures;
 };
 
-/** The capture panel's Add… menu: the keys it shows pick their field; other shortcuts stay in the menu. */
+/** The capture panel's Add menu: the keys it shows pick their field; other shortcuts stay in the menu. */
 const checkAddMenu = async (
   browser: Browser,
   origin: string,
@@ -4756,17 +4764,17 @@ const checkAddMenu = async (
   };
 
   expectSame(
-    `${m}+/ in the open Add… menu stays in it`,
+    `${m}+/ in the open Add menu stays in it`,
     await pressInAddMenu(`${m}+/`),
     { descriptionFocused: false, dialogs: 0, menuOpen: true }
   );
   expectSame(
-    `${m}+Shift+d in the open Add… menu opens the Due picker`,
+    `${m}+Shift+d in the open Add menu opens the Due picker`,
     await pressInAddMenu(`${m}+Shift+d`),
     { descriptionFocused: false, dialogs: 1, menuOpen: false }
   );
   expectSame(
-    `${m}+d in the open Add… menu adds the description and focuses it`,
+    `${m}+d in the open Add menu adds the description and focuses it`,
     await pressInAddMenu(`${m}+d`),
     { descriptionFocused: true, dialogs: 0, menuOpen: false }
   );
@@ -4823,9 +4831,7 @@ const checkCaptureQuit = async (
 
   const shortcuts = await open({ kind: "editing" }, false);
 
-  await shortcuts.page
-    .getByRole("button", { name: "Keyboard shortcuts" })
-    .click();
+  await shortcuts.page.keyboard.press(`${mod(platform)}+/`);
   await shortcuts.page.getByTestId("shortcut-sheet").waitFor();
 
   const setQuitting = async (quitting: boolean): Promise<void> => {
@@ -5261,6 +5267,86 @@ const checkDueCalendar = async (
   return failures;
 };
 
+/**
+ * Round 14: the panel's header holds one tool group, pin mode then Tighten
+ * and Widen named in words, all on one line; the panel has no shortcuts
+ * button, and ⌘/ still opens the sheet. The crop buttons and keys still crop.
+ */
+const checkPanelHeader = async (
+  browser: Browser,
+  origin: string,
+  desktop: Targets,
+  platform: Platform
+): Promise<string[]> => {
+  const { expectSame, failures } = makeReport(platform);
+  const m = mod(platform);
+
+  const { context, page } = await openPanel(
+    browser,
+    origin,
+    platform,
+    draftView(desktop, { title: "Chairs are CHF 280 over the cap" })
+  );
+
+  const tools = await page
+    .getByTestId("preview-tools")
+    .locator("button")
+    .evaluateAll((buttons: HTMLButtonElement[]) => {
+      const middles = buttons.map((button) => {
+        const box = button.getBoundingClientRect();
+
+        return Math.round(box.top + box.height / 2);
+      });
+
+      return {
+        names: buttons.map(
+          (button) =>
+            `${button.getAttribute("aria-label") ?? ""}|${button.textContent}`
+        ),
+        oneLine: new Set(middles).size === 1,
+      };
+    });
+
+  const shortcutButtons = await page
+    .getByRole("button", { name: /shortcuts/iu })
+    .count();
+
+  await page.evaluate(() => {
+    globalThis.__panelCalls = [];
+  });
+  await page.getByRole("button", { exact: true, name: "Widen" }).click();
+  await page.getByTestId("title-field").focus();
+  await page.keyboard.press(`${m}+=`);
+  await page.waitForTimeout(150);
+
+  const cropped = await page.evaluate(() => globalThis.__panelCalls ?? []);
+
+  await page.keyboard.press(`${m}+/`);
+
+  expectSame(
+    "the header's tools read pin mode, Tighten and Widen on one line; no shortcuts button; Widen and the crop key still crop; ⌘/ opens the sheet",
+    {
+      cropped,
+      sheet: await settles(page.getByTestId("shortcut-sheet"), "visible", 1500),
+      shortcutButtons,
+      tools,
+    },
+    {
+      cropped: ["edit", "edit"],
+      sheet: true,
+      shortcutButtons: 0,
+      tools: {
+        names: ["Pin mode|", "Tighten|Tighten", "Widen|Widen"],
+        oneLine: true,
+      },
+    }
+  );
+
+  await context.close();
+
+  return failures;
+};
+
 const runChecks = async (
   browser: Browser,
   origin: string,
@@ -5295,6 +5381,10 @@ const runChecks = async (
       ...(await guarded(
         "add menu",
         async () => await checkAddMenu(browser, origin, desktop, platform)
+      )),
+      ...(await guarded(
+        "panel header",
+        async () => await checkPanelHeader(browser, origin, desktop, platform)
       )),
       ...(await guarded(
         "due calendar",

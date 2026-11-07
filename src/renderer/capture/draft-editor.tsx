@@ -35,7 +35,6 @@ import { Spinner } from "@/components/ui/spinner";
 import { EntryFields, isFieldAction, useFieldsUi } from "@/fields/entry-fields";
 import type { FieldsValue } from "@/fields/entry-fields";
 import { captureBridge } from "@/shared/bridge";
-import { IconButton, SHORTCUTS_ICON } from "@/shared/icon-button";
 import { useLocalKeys } from "@/shared/keys";
 import { isMac } from "@/shared/platform";
 import { ShortcutList } from "@/shared/shortcut-sheet";
@@ -526,16 +525,6 @@ export const DraftEditor = ({ view }: DraftEditorProps) => {
             Add a title to save
           </p>
         ) : null}
-        <IconButton
-          icon={SHORTCUTS_ICON}
-          keys={KEYS.shortcuts}
-          label="Keyboard shortcuts"
-          onClick={() => {
-            setSheetOpen(true);
-          }}
-          side="top"
-          type="button"
-        />
         <Button
           disabled={busy || !savable}
           size="sm"

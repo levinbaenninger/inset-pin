@@ -1,8 +1,4 @@
-import {
-  ArrowExpand01Icon,
-  ArrowShrink01Icon,
-  Location01Icon,
-} from "@hugeicons/core-free-icons";
+import { Location01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { DraftView } from "@shared/contracts";
 import {
@@ -278,20 +274,23 @@ interface ToolButtonProps {
   /** What the tooltip says it does. */
   readonly hint: string;
   readonly keys: string;
-  readonly icon: typeof ArrowExpand01Icon;
   readonly disabled: boolean;
   readonly pressed?: boolean;
   readonly onClick: () => void;
+  /** An icon (pin mode) or a word (Tighten, Widen). */
+  readonly children: ReactNode;
+  readonly face: "icon" | "word";
 }
 
 const ToolButton = ({
+  children,
   disabled,
   hint,
-  icon,
   keys,
   label,
   onClick,
   pressed,
+  face,
 }: ToolButtonProps) => (
   <Tooltip>
     <TooltipTrigger asChild>
@@ -300,11 +299,11 @@ const ToolButton = ({
         aria-pressed={pressed}
         disabled={disabled}
         onClick={onClick}
-        size="icon-sm"
+        size={face === "icon" ? "icon-xs" : "xs"}
         type="button"
         variant="tool"
       >
-        <HugeiconsIcon icon={icon} />
+        {children}
       </Button>
     </TooltipTrigger>
     <TooltipContent side="bottom">
@@ -545,41 +544,56 @@ export const PinPreview = ({
     <div className="flex flex-col gap-1.5">
       <div className="flex min-h-7 items-center justify-between gap-2">
         <div className="min-w-0 text-xs">{caption}</div>
-        <div className="flex shrink-0 items-center">
+        {/* One small group: pin mode, then the crop's two steps, named in words. */}
+        <fieldset
+          className="border-foreground/10 m-0 flex min-w-0 shrink-0 items-center gap-px rounded-lg border p-px"
+          data-testid="preview-tools"
+        >
+          <legend className="sr-only">Preview tools</legend>
           <ToolButton
             disabled={disabled}
-            icon={Location01Icon}
-            keys="P"
             hint={
               pinMode ? "Pin mode: a click places a pin" : "Pin mode is off"
             }
+            keys="P"
             label="Pin mode"
             onClick={() => {
               onPinMode(!pinMode);
             }}
             pressed={pinMode}
+            face="icon"
+          >
+            <HugeiconsIcon className="size-3.5" icon={Location01Icon} />
+          </ToolButton>
+          <span
+            aria-hidden="true"
+            className="bg-foreground/10 mx-0.5 h-4 w-px"
           />
           <ToolButton
             disabled={disabled || tightest}
-            icon={ArrowShrink01Icon}
+            hint="Show less around the pins"
             keys={keys.tighten}
-            hint="Tighten: show less around the pins"
             label="Tighten"
             onClick={() => {
               rescale(1 / WIDEN_STEP);
             }}
-          />
+            face="word"
+          >
+            Tighten
+          </ToolButton>
           <ToolButton
             disabled={disabled || widest}
-            icon={ArrowExpand01Icon}
+            hint="Show more around the pins"
             keys={keys.widen}
-            hint="Widen: show more around the pins"
             label="Widen"
             onClick={() => {
               rescale(WIDEN_STEP);
             }}
-          />
-        </div>
+            face="word"
+          >
+            Widen
+          </ToolButton>
+        </fieldset>
       </div>
       <p className="sr-only" id={HELP_ID}>
         Drag the frame or its edges to crop, pinch to show more or less. With
