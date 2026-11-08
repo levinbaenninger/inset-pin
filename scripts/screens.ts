@@ -4835,6 +4835,57 @@ const checkAddMenu = async (
     { descriptionFocused: true, dialogs: 0, menuOpen: false }
   );
 
+  /*
+   * The same items picked with the pointer. The menu fades out under the
+   * pointer, and a move over it took the focus back: the new description
+   * blurred and hid, and the Due picker shut as it opened.
+   */
+  const clickInAddMenu = async (item: string) => {
+    await page.reload();
+    await page.getByTestId("add-menu").waitFor();
+    await page.getByTestId("add-menu").click();
+
+    const target = page.getByRole("menuitem", { name: item });
+    const box = await target.boundingBox();
+
+    await target.click();
+
+    // A hand is never still: the pointer drifts over the closing menu.
+    if (box !== null) {
+      await page.mouse.move(box.x + box.width / 2 + 4, box.y + box.height / 2);
+      await page.mouse.move(box.x + box.width / 2 - 4, box.y + box.height / 2);
+    }
+
+    await page.waitForTimeout(400);
+
+    const state = await page.evaluate(() => ({
+      description:
+        document.querySelector("[data-testid='description-field']") !== null,
+      descriptionFocused:
+        (document.activeElement?.closest("[data-testid='description-field']") ??
+          null) !== null,
+      dialogs: document.querySelectorAll(
+        '[role="dialog"], [data-slot="popover-content"]'
+      ).length,
+    }));
+
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(200);
+
+    return state;
+  };
+
+  expectSame(
+    "a click on Due in the Add menu opens the Due picker",
+    await clickInAddMenu("Due"),
+    { description: false, descriptionFocused: false, dialogs: 1 }
+  );
+  expectSame(
+    "a click on Description in the Add menu adds the description and focuses it",
+    await clickInAddMenu("Description"),
+    { description: true, descriptionFocused: true, dialogs: 0 }
+  );
+
   await context.close();
 
   return failures;
@@ -5355,7 +5406,7 @@ const checkDueCalendar = async (
 
 /**
  * Round 14: the panel's header holds one tool group, pin mode then Tighten
- * and Widen named in words, all on one line; the panel has no shortcuts
+ * and Widen as icons named by their labels, all on one line; the panel has no shortcuts
  * button, and ⌘/ still opens the sheet. The crop buttons and keys still crop.
  */
 const checkPanelHeader = async (
@@ -5410,7 +5461,7 @@ const checkPanelHeader = async (
   await page.keyboard.press(`${m}+/`);
 
   expectSame(
-    "the header's tools read pin mode, Tighten and Widen on one line; no shortcuts button; Widen and the crop key still crop; ⌘/ opens the sheet",
+    "the header's tools are pin mode, Tighten and Widen icons on one line; no shortcuts button; Widen and the crop key still crop; ⌘/ opens the sheet",
     {
       cropped,
       sheet: await settles(page.getByTestId("shortcut-sheet"), "visible", 1500),
@@ -5422,7 +5473,7 @@ const checkPanelHeader = async (
       sheet: true,
       shortcutButtons: 0,
       tools: {
-        names: ["Pin mode|", "Tighten|Tighten", "Widen|Widen"],
+        names: ["Pin mode|", "Tighten|", "Widen|"],
         oneLine: true,
       },
     }

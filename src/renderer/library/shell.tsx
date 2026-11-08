@@ -296,7 +296,7 @@ export const Shell = () => {
           data-material=""
           style={{ "--sidebar-width": `${sidebar.state.width}px` }}
         >
-          <header className="app-drag [&_button]:app-no-drag flex h-11 shrink-0 items-center gap-0.5 px-2 in-data-[platform=mac]:pl-20">
+          <header className="app-drag [&_button]:app-no-drag flex h-11 shrink-0 items-center gap-0.5 px-2 in-data-[platform=mac]:pl-23">
             <h1 className="sr-only">Captures</h1>
             <SidebarToggle />
             <span className="flex-1" />

@@ -102,21 +102,18 @@ export const PinMarker = ({
       data-pin={number}
       style={{ "--pin-x": left, "--pin-y": top }}
     >
-      {selected ? (
-        <span
-          className="pin-selection"
-          style={{ "--pin-head": `${-PIN_HEAD_OFFSET_DIP * factor}px` }}
-        />
-      ) : null}
+      {/* Selected, the pin itself grows from its tip and glows: a mark that follows its shape, never a circle off its middle. */}
       <canvas
         className={cn(
-          "absolute top-(--sprite-y) left-(--sprite-x) block h-(--sprite-h) w-(--sprite-w) max-w-none transition-transform duration-100",
+          "absolute top-(--sprite-y) left-(--sprite-x) block h-(--sprite-h) w-(--sprite-w) max-w-none origin-(--sprite-tip) transition duration-150 ease-out",
+          selected && "pin-selection",
           lifted && "-translate-y-0.5"
         )}
         height={sprite.height}
         ref={canvas}
         style={{
           "--sprite-h": `${sprite.height / ratio}px`,
+          "--sprite-tip": `${(sprite.tipX + 0.5) / ratio}px ${(sprite.tipY + 0.5) / ratio}px`,
           "--sprite-w": `${sprite.width / ratio}px`,
           "--sprite-x": `${-(sprite.tipX + 0.5) / ratio}px`,
           "--sprite-y": `${-(sprite.tipY + 0.5) / ratio}px`,

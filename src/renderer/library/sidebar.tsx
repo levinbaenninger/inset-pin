@@ -1,4 +1,4 @@
-import { SidebarLeftIcon } from "@hugeicons/core-free-icons";
+import { PanelLeftIcon } from "@hugeicons/core-free-icons";
 import { keyLabels } from "@shared/shortcuts";
 import {
   createContext,
@@ -149,7 +149,7 @@ export const SidebarToggle = () => {
 
   return (
     <IconButton
-      icon={SidebarLeftIcon}
+      icon={PanelLeftIcon}
       keys={keyLabels(isMac).sidebar}
       label={state.collapsed ? "Show sidebar" : "Hide sidebar"}
       onClick={toggle}

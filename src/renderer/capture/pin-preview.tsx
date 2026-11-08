@@ -1,4 +1,8 @@
-import { Location01Icon } from "@hugeicons/core-free-icons";
+import {
+  Location01Icon,
+  ZoomInIcon,
+  ZoomOutIcon,
+} from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { DraftView } from "@shared/contracts";
 import {
@@ -277,9 +281,7 @@ interface ToolButtonProps {
   readonly disabled: boolean;
   readonly pressed?: boolean;
   readonly onClick: () => void;
-  /** An icon (pin mode) or a word (Tighten, Widen). */
   readonly children: ReactNode;
-  readonly face: "icon" | "word";
 }
 
 const ToolButton = ({
@@ -290,7 +292,6 @@ const ToolButton = ({
   label,
   onClick,
   pressed,
-  face,
 }: ToolButtonProps) => (
   <Tooltip>
     <TooltipTrigger asChild>
@@ -299,7 +300,7 @@ const ToolButton = ({
         aria-pressed={pressed}
         disabled={disabled}
         onClick={onClick}
-        size={face === "icon" ? "icon-xs" : "xs"}
+        size="icon-xs"
         type="button"
         variant="tool"
       >
@@ -547,7 +548,7 @@ export const PinPreview = ({
     <div className="flex flex-col gap-1.5">
       <div className="flex min-h-7 items-center justify-between gap-2">
         <div className="min-w-0 text-xs">{caption}</div>
-        {/* One small group: pin mode, then the crop's two steps, named in words. */}
+        {/* One small group of icons: pin mode, then the crop's two steps; each tooltip names it and its key. */}
         <fieldset
           className="border-foreground/10 m-0 flex min-w-0 shrink-0 items-center gap-px rounded-lg border p-px"
           data-testid="preview-tools"
@@ -564,7 +565,6 @@ export const PinPreview = ({
               onPinMode(!pinMode);
             }}
             pressed={pinMode}
-            face="icon"
           >
             <HugeiconsIcon className="size-3.5" icon={Location01Icon} />
           </ToolButton>
@@ -580,9 +580,8 @@ export const PinPreview = ({
             onClick={() => {
               rescale(1 / WIDEN_STEP);
             }}
-            face="word"
           >
-            Tighten
+            <HugeiconsIcon className="size-3.5" icon={ZoomInIcon} />
           </ToolButton>
           <ToolButton
             disabled={disabled || widest}
@@ -592,9 +591,8 @@ export const PinPreview = ({
             onClick={() => {
               rescale(WIDEN_STEP);
             }}
-            face="word"
           >
-            Widen
+            <HugeiconsIcon className="size-3.5" icon={ZoomOutIcon} />
           </ToolButton>
         </fieldset>
       </div>
