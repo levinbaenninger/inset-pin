@@ -8,6 +8,13 @@ import type { KeyboardEvent } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 
+/**
+ * A quiet "+ name" row: Next step under the steps, and the panel's Add. One
+ * size, icon slot and gap, so their words start on the same line as a step's.
+ */
+export const ADD_ROW =
+  "text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 data-[state=open]:text-foreground flex h-8 items-center gap-2.5 self-start rounded-md pr-2 pl-1.5 text-sm outline-none focus-visible:ring-3 disabled:pointer-events-none disabled:opacity-60";
+
 export const newStep = (): Step => ({
   done: false,
   id: crypto.randomUUID(),
@@ -219,7 +226,7 @@ export const StepsEditor = ({
       ) : null}
       {steps.length > 0 && steps.length < STEPS_MAX ? (
         <button
-          className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 flex h-8 items-center gap-2.5 self-start rounded-md pr-2 pl-1.5 text-sm outline-none focus-visible:ring-3 disabled:pointer-events-none disabled:opacity-60"
+          className={ADD_ROW}
           disabled={disabled}
           onClick={() => {
             insertAfter(steps.length - 1);

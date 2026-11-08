@@ -63,25 +63,17 @@ const Illustration = () => (
 );
 
 /**
- * The guide, for the first run and whenever no capture is open: what to
- * press, nothing more. The keys sit on the right, as in the other Inset apps.
+ * The guide, for the first run and whenever no capture is open: one picture,
+ * one sentence with the key, one button. Every other key is in the ⌘/ sheet.
  */
 export const Welcome = () => {
   const status = useStatus();
-  const { setSheetOpen } = useLibraryState();
-
-  const steps = [
-    { keys: KEYS.capture, text: "Capture what is under the pointer" },
-    { keys: "Click", text: "Place numbered pins" },
-    { keys: KEYS.description, text: "Add a description" },
-    { keys: KEYS.save, text: "Save" },
-  ];
 
   return (
     <>
       <PaneHeader />
       <main
-        className="flex min-h-0 flex-1 flex-col items-center justify-center gap-6 overflow-y-auto p-8 pb-20 text-center"
+        className="relative flex min-h-0 flex-1 flex-col items-center justify-center gap-5 overflow-y-auto p-8 pb-20 text-center"
         data-testid="welcome"
       >
         <Illustration />
@@ -90,41 +82,21 @@ export const Welcome = () => {
             Point at it, pin it, say why
           </h1>
           <p className="text-muted-foreground text-sm text-balance">
-            Move the pointer over anything on screen and press{" "}
-            <Kbd>{KEYS.capture}</Kbd>. Try it on this window.
+            Hover over anything on screen and{" "}
+            <span className="whitespace-nowrap">
+              press <Kbd>{KEYS.capture}</Kbd>.
+            </span>{" "}
+            Click to pin what matters, then add a title.
           </p>
         </div>
-        <ul className="flex w-full max-w-72 flex-col gap-2.5 text-left text-sm">
-          {steps.map((step) => (
-            <li
-              className="flex items-center justify-between gap-3"
-              key={step.text}
-            >
-              <span className="text-muted-foreground">{step.text}</span>
-              <Kbd>{step.keys}</Kbd>
-            </li>
-          ))}
-        </ul>
-        <div className="flex items-center gap-2">
-          <Button
-            onClick={() => {
-              api.captureSoon();
-            }}
-            size="sm"
-          >
-            New capture in 3 seconds
-          </Button>
-          <Button
-            onClick={() => {
-              setSheetOpen(true);
-            }}
-            size="sm"
-            variant="outline"
-          >
-            All shortcuts
-            <Kbd>{KEYS.shortcuts}</Kbd>
-          </Button>
-        </div>
+        <Button
+          onClick={() => {
+            api.captureSoon();
+          }}
+          size="sm"
+        >
+          New capture in 3 seconds
+        </Button>
         {status?.shortcutRegistered === false ? (
           <Alert className="max-w-80 text-left">
             <HugeiconsIcon icon={Alert02Icon} />
@@ -134,7 +106,7 @@ export const Welcome = () => {
             </AlertDescription>
           </Alert>
         ) : null}
-        <p className="text-muted-foreground max-w-80 text-xs text-balance">
+        <p className="text-muted-foreground/80 absolute bottom-6 max-w-80 text-xs text-balance">
           {findTheApp(status?.iconIn ?? "dockAndMenuBar")}
         </p>
       </main>

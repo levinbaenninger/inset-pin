@@ -139,8 +139,8 @@ const OK: ActionResult = { ok: true };
 
 const fail = (message: string): ActionResult => ({ message, ok: false });
 
-/** Where macOS draws the traffic lights: centred in the page's title strip (--titlebar-height in styles.css). */
-const TRAFFIC_LIGHTS = { x: 18, y: 18 };
+/** Where macOS draws the traffic lights: their centres on the 44 px headers' middle, level with the sidebar toggle. */
+const TRAFFIC_LIGHTS = { x: 18, y: 16 };
 
 export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
   const { copy, store } = options;

@@ -212,21 +212,14 @@
   }
 }
 
-/* The ring around a selected pin's head (src/renderer/shared/pin-marker.tsx); never exported. */
+/* A selected pin (src/renderer/shared/pin-marker.tsx): larger from its tip, with a glow in its colour around its outline; never exported. */
 @layer components {
   .pin-selection {
-    pointer-events: none;
-    position: absolute;
-    top: var(--pin-head);
-    left: 0;
-    width: 1.375rem;
-    height: 1.375rem;
-    translate: -50% -50%;
-    border-radius: 9999px;
-    box-shadow:
-      0 0 0 2px var(--color-pin),
-      0 0 0 3.5px white,
-      0 0 0 4px rgb(0 0 0 / 0.25);
+    scale: 1.2;
+    filter: drop-shadow(0 0 1.5px var(--color-pin))
+      drop-shadow(
+        0 0 3px color-mix(in oklab, var(--color-pin) 70%, transparent)
+      );
   }
 }
 

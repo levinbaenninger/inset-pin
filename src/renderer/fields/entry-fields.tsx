@@ -13,7 +13,6 @@ import type { FieldKeyAction } from "@shared/shortcuts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode, RefObject } from "react";
 
-import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -22,11 +21,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import { pickShownItem } from "@/shared/menu-keys";
+import { afterMenusClose, pickShownItem } from "@/shared/menu-keys";
 import { isMac } from "@/shared/platform";
 
 import { DueField, DuePicker } from "./due";
-import { newStep, StepsEditor } from "./steps-editor";
+import { ADD_ROW, newStep, StepsEditor } from "./steps-editor";
 
 export interface FieldsValue {
   readonly title: string;
@@ -189,17 +188,18 @@ const AddMenu = ({
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
-        <Button
+        <button
+          className={ADD_ROW}
           data-due-home=""
           data-testid="add-menu"
           disabled={disabled}
-          size="sm"
           type="button"
-          variant="quiet"
         >
-          <HugeiconsIcon data-icon="inline-start" icon={Add01Icon} />
+          <span className="grid size-4 place-items-center">
+            <HugeiconsIcon icon={Add01Icon} size={14} />
+          </span>
           Add
-        </Button>
+        </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="start"
@@ -216,9 +216,12 @@ const AddMenu = ({
           <DropdownMenuItem
             data-key-action={item.field}
             key={item.field}
+            // Once the menu has gone: while it fades out under the pointer, a move over it takes the focus back, which hid the new description and shut the Due picker.
             onSelect={() => {
               chose.current = true;
-              onAdd(item.field);
+              afterMenusClose(() => {
+                onAdd(item.field);
+              });
             }}
           >
             <HugeiconsIcon icon={item.icon} />
@@ -262,7 +265,7 @@ const AddChips = ({
 
 /** The library's fields read as text; a quiet tint on hover and focus shows they can be edited. */
 const PAGE_FIELD =
-  "-mx-1.5 rounded-md px-1.5 hover:bg-foreground/[0.03] focus-visible:bg-foreground/[0.05] transition-colors";
+  "-mx-2 rounded-md px-2 py-1 hover:bg-foreground/[0.03] focus-visible:bg-foreground/[0.05] transition-colors";
 
 const VARIANT = {
   page: {
@@ -488,7 +491,7 @@ export const EntryFields = ({
       {page ? (
         pageRow
       ) : (
-        <div className="flex items-center gap-1.5 px-1.5 pb-1.5">
+        <div className="flex items-center gap-1.5 px-1.5 pb-1">
           {pickerAnchor(<AddMenu disabled={disabled} onAdd={add} />)}
           {dueRow}
         </div>

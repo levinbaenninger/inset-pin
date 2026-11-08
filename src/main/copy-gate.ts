@@ -2,7 +2,6 @@ import type { CaptureId, EditableFields } from "@shared/capture-record";
 import { DISCARD_PENDING } from "@shared/contracts";
 import type { CopyResult, OwedDiscard, SavedEdits } from "@shared/contracts";
 import { entryPlainText, entryText } from "@shared/entry-text";
-import { clipboard, ClipboardItem } from "electron";
 
 import type { PinnedImage, ShownPins } from "./capture-export";
 import type { CaptureStore } from "./store";
@@ -26,8 +25,16 @@ export interface ClipboardWriter {
   readonly writeImage: (png: Buffer, text: string | null) => Promise<void>;
 }
 
+/**
+ * Electron is loaded on the first copy, not with this module, so the gate's
+ * tests never require the electron package, which downloads its binary on
+ * first require and fails CI whenever that download does.
+ */
+const electron = async () => await import("electron");
+
 export const electronClipboard: ClipboardWriter = {
   writeImage: async (png, text) => {
+    const { clipboard, ClipboardItem } = await electron();
     const image = new Blob([png], { type: "image/png" });
 
     await clipboard.write([
@@ -42,6 +49,8 @@ export const electronClipboard: ClipboardWriter = {
     ]);
   },
   writeText: async (text) => {
+    const { clipboard } = await electron();
+
     await clipboard.writeText(text);
   },
 };

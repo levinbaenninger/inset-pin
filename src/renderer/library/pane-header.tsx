@@ -18,7 +18,7 @@ export const PaneHeader = ({ children }: { readonly children?: ReactNode }) => {
     <header
       className={cn(
         "app-drag caption-clear [&_button]:app-no-drag flex h-11 shrink-0 items-center gap-0.5 pl-4",
-        state.collapsed && (isMac ? "pl-20" : "pl-2")
+        state.collapsed && (isMac ? "pl-23" : "pl-2")
       )}
     >
       {state.collapsed ? (
