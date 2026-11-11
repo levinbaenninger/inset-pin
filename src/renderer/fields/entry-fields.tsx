@@ -23,6 +23,7 @@ import {
 import { cn } from "@/lib/utils";
 import { afterMenusClose, pickShownItem } from "@/shared/menu-keys";
 import { isMac } from "@/shared/platform";
+import { coach } from "@/tutorial/anchors";
 
 import { DueField, DuePicker } from "./due";
 import { ADD_ROW, newStep, StepsEditor } from "./steps-editor";
@@ -192,6 +193,7 @@ const AddMenu = ({
           className={ADD_ROW}
           data-due-home=""
           data-testid="add-menu"
+          {...coach("add-menu")}
           disabled={disabled}
           type="button"
         >
@@ -406,6 +408,7 @@ export const EntryFields = ({
           !page && "px-3 pt-2.5"
         )}
         data-testid="title-field"
+        {...coach("title-field")}
         disabled={disabled}
         maxLength={TITLE_MAX}
         onBlur={() => {

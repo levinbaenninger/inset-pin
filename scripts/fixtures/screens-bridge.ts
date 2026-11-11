@@ -67,7 +67,7 @@ interface FixtureCapture {
 }
 
 export interface BridgeInput {
-  readonly page: "capture" | "library" | "settings" | "pin";
+  readonly page: "capture" | "library" | "onboarding" | "settings" | "pin";
   readonly view?: object;
   readonly captures?: readonly FixtureCapture[];
   readonly capture?: object;
@@ -77,6 +77,8 @@ export interface BridgeInput {
   readonly owed?: readonly OwedFixture[];
   /** How many lookups of `owed` fail before one answers, as a closed IPC channel would; "always" never answers. */
   readonly owedFails?: number | "always";
+  /** The in-app tutorial's view for the page; without it the page shows none. */
+  readonly tutorial?: object;
 }
 
 /** A capture's editable fields, as main stores them. */
@@ -328,17 +330,32 @@ export const installBridge = (input: BridgeInput): void => {
       },
       getView: async () => await respond(input.view),
       on,
-      openScreenSettings: nothing,
-      relaunch: nothing,
+      openScreenSettings: () => {
+        panelCall("openScreenSettings");
+      },
+      relaunch: () => {
+        panelCall("relaunch");
+      },
       reportHeight: (report: { readonly height: number }) => {
         fitHeight(report.height);
       },
       save: () => {
         panelCall("save");
       },
+      setUpScreenRecording: () => {
+        panelCall("setUpScreenRecording");
+      },
+      getTutorial: async () => await respond(input.tutorial),
+      tutorial: (action: { readonly kind: string; readonly id?: string }) => {
+        panelCall(`tutorial:${action.kind}:${action.id ?? ""}`);
+      },
     },
     library: {
       captureSoon: nothing,
+      getTutorial: async () => await respond(input.tutorial),
+      tutorial: (action: { readonly kind: string; readonly id?: string }) => {
+        record(`tutorial:${action.kind}:${action.id ?? ""}`);
+      },
       copyDetails: gated("copyDetails"),
       // As main: the save on its way is dropped, or what it replaced is renamed back; nothing is written. One that can't be stays owed.
       discard: async ({ id, tag }: { id: string; tag: Tag }) => {
@@ -537,11 +554,44 @@ export const installBridge = (input: BridgeInput): void => {
         return await respond(OK);
       },
     },
+    // The onboarding's page only reports what it was asked; main moves the flow on.
+    onboarding: {
+      allow: (id: string) => {
+        record(`allow:${id}`);
+      },
+      back: () => {
+        record("back");
+      },
+      finish: (how: string) => {
+        record(`finish:${how}`);
+      },
+      fitHeight,
+      getView: async () => await respond(input.view),
+      next: () => {
+        record("next");
+      },
+      on,
+      reopen: () => {
+        record("reopen");
+      },
+      skip: () => {
+        record("skip");
+      },
+      startDrag: () => {
+        record("startDrag");
+      },
+    },
     settings: {
       fitHeight,
       getView: async () => await respond(input.view),
       on,
+      resetTutorial: () => {
+        record("resetTutorial");
+      },
       setOpenAtLogin: nothing,
+      setTips: (shown: boolean) => {
+        record(`setTips:${String(shown)}`);
+      },
       update: nothing,
     },
   };
@@ -549,6 +599,7 @@ export const installBridge = (input: BridgeInput): void => {
   const globals = {
     capture: "insetCapture",
     library: "insetLibrary",
+    onboarding: "insetOnboarding",
     pin: "insetPin",
     settings: "insetSettings",
   } as const;

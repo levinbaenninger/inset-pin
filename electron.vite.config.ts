@@ -22,6 +22,7 @@ export default defineConfig({
         input: {
           capture: path.resolve(preload, "capture.ts"),
           library: path.resolve(preload, "library.ts"),
+          onboarding: path.resolve(preload, "onboarding.ts"),
           pin: path.resolve(preload, "pin.ts"),
           settings: path.resolve(preload, "settings.ts"),
         },
@@ -37,6 +38,7 @@ export default defineConfig({
         input: {
           capture: path.resolve(renderer, "capture.html"),
           library: path.resolve(renderer, "library.html"),
+          onboarding: path.resolve(renderer, "onboarding.html"),
           pin: path.resolve(renderer, "pin.html"),
           settings: path.resolve(renderer, "settings.html"),
         },

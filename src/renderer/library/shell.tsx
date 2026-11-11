@@ -16,13 +16,14 @@ import {
   keyLabels,
   libraryShortcuts,
 } from "@shared/shortcuts";
+import type { TutorialAction, TutorialView } from "@shared/tutorial";
 import {
   getRouteApi,
   Outlet,
   useNavigate,
   useParams,
 } from "@tanstack/react-router";
-import { useEffect, useEffectEvent, useMemo } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef } from "react";
 import { flushSync } from "react-dom";
 
 import { Button } from "@/components/ui/button";
@@ -33,8 +34,14 @@ import { IconButton, SHORTCUTS_ICON } from "@/shared/icon-button";
 import { inLayer, isTextField, promptOpen } from "@/shared/key-targets";
 import { isMac } from "@/shared/platform";
 import { ShortcutSheet } from "@/shared/shortcut-sheet";
+import { coach } from "@/tutorial/anchors";
+import { Checklist } from "@/tutorial/checklist";
+import { HintLayer } from "@/tutorial/hint-layer";
+import { Spotlight } from "@/tutorial/spotlight";
+import { useTutorial } from "@/tutorial/use-tutorial";
 
 import { onCommand } from "./command-bus";
+import { ExamplesContext } from "./examples";
 import { useLibraryState } from "./library-state";
 import type { ListKind } from "./list-model";
 import {
@@ -48,6 +55,22 @@ import { Groups, SearchField } from "./recent-list";
 import { ResizeHandle, SidebarToggle, useSidebar } from "./sidebar";
 
 const api = libraryBridge();
+
+/** The in-app tutorial (src/renderer/tutorial/), over the library's contract. */
+const tutorialSource = {
+  load: async () => await api.getTutorial(),
+  subscribe: (listener: (view: TutorialView) => void) =>
+    api.on("tutorial", listener),
+};
+
+const actTutorial = (action: TutorialAction): void => {
+  api.tutorial(action);
+};
+
+const endWalk = (): void => {
+  api.tutorial({ kind: "spotlightDone" });
+};
+
 const rootRoute = getRouteApi("__root__");
 const KEYS = keyLabels(isMac);
 
@@ -231,8 +254,38 @@ export const Shell = () => {
   const { captureId } = useParams({ strict: false });
   const sidebar = useSidebar();
 
-  const { list, now, parsed, query, setList, setSheetOpen, sheetOpen } =
-    useLibraryState();
+  const {
+    list,
+    now,
+    parsed,
+    query,
+    setList,
+    setQuery,
+    setSheetOpen,
+    sheetOpen,
+  } = useLibraryState();
+
+  const tutorial = useTutorial(tutorialSource);
+
+  const examples = useMemo(
+    () => new Set(tutorial.examples),
+    [tutorial.examples]
+  );
+
+  // The walkthrough starts on the list as it is: a search and the Done list close with it.
+  const walked = useRef<number | null>(null);
+
+  const onTutorial = useEffectEvent((next: TutorialView) => {
+    const seq = next.spotlight?.seq ?? null;
+
+    if (seq !== null && seq !== walked.current) {
+      walked.current = seq;
+      setQuery("");
+      setList("active");
+    }
+  });
+
+  useEffect(() => api.on("tutorial", onTutorial), []);
 
   const searching = !isEmptyQuery(parsed) || query.trim() !== "";
   const ordered = useMemo(() => listOrder(captures), [captures]);
@@ -308,7 +361,7 @@ export const Shell = () => {
               }}
             />
           </header>
-          <div className="px-2.5 pb-2">
+          <div className="px-2.5 pb-2" {...coach("search")}>
             <SearchField />
           </div>
           {/* A due: still being typed filters nothing, so it gets no count. */}
@@ -320,7 +373,14 @@ export const Shell = () => {
           <nav
             aria-label={list === "done" ? "Done" : "Captures"}
             className="min-h-0 flex-1 [scrollbar-gutter:stable] overflow-y-auto px-2 pb-3"
+            {...coach("capture-list")}
           >
+            {/* Getting started at the top of the list, out of the way of a search and the Done list. */}
+            {tutorial.checklist === null ||
+            searching ||
+            list === "done" ? null : (
+              <Checklist act={actTutorial} view={tutorial.checklist} />
+            )}
             {list === "done" ? (
               <button
                 className={cn(ROW, "mb-1")}
@@ -344,7 +404,9 @@ export const Shell = () => {
                 total={captures.length}
               />
             ) : (
-              <Groups activeId={captureId} groups={groups} />
+              <ExamplesContext value={examples}>
+                <Groups activeId={captureId} groups={groups} />
+              </ExamplesContext>
             )}
           </nav>
           <footer className="border-foreground/5 flex shrink-0 flex-col gap-1 border-t px-2 pt-1.5 pb-2">
@@ -373,7 +435,10 @@ export const Shell = () => {
                 />
               </button>
             ) : null}
-            <div className="flex items-center gap-0.5">
+            <div
+              className="flex items-center gap-0.5"
+              {...coach("sidebar-foot")}
+            >
               <IconButton
                 icon={Settings01Icon}
                 keys={KEYS.settings}
@@ -409,6 +474,8 @@ export const Shell = () => {
         open={sheetOpen}
         shortcut={KEYS.shortcuts}
       />
+      <HintLayer act={actTutorial} view={tutorial} />
+      <Spotlight onDone={endWalk} run={tutorial.spotlight} />
     </TooltipProvider>
   );
 };

@@ -14,6 +14,7 @@ import type {
   LibraryCommand,
   SavedEdits,
 } from "@shared/contracts";
+import type { TutorialAction, TutorialView } from "@shared/tutorial";
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme } from "electron";
 
 import type { PinnedImageOf } from "./capture-export";
@@ -116,6 +117,8 @@ export interface LibraryWindow {
   readonly allowClose: () => void;
   /** Whether a menu is open in the focused library, so the app menu's keys skip. */
   readonly menuOpen: () => boolean;
+  /** Pushes the tutorial's view to the page, when one is open. */
+  readonly emitTutorial: (view: TutorialView) => void;
 }
 
 export interface LibraryOptions {
@@ -133,6 +136,11 @@ export interface LibraryOptions {
   readonly floatOnTop: (id: CaptureId) => void;
   readonly captureSoon: () => void;
   readonly openSettings: () => void;
+  /** The in-app tutorial's part in the library (src/main/tutorial/): its view, and what the page asks or reports. */
+  readonly tutorial: {
+    readonly view: () => TutorialView;
+    readonly act: (action: TutorialAction) => void;
+  };
 }
 
 const OK: ActionResult = { ok: true };
@@ -214,7 +222,9 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
       menuOpen: (open) => {
         menu?.set(open);
       },
+      getTutorial: options.tutorial.view,
       openSettings: options.openSettings,
+      tutorial: options.tutorial.act,
       // A Discard the closed page sent may fail moments from now: the fresh page hears of it.
       owedDiscards: async () => {
         await withinLimit(store.settled);
@@ -458,6 +468,9 @@ export const createLibraryWindow = (options: LibraryOptions): LibraryWindow => {
 
         server.emit("command", command);
       }
+    },
+    emitTutorial: (view) => {
+      server.emit("tutorial", view);
     },
     isFloating: () => floatOnTop,
     leave: (leaving, then) => {

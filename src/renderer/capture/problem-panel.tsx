@@ -38,7 +38,7 @@ const describe = (problem: CaptureProblem): ProblemText => {
   if (problem.status === "granted-but-empty") {
     return {
       detail:
-        "macOS reports permission, but the image came back empty. Turn the setting off and on again.",
+        "macOS reports permission, but the image came back empty. Turn the setting off and on again, then reopen Inset.",
       title: "The screen image was empty",
     };
   }
@@ -54,51 +54,58 @@ export interface ProblemPanelProps {
   readonly problem: CaptureProblem;
 }
 
-const PermissionSteps = ({
+/** Screen Recording is off: the onboarding takes over at that step, in place of this panel. */
+const SetUpScreen = ({
   primaryRef,
 }: {
   readonly primaryRef: RefObject<HTMLButtonElement | null>;
 }) => (
-  <ol className="marker:text-muted-foreground flex list-decimal flex-col gap-1.5 pl-8 text-sm">
-    <li>
-      <div className="flex items-center justify-between gap-3">
-        <span>Open the privacy setting.</span>
-        <Button
-          className="shrink-0"
-          onClick={() => {
-            api.openScreenSettings();
-          }}
-          ref={primaryRef}
-          size="sm"
-          variant="outline"
-        >
-          Open System Settings
-        </Button>
-      </div>
-    </li>
-    <li className="py-1">Turn on Inset Context Pin.</li>
-    <li>
-      <div className="flex items-center justify-between gap-3">
-        <span>Reopen Inset.</span>
-        <Button
-          className="shrink-0"
-          onClick={() => {
-            api.relaunch();
-          }}
-          size="sm"
-        >
-          Quit and Reopen
-        </Button>
-      </div>
-    </li>
-  </ol>
+  <Button
+    onClick={() => {
+      api.setUpScreenRecording();
+    }}
+    ref={primaryRef}
+    size="sm"
+  >
+    Set Up Screen Recording…
+  </Button>
+);
+
+/** macOS reports the grant but sends an empty image: turning the setting off and on, then reopening, fixes it. */
+const ToggleAndReopen = ({
+  primaryRef,
+}: {
+  readonly primaryRef: RefObject<HTMLButtonElement | null>;
+}) => (
+  <>
+    <Button
+      onClick={() => {
+        api.openScreenSettings();
+      }}
+      ref={primaryRef}
+      size="sm"
+      variant="outline"
+    >
+      Open System Settings
+    </Button>
+    <Button
+      onClick={() => {
+        api.relaunch();
+      }}
+      size="sm"
+    >
+      Quit and Reopen
+    </Button>
+  </>
 );
 
 /** No "Try again" here: it would sample the pointer over this panel. */
 export const ProblemPanel = ({ problem }: ProblemPanelProps) => {
   const primaryRef = useRef<HTMLButtonElement>(null);
   const { detail, title } = describe(problem);
-  const needsSettings = isMac && problem.kind === "screenPermission";
+
+  const permission =
+    isMac && problem.kind === "screenPermission" ? problem.status : null;
 
   const dismiss = useCallback((): void => {
     api.dismiss();
@@ -117,16 +124,21 @@ export const ProblemPanel = ({ problem }: ProblemPanelProps) => {
         <AlertTitle>{title}</AlertTitle>
         <AlertDescription>{detail}</AlertDescription>
       </Alert>
-      {needsSettings ? <PermissionSteps primaryRef={primaryRef} /> : null}
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
         <Button
           onClick={dismiss}
-          ref={needsSettings ? undefined : primaryRef}
+          ref={permission === null ? primaryRef : undefined}
           size="sm"
           variant="ghost"
         >
           Close
         </Button>
+        {permission === "granted-but-empty" ? (
+          <ToggleAndReopen primaryRef={primaryRef} />
+        ) : null}
+        {permission !== null && permission !== "granted-but-empty" ? (
+          <SetUpScreen primaryRef={primaryRef} />
+        ) : null}
       </div>
     </div>
   );

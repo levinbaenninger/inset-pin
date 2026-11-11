@@ -4,7 +4,12 @@ import type { CaptureId } from "./capture-record";
 export const INSET_SCHEME = "inset";
 export const APP_ORIGIN = "inset://app";
 
-export type PageName = "capture" | "library" | "pin" | "settings";
+export type PageName =
+  | "capture"
+  | "library"
+  | "onboarding"
+  | "pin"
+  | "settings";
 
 export type InsetRequest =
   | { readonly kind: "app"; readonly path: string }

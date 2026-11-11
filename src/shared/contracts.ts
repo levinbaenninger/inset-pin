@@ -22,8 +22,12 @@ import type { DueDate } from "./due";
 import { pt, rect } from "./geometry";
 import type { Size } from "./geometry";
 import { defineContract, event, invoke, out, send } from "./ipc";
+import { HandOffChoiceSchema, PermissionIdSchema } from "./onboarding";
+import type { OnboardingView } from "./onboarding";
 import { SettingsSchema } from "./settings";
 import type { IconPlace, SettingsView } from "./settings";
+import { TutorialActionSchema } from "./tutorial";
+import type { TutorialView } from "./tutorial";
 
 const PIXEL_MAX = 100_000;
 const Pixel = z.number().int().min(0).max(PIXEL_MAX);
@@ -265,8 +269,19 @@ export type CopyResult =
       readonly retry: boolean;
     };
 
+/**
+ * The in-app tutorial (src/main/tutorial/, src/renderer/tutorial/), in
+ * every window that shows a hint: its view, and what the page asks or reports.
+ */
+const tutorialEvents = { tutorial: event<TutorialView>() } as const;
+
+const tutorialMethods = {
+  getTutorial: invoke(z.void(), out<TutorialView>()),
+  tutorial: send(TutorialActionSchema),
+} as const;
+
 export const captureContract = defineContract({
-  events: { view: event<CaptureView>() },
+  events: { view: event<CaptureView>(), ...tutorialEvents },
   global: "insetCapture",
   methods: {
     answerQuit: send(QuitChoiceSchema),
@@ -274,7 +289,9 @@ export const captureContract = defineContract({
     dismiss: send(z.void()),
     edit: send(DraftEditSchema),
     getView: invoke(z.void(), out<CaptureView>()),
+    /** An empty image despite the grant: the Screen Recording pane, to turn the setting off and on. */
     openScreenSettings: send(z.void()),
+    /** Reopen after that, through the app's quit path, which relaunches only if the quit goes ahead. */
     relaunch: send(z.void()),
     reportHeight: send(
       z.object({
@@ -283,6 +300,9 @@ export const captureContract = defineContract({
       })
     ),
     save: send(DraftEditSchema),
+    /** Screen Recording is off: setup opens at Allow access, in place of the panel. */
+    setUpScreenRecording: send(z.void()),
+    ...tutorialMethods,
   },
   name: "capture",
 });
@@ -295,9 +315,11 @@ export const libraryContract = defineContract({
     flush: event<FlushRequest>(),
     /** Asked from the tray or the Dock menu to show one capture. */
     show: event<CaptureId>(),
+    ...tutorialEvents,
   },
   global: "insetLibrary",
   methods: {
+    ...tutorialMethods,
     /** New capture in 3 seconds, as from the tray, so the pointer can go back to the work. */
     captureSoon: send(z.void()),
     copyDetails: invoke(CaptureIdSchema, out<CopyResult>()),
@@ -385,11 +407,43 @@ export const settingsContract = defineContract({
     /** The page's height, so the window fits it without empty space. */
     fitHeight: send(z.number().int().min(120).max(1200)),
     getView: invoke(z.void(), out<SettingsView>()),
+    /** Reset Tutorial: the checklist and tips start over. */
+    resetTutorial: send(z.void()),
     setOpenAtLogin: send(z.boolean()),
+    /** Show tips: the tutorial's one-time hints. */
+    setTips: send(z.boolean()),
     update: send(SettingsSchema.partial()),
   },
   name: "settings",
 });
+
+/** The first-run permission onboarding (src/main/permissions/, src/renderer/onboarding/). */
+export const onboardingContract = defineContract({
+  events: { view: event<OnboardingView>() },
+  global: "insetOnboarding",
+  methods: {
+    /** A row's Allow, or Waiting…, which asks again. */
+    allow: send(PermissionIdSchema),
+    /** Back, or ←. */
+    back: send(z.void()),
+    /** Done's buttons: start using the app, or start with the walkthrough. */
+    finish: send(HandOffChoiceSchema),
+    /** The page's height, so the window fits it without empty space. */
+    fitHeight: send(z.number().int().min(120).max(1200)),
+    getView: invoke(z.void(), out<OnboardingView>()),
+    /** Get Started, Continue, →, or Not now on Allow access. */
+    next: send(z.void()),
+    /** Reopen to finish, for Screen Recording. */
+    reopen: send(z.void()),
+    /** Not now on Welcome: the whole flow. */
+    skip: send(z.void()),
+    /** The app's tile, dragged into System Settings' list as the app bundle. */
+    startDrag: send(z.void()),
+  },
+  name: "onboarding",
+});
+
+export type OnboardingContract = typeof onboardingContract;
 
 export type CaptureContract = typeof captureContract;
 

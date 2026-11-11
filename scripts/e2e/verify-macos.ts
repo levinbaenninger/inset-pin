@@ -386,8 +386,9 @@ const checkFirstLaunch = async (app: ChildProcess) => {
   );
   enableWebAccessibility();
   record(
-    "the welcome says how to capture",
-    await windowShows("Point at it, pin it, say why")
+    // The Welcome Tour explains the app; the empty library only says how to start (src/renderer/library/welcome.tsx).
+    "the empty library says how to capture",
+    await windowShows("No captures yet")
   );
 
   const mark = events().length;
@@ -820,6 +821,27 @@ const assertNoRunningInstance = () => {
 const main = async () => {
   assertNoRunningInstance();
   buildHelpers();
+  // Setup is done, as on an installed copy: the first launch opens the library's empty pane.
+  mkdirSync(userData, { recursive: true });
+  writeFileSync(
+    path.join(userData, "onboarding.json"),
+    `${JSON.stringify({ status: "finished", step: { kind: "done" }, version: 2 })}\n`
+  );
+  // The tutorial is done too: no examples in the library, no checklist, no tip over what the test clicks.
+  writeFileSync(
+    path.join(userData, "tutorial.json"),
+    `${JSON.stringify({
+      celebrated: true,
+      checklistClosed: true,
+      collapsed: false,
+      done: [],
+      examples: [],
+      examplesSeeded: true,
+      seen: [],
+      tips: false,
+      version: 1,
+    })}\n`
+  );
 
   if (mode === "dev") {
     execFileSync("pnpm", ["build"], { cwd: root, stdio: "ignore" });

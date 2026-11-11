@@ -318,6 +318,35 @@ const appEnv = (extraEnv: Record<string, string>, dataDir: string) => {
   };
 };
 
+/**
+ * The tutorial is done, as on a copy in use: no example captures, no
+ * checklist, no tip over what the script clicks. Written once, before the
+ * first launch with this data folder.
+ */
+const finishTutorial = (dataDir: string): void => {
+  const file = path.join(dataDir, "tutorial.json");
+
+  if (existsSync(file)) {
+    return;
+  }
+
+  mkdirSync(dataDir, { recursive: true });
+  writeFileSync(
+    file,
+    `${JSON.stringify({
+      celebrated: true,
+      checklistClosed: true,
+      collapsed: false,
+      done: [],
+      examples: [],
+      examplesSeeded: true,
+      seen: [],
+      tips: false,
+      version: 1,
+    })}\n`
+  );
+};
+
 /** Every instance started, so a run that stops early still ends them all. */
 const instances: ChildProcess[] = [];
 
@@ -326,6 +355,8 @@ const launch = (
   extraEnv: Record<string, string> = {},
   dataDir = userData
 ): ChildProcess => {
+  finishTutorial(dataDir);
+
   const child = spawn(
     appExe,
     [...(mode === "packaged" ? [] : ["."]), "--force-renderer-accessibility"],
@@ -542,8 +573,9 @@ const checkFirstLaunch = async () => {
     (await waitFor("libraryOpened", 0)) !== undefined
   );
   record(
-    "the welcome says how to capture",
-    await windowShows("Point at it, pin it, say why"),
+    // Getting started explains the app; the empty library only says how to start (src/renderer/library/welcome.tsx).
+    "the empty library says how to capture",
+    await windowShows("No captures yet"),
     windowText().replaceAll(/\s+/gu, " ").slice(0, 160)
   );
   await delay(500);
