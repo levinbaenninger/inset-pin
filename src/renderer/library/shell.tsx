@@ -287,6 +287,18 @@ export const Shell = () => {
 
   useEffect(() => api.on("tutorial", onTutorial), []);
 
+  const navRef = useRef<HTMLElement>(null);
+  const hasChecklist = tutorial.checklist !== null;
+
+  // The checklist coming up, at launch or from Getting Started, brings the list back to it.
+  useEffect(() => {
+    if (hasChecklist) {
+      requestAnimationFrame(() => {
+        navRef.current?.scrollTo({ top: 0 });
+      });
+    }
+  }, [hasChecklist]);
+
   const searching = !isEmptyQuery(parsed) || query.trim() !== "";
   const ordered = useMemo(() => listOrder(captures), [captures]);
 
@@ -373,6 +385,7 @@ export const Shell = () => {
           <nav
             aria-label={list === "done" ? "Done" : "Captures"}
             className="min-h-0 flex-1 [scrollbar-gutter:stable] overflow-y-auto px-2 pb-3"
+            ref={navRef}
             {...coach("capture-list")}
           >
             {/* Getting started at the top of the list, out of the way of a search and the Done list. */}

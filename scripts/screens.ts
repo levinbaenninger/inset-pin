@@ -6426,6 +6426,17 @@ const checkPanelClickAway = async (
  * The onboarding's controls and the problem panel's hand-off ask main for
  * the right thing: the page only reports, and main moves the flow on.
  */
+/** The focused element's text when it is inside the tutorial's bubble, else where focus is. */
+const focusInBubble = async (tab: Page): Promise<string> =>
+  await tab.evaluate(() => {
+    const focused = document.activeElement;
+
+    return focused instanceof HTMLElement &&
+      focused.closest("[data-coach-bubble]") !== null
+      ? (focused.textContent ?? "")
+      : `outside: ${focused?.tagName ?? "none"}`;
+  });
+
 /** Clicks a button by its exact name. */
 const click = async (tab: Page, name: string): Promise<void> => {
   await tab.getByRole("button", { exact: true, name }).click();
@@ -6598,6 +6609,9 @@ const checkOnboarding = async (
 
   const panelTip = panelCalls.filter((call) => call.startsWith("tutorial:"));
 
+  // The walkthrough's bubble takes the keyboard: Next has focus at every stop.
+  const walkFocus: string[] = [];
+
   const walkthrough = await calls(
     "library",
     {
@@ -6607,6 +6621,12 @@ const checkOnboarding = async (
     async (tab) => {
       await tab.waitForSelector("[data-spotlight-dimmer]");
       await tab.getByText("1 of 6").waitFor();
+      await tab.waitForTimeout(300);
+      walkFocus.push(await focusInBubble(tab));
+      await tab.keyboard.press("Enter");
+      await tab.getByText("2 of 6").waitFor();
+      await tab.waitForTimeout(300);
+      walkFocus.push(await focusInBubble(tab));
       await tab.keyboard.press("Escape");
     },
     { hash: `/captures/${EXAMPLE_IDS[0] ?? ""}` }
@@ -6641,7 +6661,7 @@ const checkOnboarding = async (
   );
 
   expectSame(
-    "setup and tutorial: Welcome's Return and Not now; Allow and Back; Reopen to finish, the tile's drag and Not now; Reopening… asks again; Done's two ways into the library; the checklist tags the examples, asks only for a task's how-to, and removes the examples; a drawn tip is seen and Got it puts it away, in the library and the panel, where the title keeps the keyboard; Esc ends the walkthrough; Settings' Show tips and Reset Tutorial; the panel hands Screen Recording to setup, and an empty image offers the pane and a reopen",
+    "setup and tutorial: Welcome's Return and Not now; Allow and Back; Reopen to finish, the tile's drag and Not now; Reopening… asks again; Done's two ways into the library; the checklist tags the examples, asks only for a task's how-to, and removes the examples; a drawn tip is seen and Got it puts it away, in the library and the panel, where the title keeps the keyboard; the walkthrough's Next has focus at stops 1 and 2, and Esc ends it; Settings' Show tips and Reset Tutorial; the panel hands Screen Recording to setup, and an empty image offers the pane and a reopen",
     {
       access,
       checklist,
@@ -6655,6 +6675,7 @@ const checkOnboarding = async (
       settingsCalls,
       tags,
       titleKept,
+      walkFocus,
       walkthrough,
       welcome,
     },
@@ -6677,6 +6698,7 @@ const checkOnboarding = async (
       settingsCalls: ["setTips:false", "resetTutorial"],
       tags: 2,
       titleKept: { focus: "title-field", typed: true },
+      walkFocus: ["Next", "Next"],
       walkthrough: ["tutorial:spotlightDone:"],
       welcome: ["next", "skip"],
     }
