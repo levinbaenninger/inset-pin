@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -20,13 +21,18 @@ import {
 } from "./pin-examples";
 import {
   CAPTURE_PAGE,
+  checklistDoneText,
+  CHECKLIST_TITLE,
   EXAMPLE_IMAGE,
+  HOME_PAGE,
   PIN_TASK_IDS,
   pinExamples,
   pinHints,
   pinSpotlight,
   pinTasks,
 } from "./pin-tutorial";
+import type { TutorialRecord } from "./tutorial/store";
+import { createTutorial } from "./tutorial/tutorial";
 
 /** Every key the app answers, as its Keyboard Shortcuts sheets write them for the system. */
 const realKeys = (mac: boolean): ReadonlySet<string> =>
@@ -185,7 +191,8 @@ describe("Inset Context Pin's tutorial", () => {
       now: () => new Date("2026-11-11T09:00:00.000Z"),
       readImage: async () => await Promise.resolve(new Uint8Array([1])),
       store: {
-        has: (id) => published.some((record) => record.id === id),
+        has: (id) =>
+          published.some((record) => record.id === id) && !removed.includes(id),
         publish: async (record) => {
           published.push(record);
 
@@ -205,19 +212,21 @@ describe("Inset Context Pin's tutorial", () => {
     // The examples are written after seed returns their ids.
     await delay(0);
 
-    examples.remove([ids[1] ?? "", "not-an-id"]);
+    const reported = await examples.remove([ids[1] ?? "", "not-an-id"]);
 
     expect({
       exists: ids.map((id) => examples.exists(id)),
       ids,
       newestFirst: published.map((record) => record.capturedAt),
       removed,
+      reported,
       task: PIN_TASK_IDS.capture,
     }).toStrictEqual({
-      exists: [true, true],
+      exists: [true, false],
       ids: [ID(1), ID(2)],
       newestFirst: ["2026-11-11T09:00:00.000Z", "2026-11-11T08:59:00.000Z"],
       removed: [ID(2)],
+      reported: [ID(2)],
       task: "capture",
     });
   });
@@ -262,16 +271,177 @@ describe("Inset Context Pin's tutorial", () => {
       store: {
         has: () => true,
         publish: async () => await Promise.resolve({ ok: true }),
-        remove: async () => await Promise.resolve({ ok: false }),
+        remove: async (id) => {
+          if (id === ID(2)) {
+            throw new Error("EPERM: operation not permitted, unlink");
+          }
+
+          return await Promise.resolve({ ok: false });
+        },
       },
       warn: (message) => {
         warned.push(message);
       },
     });
 
-    examples.remove([ID(1)]);
-    await delay(0);
+    const reported = await examples.remove([ID(1), ID(2)]);
 
-    expect(warned).toStrictEqual([`Example capture not removed: ${ID(1)}`]);
+    expect({ reported, warned: warned.toSorted() }).toStrictEqual({
+      reported: [],
+      warned: [
+        `Example capture not removed: ${ID(1)}`,
+        `Example capture not removed: ${ID(2)}`,
+      ],
+    });
+  });
+});
+
+/** The library's captures, as main's store keeps them: a delete takes time on disk, can fail, or wait in its queue. */
+const captureStore = () => {
+  const items = new Map<CaptureId, CaptureRecord>();
+  const failing = new Set<CaptureId>();
+  let queue: Promise<unknown> = Promise.resolve();
+
+  return {
+    failing,
+    hold: (until: Promise<unknown>) => {
+      queue = until;
+    },
+    store: {
+      has: (id: CaptureId) => items.has(id),
+      publish: async (record: CaptureRecord) => {
+        items.set(record.id, record);
+
+        return await Promise.resolve({ ok: true });
+      },
+      remove: async (id: CaptureId) => {
+        await Promise.all([queue, delay(1)]);
+
+        if (failing.has(id)) {
+          return { ok: false };
+        }
+
+        items.delete(id);
+
+        return { ok: true };
+      },
+    },
+  };
+};
+
+const memoryTutorialStore = () => {
+  let saved: TutorialRecord | null = null;
+
+  return {
+    read: async () => await Promise.resolve(saved),
+    write: async (next: TutorialRecord) => {
+      saved = next;
+      await Promise.resolve();
+    },
+  };
+};
+
+/** Pin's tutorial on a library and a saved record that outlive it, as across a restart. */
+const startPin = async (
+  captures: ReturnType<typeof captureStore>,
+  saved: ReturnType<typeof memoryTutorialStore>
+) => {
+  let next = 0;
+
+  const tutorial = createTutorial({
+    doneText: checklistDoneText(true),
+    examples: createPinExamples({
+      examples: pinExamples(true),
+      newId: () => {
+        next += 1;
+
+        return ID(next);
+      },
+      now: () => new Date("2026-11-11T09:00:00.000Z"),
+      readImage: async () => await Promise.resolve(new Uint8Array([1])),
+      store: captures.store,
+      warn: () => {},
+    }),
+    firstRun: async () => await Promise.resolve(true),
+    hints: pinHints(true),
+    home: HOME_PAGE,
+    onChange: () => {},
+    pageVisible: () => true,
+    spotlight: pinSpotlight(true),
+    store: saved,
+    tasks: pinTasks(true),
+    title: CHECKLIST_TITLE,
+  });
+
+  await tutorial.load();
+  // The examples are written after load returns their ids.
+  await delay(0);
+
+  const shown = () => ({
+    examples: tutorial.view(HOME_PAGE).examples,
+    offered: tutorial.view(HOME_PAGE).checklist?.examples,
+  });
+
+  return { shown, tutorial };
+};
+
+describe("Pin's Remove Examples", () => {
+  it("keeps an example whose delete failed, offers to remove it again after a restart, and removes it then", async () => {
+    const captures = captureStore();
+    const saved = memoryTutorialStore();
+    const first = await startPin(captures, saved);
+
+    captures.failing.add(ID(2));
+    first.tutorial.act(HOME_PAGE, { kind: "removeExamples" });
+    await first.tutorial.settled();
+
+    const afterFailure = first.shown();
+
+    const again = await startPin(captures, saved);
+    const afterRestart = again.shown();
+
+    captures.failing.clear();
+    again.tutorial.act(HOME_PAGE, { kind: "removeExamples" });
+    await again.tutorial.settled();
+
+    expect({
+      afterFailure,
+      afterRestart,
+      afterRetry: again.shown(),
+      before: { examples: [ID(1), ID(2)], offered: true },
+    }).toStrictEqual({
+      afterFailure: { examples: [ID(2)], offered: true },
+      afterRestart: { examples: [ID(2)], offered: true },
+      afterRetry: { examples: [], offered: false },
+      before: { examples: [ID(1), ID(2)], offered: true },
+    });
+  });
+
+  it("keeps the examples while their deletes wait in the store's queue, and settles once they are done", async () => {
+    const captures = captureStore();
+    const { shown, tutorial } = await startPin(captures, memoryTutorialStore());
+    const queue = new EventTarget();
+
+    let settled = false;
+
+    captures.hold(once(queue, "done"));
+    tutorial.act(HOME_PAGE, { kind: "removeExamples" });
+
+    const settling = (async () => {
+      await tutorial.settled();
+      settled = true;
+    })();
+
+    await delay(5);
+
+    const during = { ...shown(), settled };
+
+    queue.dispatchEvent(new Event("done"));
+    await settling;
+
+    expect({ after: shown(), during }).toStrictEqual({
+      after: { examples: [], offered: false },
+      during: { examples: [ID(1), ID(2)], offered: true, settled: false },
+    });
   });
 });

@@ -61,9 +61,8 @@ export const isExampleRecord = (record: CaptureRecord): boolean =>
 
 /**
  * Whether the library holds a capture of the user's own. Examples are told
- * by their record, not by the tutorial's list, which forgets them as soon as
- * Remove Examples is chosen: one whose deletion is still queued, or failed,
- * is an example still, also after a restart.
+ * by their record, not by the tutorial's list: one whose deletion is still
+ * queued, or failed, is an example still, also after a restart.
  */
 export const holdsOwnCapture = (entries: readonly StoredEntry[]): boolean =>
   entries.some(
@@ -98,10 +97,18 @@ export const createPinExamples = (deps: {
   readonly now: () => Date;
   readonly warn: (message: string) => void;
 }): TutorialExamples => {
-  const removeOne = async (id: CaptureId): Promise<void> => {
-    const result = await deps.store.remove(id);
+  const deleted = async (id: CaptureId): Promise<boolean> => {
+    try {
+      const result = await deps.store.remove(id);
 
-    if (!result.ok) {
+      return result.ok;
+    } catch {
+      return false;
+    }
+  };
+
+  const removeOne = async (id: CaptureId): Promise<void> => {
+    if (!(await deleted(id))) {
       deps.warn(`Example capture not removed: ${id}`);
     }
   };
@@ -112,14 +119,16 @@ export const createPinExamples = (deps: {
 
       return parsed !== null && deps.store.has(parsed);
     },
-    remove: (ids) => {
-      for (const id of ids) {
-        const parsed = parse(id);
+    remove: async (ids) => {
+      const parsed = ids.flatMap((id) => {
+        const captureId = parse(id);
 
-        if (parsed !== null) {
-          void removeOne(parsed);
-        }
-      }
+        return captureId === null ? [] : [captureId];
+      });
+
+      await Promise.all(parsed.map(removeOne));
+
+      return parsed.filter((id) => !deps.store.has(id));
     },
     seed: () => {
       const start = deps.now().getTime();

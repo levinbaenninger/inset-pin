@@ -357,7 +357,7 @@ export const installBridge = (input: BridgeInput): void => {
       tutorial: (action: { readonly kind: string; readonly id?: string }) => {
         record(`tutorial:${action.kind}:${action.id ?? ""}`);
 
-        // As main: the examples leave the tutorial's view at once, and the list once their files are deleted, a few hundred ms later.
+        // As main: the examples stay tagged until their files are deleted, a few hundred ms later, then leave the list and the tutorial's view.
         if (action.kind === "removeExamples") {
           const view = input.tutorial;
 
@@ -371,8 +371,6 @@ export const installBridge = (input: BridgeInput): void => {
               : []
           );
 
-          emit("tutorial", { ...input.tutorial, examples: [] });
-
           setTimeout(() => {
             for (let index = captures.length - 1; index >= 0; index -= 1) {
               if (gone.has(captures[index]?.id ?? "")) {
@@ -381,6 +379,13 @@ export const installBridge = (input: BridgeInput): void => {
             }
 
             emit("changed", null);
+
+            emit("tutorial", {
+              ...view,
+              examples: [...gone].filter((id) =>
+                captures.some((capture) => capture.id === id)
+              ),
+            });
           }, 400);
         }
       },
