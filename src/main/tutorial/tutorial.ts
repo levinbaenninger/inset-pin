@@ -280,7 +280,7 @@ export const createTutorial = (deps: TutorialDeps): Tutorial => {
         deps.examples?.remove(ids);
       }
 
-      // Keep the ids: exists hides confirmed deletions, while queued or failed removals stay tagged and retryable.
+      change({ examples: [] });
       deps.onChange();
     },
     requestHint: (page: string, action: Of<"requestHint">) => {
