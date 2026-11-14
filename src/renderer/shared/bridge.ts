@@ -1,6 +1,7 @@
 import type {
   CaptureContract,
   LibraryContract,
+  OnboardingContract,
   PinContract,
   SettingsContract,
 } from "@shared/contracts";
@@ -11,6 +12,7 @@ declare global {
   interface Window {
     readonly insetCapture?: Client<CaptureContract>;
     readonly insetLibrary?: Client<LibraryContract>;
+    readonly insetOnboarding?: Client<OnboardingContract>;
     readonly insetPin?: Client<PinContract>;
     readonly insetSettings?: Client<SettingsContract>;
   }
@@ -58,6 +60,18 @@ export const settingsBridge = (): Client<SettingsContract> => {
   if (api === undefined) {
     throw new Error(
       "The settings bridge is only available in the settings window."
+    );
+  }
+
+  return api;
+};
+
+export const onboardingBridge = (): Client<OnboardingContract> => {
+  const api = window.insetOnboarding;
+
+  if (api === undefined) {
+    throw new Error(
+      "The onboarding bridge is only available in the onboarding window."
     );
   }
 

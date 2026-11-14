@@ -2,12 +2,16 @@ import { useEffect, useEffectEvent } from "react";
 
 import { inLayer, isTextField } from "@/shared/key-targets";
 
+import { walkCovers } from "./walk-cover";
+
 /** The capture whose sidebar row has the focus, if one has. */
 const focusedRowId = (): string | null =>
   document.activeElement?.closest<HTMLElement>("[data-capture-id]")?.dataset
     .captureId ?? null;
 
+// Not behind the walkthrough: Edit › Copy, which ⌘C runs, reaches the page before the walkthrough's key guard.
 const copiesEntry = (): boolean =>
+  !walkCovers() &&
   (window.getSelection()?.toString() ?? "") === "" &&
   !isTextField(document.activeElement) &&
   !inLayer(document.activeElement);

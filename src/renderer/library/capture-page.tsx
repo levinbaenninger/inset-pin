@@ -21,8 +21,8 @@ import type { HistoryStep } from "@shared/pin-history";
 import { applyPinKey } from "@shared/pins";
 import { captureKeyAction, fieldKeyAction, keyLabels } from "@shared/shortcuts";
 import type { PinKeyAction } from "@shared/shortcuts";
-import { getRouteApi, Link } from "@tanstack/react-router";
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { getRouteApi, Link, Navigate } from "@tanstack/react-router";
+import { use, useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -43,6 +43,7 @@ import { MenuEntries, onMenuKey, useCaptureCommands } from "./capture-commands";
 import { onCommand } from "./command-bus";
 import { useCopyEntry } from "./copy-entry";
 import { writesNothing } from "./draft-lifecycle";
+import { ExamplesContext, removedHere } from "./examples";
 import { formatCaptureTime, readOnlyText, sourceText } from "./format";
 import { ImageEditor } from "./image-editor";
 import type { PinChange } from "./image-editor";
@@ -114,6 +115,8 @@ const Unavailable = ({
  */
 const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
   const { id } = capture;
+  // Remove Examples drops an example from the list at once and from the store a moment later: until then it is still one.
+  const example = use(ExamplesContext).has(id) || removedHere(id);
   const { now } = useLibraryState();
   const { commands, dialog, entries } = useCaptureCommands(capture);
   const draft = useDraft(id);
@@ -446,6 +449,7 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
           <div className="flex flex-col gap-1">
             <EntryFields
               addable={!done}
+              coachAddFields={!example}
               now={now}
               onChange={setFields}
               onLeave={() => {
@@ -521,6 +525,12 @@ const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
 
 export const CapturePage = () => {
   const detail = route.useLoaderData();
+  const { captureId } = route.useParams();
+
+  // An example that Remove Examples took out moves on to the newest capture left, or the empty pane.
+  if (detail === null && removedHere(captureId)) {
+    return <Navigate replace to="/" />;
+  }
 
   if (detail === null) {
     return (

@@ -479,6 +479,7 @@ export const DraftEditor = ({ view }: DraftEditorProps) => {
       />
       <div className="bg-background border-foreground/10 rounded-lg border">
         <EntryFields
+          coachTitle={content.pins.length > 0}
           disabled={locked}
           now={now}
           onChange={(value) => {

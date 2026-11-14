@@ -21,9 +21,15 @@ The builds are not signed with a developer certificate, so each system warns onc
 
    If you prefer the terminal, run `xattr -dr com.apple.quarantine "/Applications/Inset Context Pin.app"` and open the app again.
 
-5. Press `⌥⌘P` once. If the panel asks for screen access, open **System Settings > Privacy & Security > Screen & System Audio Recording**, turn on **Inset Context Pin**, and click **Quit and Reopen** in the panel.
+5. The first time the app opens, a small setup window asks for screen access. It has three pages: Welcome, **Allow access** and Done.
+   1. Click **Allow** next to **Screen Recording**. macOS adds Inset Context Pin to **System Settings > Privacy & Security > Screen & System Audio Recording** and opens that list. The setup window moves to the right edge of the screen and stays in front of System Settings.
+   2. Turn on **Inset Context Pin** in the list. If it isn't in the list, drag the **Inset Context Pin** tile from the setup window into it.
+   3. Click **Reopen to finish**. The app quits and opens again, and setup comes back on the same page, with **Screen Recording** shown as allowed.
+   4. On Done, choose **Show Me Around** for a short walkthrough of the library, or **Start Using**.
 
-The first time it starts, a welcome window shows how to capture. The app has a Dock icon and a pin in the menu bar; **Settings…** (`⌘,`) can hide either.
+   **Not now** skips a page, and **Back** goes back one. **Set Up Permissions…** in the pin icon's menu or the app menu opens setup again. If you skip screen access, `⌥⌘P` shows a panel with **Set Up Screen Recording…**, which opens setup at that page.
+
+The app has a Dock icon and a pin in the menu bar; **Settings…** (`⌘,`) can hide either.
 
 The app checks for a new build when it starts and every four hours, and downloads it in the background. When the download is ready, a notification says so and the pin menu offers **Restart to update to v…**. If you don't restart, the update installs when you quit. The pin menu always shows the running version and **Check for updates**. Every build is signed with the same certificate, so macOS keeps the screen access you granted.
 
@@ -38,6 +44,17 @@ If you installed version 0.1.0, install a new build by hand one last time. Versi
 The installer copy updates itself the same way. It checks on start and every four hours, and installs a downloaded update when you quit or choose **Restart to update**. The portable zips can't update themselves. To get a new portable build, download it again.
 
 The capture flow was tested on Windows 11 with real input. [IMPLEMENTATION_REPORT.md](IMPLEMENTATION_REPORT.md) lists what passed and what is still open, such as a complete run of the unpacked app and displays scaled above 100%.
+
+## Getting started
+
+The app teaches itself in the library, on macOS and Windows:
+
+- **Getting started** at the top of the list has five tasks: capture with `⌥⌘P`, place a pin, give it a title and save, find it in the library, and copy it out. Each one ticks off when you really do it. Clicking a task shows how; it never ticks it off.
+- **Tips** show once, one at a time, beside real controls the first time you meet them: placing pin 1 and the title in the capture panel, the list and the **Add** menu in the library.
+- **Show Me Around** is a short spotlight walkthrough of the library. `Esc` ends it.
+- The first run adds two **example captures**, tagged **Example**, whose title and notes are things to try. **Remove Examples** in Getting started's **⋯** menu deletes them. They never come back.
+
+**Help > Getting Started** and **Help > Show Me Around** bring the checklist and the walkthrough back, and so does the pin icon's menu, also on Windows. **Settings > Tips** has **Show tips** and **Reset Tutorial**.
 
 ## Capture something
 
@@ -96,7 +113,7 @@ pnpm install
 pnpm dev
 ```
 
-`pnpm dev` starts the app with hot reload. It opens the welcome window only while there are no captures.
+`pnpm dev` starts the app with hot reload. A data folder without `settings.json` or a `captures` folder counts as a first run: on macOS setup opens, and the library gets the example captures. The library opens at launch while it holds no capture of your own. `onboarding.json` and `tutorial.json` in the data folder hold setup's and the tutorial's state; delete them to see both again.
 
 The first run downloads the Electron binary into `node_modules/electron`. If a terminal inside another Electron app sets `ELECTRON_RUN_AS_NODE`, unset it first, or Electron starts as plain Node and stops with "bad option".
 

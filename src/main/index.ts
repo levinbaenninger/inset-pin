@@ -1,15 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 import { CaptureIdSchema } from "@shared/capture-record";
 import type { CaptureId, PointVia } from "@shared/capture-record";
 import {
   captureContract,
+  onboardingContract,
   pinContract,
   settingsContract,
 } from "@shared/contracts";
 import type { SavedEdits } from "@shared/contracts";
+import type { OnboardingView } from "@shared/onboarding";
 import type { IconPlace, SettingsView } from "@shared/settings";
 import {
   CAPTURE_ACCELERATOR,
@@ -18,6 +21,7 @@ import {
 } from "@shared/shortcut";
 import {
   app,
+  desktopCapturer,
   dialog,
   globalShortcut,
   ipcMain,
@@ -25,6 +29,7 @@ import {
   nativeTheme,
   Notification,
   shell,
+  systemPreferences,
 } from "electron";
 // electron-updater defines autoUpdater as a getter, which an ESM named import cannot see.
 import electronUpdater from "electron-updater";
@@ -40,9 +45,34 @@ import { serveContract } from "./ipc-kit";
 import { toDetail } from "./library-view";
 import { createLibraryWindow } from "./library-window";
 import type { LibraryWindow } from "./library-window";
+import { createOnboardingWindow } from "./onboarding-window";
+import { appBundlePath, createAppTile } from "./permissions/bundle";
+import { createOnboarding } from "./permissions/onboarding";
+import { createOnboardingStore } from "./permissions/store";
+import { createPermissionChecks } from "./permissions/system";
+import { createPinExamples, holdsOwnCapture } from "./pin-examples";
+import {
+  osMajor,
+  PIN_HANDOFF,
+  PIN_PERMISSIONS,
+  PIN_TAGLINE,
+} from "./pin-onboarding";
+import {
+  CAPTURE_PAGE,
+  CHECKLIST_TITLE,
+  EXAMPLE_IMAGE,
+  checklistDoneText,
+  HOME_PAGE,
+  PIN_TASK_IDS,
+  pinExamples,
+  pinHints,
+  pinSpotlight,
+  pinTasks,
+} from "./pin-tutorial";
 import { createPinWindows } from "./pin-windows";
 import { handleInsetProtocol, registerInsetScheme } from "./protocol";
 import { createQuitGate } from "./quit-gate";
+import { createQuitPath } from "./quit-path";
 import { nodeSettingsFs, openSettingsStore } from "./settings-store";
 import { createSettingsWindow } from "./settings-window";
 import { failNextWrite, nodeStoreFs, openCaptureStore } from "./store";
@@ -51,6 +81,8 @@ import { createTray, toMenuItem } from "./tray";
 import type { MenuRunner, TrayIcon } from "./tray";
 import { dockMenu, trayMenu } from "./tray-menu";
 import type { TrayAction, TrayModel } from "./tray-menu";
+import { createTutorialStore } from "./tutorial/store";
+import { createTutorial } from "./tutorial/tutorial";
 import { fromAutoUpdater, startUpdater } from "./updater";
 import type { Updater } from "./updater";
 import {
@@ -63,10 +95,6 @@ import {
 
 const PRODUCT_NAME = "Inset Context Pin";
 const APP_ID = "ch.inset.prototype.contextpin";
-
-/** Fixed constant: never built from renderer input. */
-const MAC_SCREEN_CAPTURE_SETTINGS =
-  "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
 
 const isMac = process.platform === "darwin";
 
@@ -122,6 +150,14 @@ const trayIconPath = (): string => {
 
 const ignore = (): void => undefined;
 
+const setTimer = (run: () => void, ms: number): (() => void) => {
+  const timer = setTimeout(run, ms);
+
+  return () => {
+    clearTimeout(timer);
+  };
+};
+
 /**
  * Only release builds carry the feed in app-update.yml; CI builds of a pull request don't.
  * On Windows only the NSIS install can update; a portable copy has no uninstaller beside it.
@@ -141,6 +177,10 @@ const start = async (): Promise<void> => {
   const dataDir = app.getPath("userData");
   const capturesDir = path.join(dataDir, "captures");
 
+  // Read before the store below creates its folder: an install from before the onboarding existed.
+  const ranBefore =
+    existsSync(capturesDir) || existsSync(path.join(dataDir, "settings.json"));
+
   const store = await explainFailure(
     openCaptureStore(capturesDir, {
       fs:
@@ -155,6 +195,71 @@ const start = async (): Promise<void> => {
   const settings = await openSettingsStore(dataDir, nodeSettingsFs);
   const pinnedImage = createPinnedImage(store);
 
+  // Set once the windows the tutorial hints in, and their IPC servers, exist.
+  const tutorialPages = {
+    emit: ignore,
+    visible: (_page: string): boolean => false,
+  };
+
+  const examples = createPinExamples({
+    examples: pinExamples(isMac),
+    newId: () => CaptureIdSchema.parse(randomUUID()),
+    now: () => new Date(),
+    // Found from this file in development, so a start with the script's path (out/main/index.js) finds it too.
+    readImage: async () =>
+      await readFile(
+        app.isPackaged
+          ? path.join(process.resourcesPath, "resources", EXAMPLE_IMAGE.file)
+          : path.join(
+              import.meta.dirname,
+              "..",
+              "..",
+              "resources",
+              EXAMPLE_IMAGE.file
+            )
+      ),
+    store: {
+      has: (id) => store.get(id) !== undefined,
+      publish: async (record, png) => await store.publish(record, png),
+      remove: async (id) => await store.remove(id),
+    },
+    warn: (message) => {
+      console.warn(message);
+    },
+  });
+
+  /**
+   * The in-app tutorial (src/main/tutorial/): the Getting started checklist,
+   * one-time hints, the walkthrough and the example captures, on macOS and
+   * Windows alike.
+   */
+  const tutorial = createTutorial({
+    doneText: checklistDoneText(isMac),
+    examples,
+    firstRun: async () => await Promise.resolve(!ranBefore),
+    hints: pinHints(isMac),
+    home: HOME_PAGE,
+    onChange: () => {
+      tutorialPages.emit();
+    },
+    pageVisible: (page) => tutorialPages.visible(page),
+    spotlight: pinSpotlight(isMac),
+    store: createTutorialStore(
+      path.join(dataDir, "tutorial.json"),
+      nodeSettingsFs
+    ),
+    tasks: pinTasks(isMac),
+    title: CHECKLIST_TITLE,
+    warn: (message) => {
+      console.warn(message);
+    },
+  });
+
+  await tutorial.load();
+
+  /** A capture the user made: the library has more than the examples, told by their records. */
+  const hasOwnCapture = (): boolean => holdsOwnCapture(store.list());
+
   // The library saves its typing before every copy; it is created further down, and has nothing typed until then.
   const libraryEdits = {
     save: async (_id: CaptureId): Promise<SavedEdits> =>
@@ -168,9 +273,20 @@ const start = async (): Promise<void> => {
     store,
   });
 
+  // A copy the user asked for, from the library or a floating capture: the tutorial's last task.
+  const copyOut: typeof copy = async (id, format) => {
+    const copied = await copy(id, format);
+
+    if (copied.ok) {
+      tutorial.complete(PIN_TASK_IDS.copy);
+    }
+
+    return copied;
+  };
+
   // A floating capture's own menu on Windows has no page to say a failed copy on.
   const copyAndSay = async (id: CaptureId): Promise<void> => {
-    const copied = await copy(id, "image");
+    const copied = await copyOut(id, "image");
 
     if (!copied.ok) {
       showNotification(copied.message);
@@ -216,16 +332,22 @@ const start = async (): Promise<void> => {
     captureSoon: () => {
       startCapture.soon();
     },
-    copy,
+    copy: copyOut,
     onClosed: () => {
       e2eLog("libraryClosed");
+      tutorial.pageClosed(HOME_PAGE);
       menus.refresh();
     },
     onOpened: () => {
       e2eLog("libraryOpened");
+      // oxlint-disable-next-line no-use-before-define -- defined once the library exists.
+      findInLibrary();
       menus.refresh();
     },
     onFocusChange: () => {
+      // The library coming to the front again, from Recent captures… or the taskbar: Find it in the library.
+      // oxlint-disable-next-line no-use-before-define -- defined once the library exists.
+      findInLibrary();
       menus.refresh();
     },
     onRejected: logRejected,
@@ -240,19 +362,61 @@ const start = async (): Promise<void> => {
       shortcutRegistered,
     }),
     store,
+    tutorial: {
+      act: (action) => {
+        tutorial.act(HOME_PAGE, action);
+      },
+      view: () => tutorial.view(HOME_PAGE),
+    },
     url: pageUrl("library"),
   });
+
+  /** Find it in the library: the library is on screen with a capture of the user's own in it. */
+  const findInLibrary = (): void => {
+    if (library.isVisible() && hasOwnCapture()) {
+      tutorial.complete(PIN_TASK_IDS.library);
+    }
+  };
 
   openLibrary = library.open;
   libraryEdits.save = library.saveEdits;
 
+  const permissions = createPermissionChecks({
+    desktopCapturer,
+    osMajor: osMajor(process.getSystemVersion()),
+    platform: process.platform,
+    setTimer,
+    shell,
+    systemPreferences,
+  });
+
+  const onboardingWindow = createOnboardingWindow({
+    preload: preloadPath("onboarding"),
+    url: pageUrl("onboarding"),
+  });
+
+  const appTile = createAppTile({
+    bundlePath: appBundlePath(app.getPath("exe"), { packaged: app.isPackaged }),
+    loadIcon: async (bundle) =>
+      await app.getFileIcon(bundle, { size: "normal" }),
+    startDrag: ({ file, icon }) => {
+      onboardingWindow.webContents()?.startDrag({ file, icon });
+    },
+  });
+
   const surface = createCaptureSurface({
     // The panel never activates the app, so the app in front keeps the keyboard without app.hide().
     otherWindowVisible: () =>
-      library.isVisible() || settingsWindow.isVisible() || pins.anyVisible(),
+      library.isVisible() ||
+      settingsWindow.isVisible() ||
+      pins.anyVisible() ||
+      onboardingWindow.isVisible(),
     preload: preloadPath("capture"),
     url: pageUrl("capture"),
   });
+
+  // How the capture under way was started: only the shortcut ticks off the tutorial's first task.
+  let capturingVia: PointVia | null = null;
 
   const draft = createDraftController({
     capture: async (display) => {
@@ -260,6 +424,10 @@ const start = async (): Promise<void> => {
 
       if (result.ok) {
         e2eLog("capture");
+
+        if (capturingVia === "shortcut") {
+          tutorial.complete(PIN_TASK_IDS.capture);
+        }
       }
 
       return result;
@@ -271,6 +439,10 @@ const start = async (): Promise<void> => {
       const result = await store.publish(record, png);
 
       e2eLog(result.ok ? "saved" : "saveFailed", { draftId: record.id });
+
+      if (result.ok) {
+        tutorial.complete(PIN_TASK_IDS.save);
+      }
 
       const shown = draft.view();
 
@@ -305,6 +477,113 @@ const start = async (): Promise<void> => {
     return view.kind === "draft" ? view.draftId : undefined;
   };
 
+  // The draft's gate and the onboarding, set below once they exist.
+  const quitSteps = { allowQuit: (): boolean => true, dropped: ignore };
+
+  /** Every quit: the library saves first, then the draft may hold it. A quit it starts can carry a relaunch. */
+  const quitPath = createQuitPath({
+    allowQuit: () => quitSteps.allowQuit(),
+    leave: (then) => {
+      library.leave("quit", then);
+    },
+    onDropped: () => {
+      quitSteps.dropped();
+    },
+    requestQuit: () => {
+      app.quit();
+    },
+  });
+
+  // Set once the onboarding's IPC server exists.
+  let showOnboardingView: (view: OnboardingView) => void = ignore;
+
+  /** Opens the library and starts the walkthrough there once its page has loaded. */
+  const showMeAround = (): void => {
+    library.open();
+    library.whenLoaded(() => {
+      tutorial.showMeAround();
+    });
+  };
+
+  // The first-run setup: the permission kit (src/main/permissions/) wired to Pin's window, quit path and library.
+  const onboarding = createOnboarding({
+    appName: PRODUCT_NAME,
+    checks: permissions,
+    handOff: PIN_HANDOFF,
+    mac: isMac,
+    // Done hands over to the library, which holds Getting started; Show Me Around starts the walkthrough there.
+    onClosed: (how) => {
+      if (how === "showAround") {
+        showMeAround();
+      } else if (how === "start") {
+        library.open();
+      }
+    },
+    // The first run opened setup in place of the library, which comes now, Not now included.
+    onEnded: () => {
+      if (!library.isOpen()) {
+        library.open();
+      }
+    },
+    onView: (view) => {
+      showOnboardingView(view);
+    },
+    osMajor: osMajor(process.getSystemVersion()),
+    permissions: PIN_PERMISSIONS,
+    // Screen Recording is seen only after a reopen, so nothing polls for it.
+    pollFast: ignore,
+    // The reopen goes through the normal quit: it relaunches only if the quit really ends the app.
+    quit: (atExit) => {
+      quitPath.quit(atExit);
+    },
+    ranBefore: async () => await Promise.resolve(ranBefore),
+    relaunch: () => {
+      app.relaunch();
+    },
+    setTimer,
+    store: createOnboardingStore(
+      path.join(dataDir, "onboarding.json"),
+      nodeSettingsFs
+    ),
+    tagline: PIN_TAGLINE,
+    tile: appTile.view,
+    warn: (message) => {
+      console.warn(message);
+    },
+    window: onboardingWindow,
+  });
+
+  quitSteps.dropped = onboarding.quitCancelled;
+
+  onboardingWindow.onClose(onboarding.close);
+
+  const onboardingServer = serveContract(
+    onboardingContract,
+    {
+      allow: onboarding.allow,
+      back: onboarding.back,
+      finish: onboarding.finish,
+      fitHeight: onboardingWindow.fitHeight,
+      getView: onboarding.view,
+      next: onboarding.next,
+      reopen: () => {
+        void onboarding.reopen();
+      },
+      skip: onboarding.skip,
+      startDrag: appTile.drag,
+    },
+    {
+      appOrigin: appOrigin(),
+      ipc: ipcMain,
+      onRejected: logRejected,
+      target: onboardingWindow.webContents,
+    }
+  );
+
+  showOnboardingView = (view) => {
+    onboardingServer.emit("view", view);
+  };
+
   handleInsetProtocol({
     captureImageFile: store.imageFile,
     draftPreview: (id) => draft.frame(id)?.pixels.previewJpeg() ?? null,
@@ -316,6 +595,11 @@ const start = async (): Promise<void> => {
     {
       answerQuit: (choice) => {
         draft.answerQuit(choice);
+
+        // The held quit is over; a reopen it carried must not run at a later quit.
+        if (choice === "cancel") {
+          quitPath.cancelled();
+        }
       },
       discard: (id) => {
         draft.discard(id);
@@ -329,22 +613,35 @@ const start = async (): Promise<void> => {
       },
       edit: ({ content, id }) => {
         draft.edit(id, content);
-      },
-      getView: () => draft.view(),
-      openScreenSettings: () => {
-        if (isMac) {
-          void shell.openExternal(MAC_SCREEN_CAPTURE_SETTINGS);
+
+        // A pin placed in the panel: the tutorial's second task.
+        if (content.pins.length > 0) {
+          tutorial.complete(PIN_TASK_IDS.pin);
         }
       },
+      getTutorial: () => tutorial.view(CAPTURE_PAGE),
+      getView: () => draft.view(),
+      openScreenSettings: () => {
+        permissions.openPane("screen");
+      },
       relaunch: () => {
-        app.relaunch();
-        app.quit();
+        quitPath.quit(() => {
+          app.relaunch();
+        });
       },
       reportHeight: ({ height, surfaceKey }) => {
         surface.setContentHeight(height, surfaceKey);
       },
       save: ({ content, id }) => {
         draft.save(id, content);
+      },
+      setUpScreenRecording: () => {
+        // Shown first, so closing the panel doesn't hide the app with it.
+        onboarding.open("screen");
+        draft.dismiss();
+      },
+      tutorial: (action) => {
+        tutorial.act(CAPTURE_PAGE, action);
       },
     },
     {
@@ -370,7 +667,7 @@ const start = async (): Promise<void> => {
 
         return id === null
           ? { message: "This pin has no capture.", ok: false, retry: false }
-          : await copy(id, "image");
+          : await copyOut(id, "image");
       },
       get: (_input, sender) => {
         const id = pins.captureOf(sender.id);
@@ -402,6 +699,7 @@ const start = async (): Promise<void> => {
   );
 
   const pointNow = (via: PointVia): void => {
+    capturingVia = via;
     draft.invoke({
       anchor: sampleAnchor(),
       at: new Date(),
@@ -444,19 +742,16 @@ const start = async (): Promise<void> => {
     version: app.getVersion(),
   });
 
-  /** Set once the library's typing is saved for this quit; a quit the draft holds clears it. */
-  let editsSaved = false;
-
   const quitGate = createQuitGate({
     holdIfNeeded: draft.holdQuitIfNeeded,
-    quit: () => {
-      app.quit();
-    },
+    // The draft let a held quit go on: it keeps the relaunch it carries.
+    quit: quitPath.resume,
     // quitAndInstall closes every window before before-quit fires, so the gate releases them first.
     releaseWindows: () => {
       surface.allowClose();
       settingsWindow.allowClose();
       library.allowClose();
+      onboardingWindow.allowClose();
     },
     // A restart the draft held starts again from the top, so the library saves its typing and the disk finishes first.
     restart: () => {
@@ -466,12 +761,13 @@ const start = async (): Promise<void> => {
     },
     // Set only as the install starts, so a restart the draft holds still saves the library's typing on the next quit.
     restartToUpdate: () => {
-      editsSaved = true;
+      quitPath.editsSaved();
       updater?.install();
     },
   });
 
   resumeQuit = quitGate.resume;
+  quitSteps.allowQuit = quitGate.allowQuit;
 
   const installUpdate = (): void => {
     if (updater?.state().kind === "ready") {
@@ -502,6 +798,13 @@ const start = async (): Promise<void> => {
       settingsWindow.open();
     } else if (action === "showShortcuts") {
       showShortcuts();
+    } else if (action === "setUpPermissions") {
+      onboarding.open();
+    } else if (action === "gettingStarted") {
+      tutorial.showChecklist();
+      library.open();
+    } else if (action === "showMeAround") {
+      showMeAround();
     } else if (action === "toggleLibraryOnTop") {
       library.setFloating(!library.isFloating());
       menus.refresh();
@@ -538,6 +841,14 @@ const start = async (): Promise<void> => {
     },
     openSettings: settingsWindow.open,
     pageMenuOpen: library.menuOpen,
+    gettingStarted: () => {
+      tutorial.showChecklist();
+      library.open();
+    },
+    setUpPermissions: () => {
+      onboarding.open();
+    },
+    showMeAround,
     showShortcuts: () => {
       showShortcuts();
     },
@@ -609,6 +920,7 @@ const start = async (): Promise<void> => {
   const settingsView = (): SettingsView => ({
     openAtLogin: app.getLoginItemSettings().openAtLogin,
     settings: settings.current(),
+    tips: tutorial.tips(),
     version: app.getVersion(),
   });
 
@@ -617,8 +929,20 @@ const start = async (): Promise<void> => {
     {
       fitHeight: settingsWindow.fitHeight,
       getView: settingsView,
+      resetTutorial: () => {
+        tutorial.reset();
+        // Reset turns tips back on: the switch follows.
+        settingsServer.emit("view", settingsView());
+        showNotification(
+          "Tutorial reset. Getting started is back in the library."
+        );
+      },
       setOpenAtLogin: (on) => {
         app.setLoginItemSettings({ openAtLogin: on });
+        settingsServer.emit("view", settingsView());
+      },
+      setTips: (on) => {
+        tutorial.setTips(on);
         settingsServer.emit("view", settingsView());
       },
       update: (change) => {
@@ -651,12 +975,18 @@ const start = async (): Promise<void> => {
     }
   );
 
+  // The capture panel is on screen: its hints may show.
+  let panelVisible = false;
+
   draft.subscribe(() => {
     captureServer.emit("view", draft.view());
     menus.refresh();
   });
   store.subscribe(() => {
     pinServer.emit("changed", null);
+    // The examples arrive after launch, and one may be removed: the library's tags follow.
+    tutorialPages.emit();
+    findInLibrary();
     menus.refresh();
   });
   surface.onDismissRequest(() => {
@@ -672,12 +1002,28 @@ const start = async (): Promise<void> => {
         : undefined;
 
     e2eLog("panelShown", { bounds, draftId: currentDraftId(), preview });
+    panelVisible = true;
+    tutorialPages.emit();
   });
   surface.onHidden(() => {
     e2eLog("panelHidden");
+    panelVisible = false;
+    // A hidden panel lets go of the bubble it held, so it never blocks the library's.
+    tutorial.pageClosed(CAPTURE_PAGE);
   });
+
+  // The tutorial in every window it hints in: each sees its own part.
+  tutorialPages.visible = (page) =>
+    page === HOME_PAGE
+      ? library.isVisible()
+      : page === CAPTURE_PAGE && panelVisible;
+  tutorialPages.emit = () => {
+    captureServer.emit("tutorial", tutorial.view(CAPTURE_PAGE));
+    library.emitTutorial(tutorial.view(HOME_PAGE));
+  };
+
   await explainFailure(
-    Promise.all([surface.load(), settingsWindow.load()]),
+    Promise.all([surface.load(), settingsWindow.load(), appTile.load()]),
     (cause) =>
       `${PRODUCT_NAME} failed to load its windows.\n\n${cause}\n\nOpen ${PRODUCT_NAME} again. If this keeps happening, reinstall it.`
   );
@@ -707,23 +1053,10 @@ const start = async (): Promise<void> => {
     library.open();
   });
 
-  app.on("before-quit", (event) => {
-    if (!editsSaved) {
-      event.preventDefault();
-      library.leave("quit", () => {
-        editsSaved = true;
-        app.quit();
-      });
-
-      return;
-    }
-
-    if (!quitGate.allowQuit()) {
-      event.preventDefault();
-      editsSaved = false;
-    }
-  });
+  app.on("before-quit", quitPath.beforeQuit);
   app.on("will-quit", () => {
+    // Reopen to finish relaunches here, once the quit can no longer be cancelled.
+    quitPath.willQuit();
     globalShortcut.unregisterAll();
   });
 
@@ -742,8 +1075,11 @@ const start = async (): Promise<void> => {
     });
   }
 
-  // Until the first capture, the library is a welcome that says how to capture and where the app lives.
-  if (store.list().length === 0) {
+  // On macOS's first run setup opens; the library comes after it.
+  const onboardingShown = await onboarding.launch();
+
+  // Until the first capture of the user's own, the library opens at launch with Getting started.
+  if (!onboardingShown && !hasOwnCapture()) {
     library.open();
   }
 

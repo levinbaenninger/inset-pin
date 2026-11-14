@@ -45,6 +45,7 @@ import {
 import { cn } from "@/lib/utils";
 import { isTextField } from "@/shared/key-targets";
 import { PinMarker, pinHeadOffset } from "@/shared/pin-marker";
+import { coach } from "@/tutorial/anchors";
 
 const HELP_ID = "pin-preview-help";
 
@@ -621,6 +622,7 @@ export const PinPreview = ({
               : cursorFor(gesture?.target ?? hover, gesture !== null, pinMode)
           )}
           data-testid="pin-preview"
+          {...coach("pin-preview")}
           // The selection lives here: once the focus leaves the preview, digits and ⌫ elsewhere leave pins alone.
           onBlur={(event) => {
             if (!event.currentTarget.contains(event.relatedTarget)) {
