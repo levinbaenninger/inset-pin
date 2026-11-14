@@ -497,7 +497,7 @@ const PLACE_PIN_HINT = shownHint(
   "place-pin",
   "pin-preview",
   "Pin what matters",
-  "Click the spot that matters to place pin 1. Each click adds the next number; drag a pin to move it."
+  "Click the spot that matters to place pin 1."
 );
 
 const TITLE_HINT = shownHint(
@@ -6609,6 +6609,70 @@ const checkOnboarding = async (
 
   const panelTip = panelCalls.filter((call) => call.startsWith("tutorial:"));
 
+  // In the app the panel is exactly as tall as its page before a tip shows: the tip must fit beside the preview, not over it.
+  const fitted = await open("capture", { view: draftView({}, {}) });
+
+  await fitted.tab.waitForTimeout(300);
+
+  const panelHeight = await fitted.tab.evaluate(() => globalThis.__fitted ?? 0);
+
+  await fitted.context.close();
+
+  const sized = await browser.newContext({
+    userAgent: USER_AGENT[platform],
+    viewport: { height: panelHeight, width: SIZES.capture.width },
+  });
+
+  const sizedTab = await sized.newPage();
+
+  const sizedInput: BridgeInput = {
+    page: "capture",
+    tutorial: tutorialView({ active: PLACE_PIN_HINT, checklist: false }),
+    view: draftView({}, {}),
+  };
+
+  await sizedTab.addInitScript(installBridge, sizedInput);
+  await sizedTab.goto(`${origin}/capture.html`);
+  await sizedTab.locator("[data-coach-bubble]").waitFor();
+  await sizedTab.waitForTimeout(300);
+
+  const pinTipPlace = await sizedTab.evaluate(() => {
+    const bubble = document
+      .querySelector("[data-coach-bubble]")
+      ?.getBoundingClientRect();
+
+    const preview = document
+      .querySelector("[data-testid='pin-preview']")
+      ?.getBoundingClientRect();
+
+    if (bubble === undefined || preview === undefined) {
+      return "missing";
+    }
+
+    const covered =
+      Math.max(
+        0,
+        Math.min(bubble.bottom, preview.bottom) -
+          Math.max(bubble.top, preview.top)
+      ) *
+      Math.max(
+        0,
+        Math.min(bubble.right, preview.right) -
+          Math.max(bubble.left, preview.left)
+      );
+
+    const side =
+      document.querySelector<HTMLElement>(".coach-arrow")?.dataset.side ??
+      "inside";
+
+    return `${side}, covers ${Math.round((covered / (preview.width * preview.height)) * 100)}% of the preview`;
+  });
+
+  await sizedTab.screenshot({
+    path: path.join(OUT, `check-pin-tip-${platform}.png`),
+  });
+  await sized.close();
+
   // The walkthrough's bubble takes the keyboard: Next has focus at every stop.
   const walkFocus: string[] = [];
 
@@ -6670,6 +6734,7 @@ const checkOnboarding = async (
       libraryTip,
       panel,
       panelTip,
+      pinTipPlace,
       reopen,
       reopening,
       settingsCalls,
@@ -6693,6 +6758,7 @@ const checkOnboarding = async (
         "tutorial:hintShown:place-pin",
         "tutorial:dismissHint:place-pin",
       ],
+      pinTipPlace: "below, covers 0% of the preview",
       reopen: ["reopen", "startDrag", "next"],
       reopening: ["reopen"],
       settingsCalls: ["setTips:false", "resetTutorial"],

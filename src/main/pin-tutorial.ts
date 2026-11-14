@@ -103,7 +103,8 @@ export const pinHints = (mac: boolean): readonly TutorialHint[] => {
       page: CAPTURE_PAGE,
       placement: "below",
       task: PIN_TASK_IDS.pin,
-      text: "Click the spot that matters to place pin 1. Each click adds the next number; drag a pin to move it.",
+      // Short: the panel is only as tall as its page, and a longer tip has no room below the preview but over it.
+      text: "Click the spot that matters to place pin 1.",
       title: "Pin what matters",
     },
     {
