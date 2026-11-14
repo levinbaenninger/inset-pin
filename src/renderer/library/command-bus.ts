@@ -3,6 +3,8 @@ import type { LibraryCommand } from "@shared/contracts";
 import { libraryBridge } from "@/shared/bridge";
 import { promptOpen } from "@/shared/key-targets";
 
+import { walkCovers } from "./walk-cover";
+
 type Listener = (command: LibraryCommand) => void;
 
 const listeners = new Set<Listener>();
@@ -14,11 +16,11 @@ let waiting: LibraryCommand[] = [];
  * Listens once for the app menu's and the tray's commands, from the moment
  * the page loads. While a prompt is open it owns the window, so a command
  * is dropped rather than acting on the capture or the list behind it (SPEC
- * round 8).
+ * round 8). The walkthrough covers the window the same way.
  */
 export const startCommandBus = (): void => {
   libraryBridge().on("command", (command) => {
-    if (promptOpen()) {
+    if (promptOpen() || walkCovers()) {
       return;
     }
 

@@ -6717,6 +6717,58 @@ const checkOnboarding = async (
     { hash: `/captures/${EXAMPLE_IDS[0] ?? ""}` }
   );
 
+  // The menu bar acts before the walkthrough's key guard: its clicks (Mark as Done, Toggle Sidebar, Delete…) and
+  // Edit › Copy, which ⌘C runs, act on nothing behind the walkthrough.
+  let walkCovered = { list: false, prompt: true, stop: "" };
+
+  const walkMenus = await calls(
+    "library",
+    {
+      ...examplesLibrary,
+      tutorial: tutorialView({ examples: true, spotlight: 1 }),
+    },
+    async (tab) => {
+      await tab.getByText("1 of 6").waitFor();
+      await tab.waitForTimeout(300);
+      await tab.evaluate(() => {
+        for (const command of [
+          "done",
+          "toggleSidebar",
+          "delete",
+          "copyImage",
+        ]) {
+          globalThis.__emit?.("command", command);
+        }
+
+        document.dispatchEvent(new Event("beforecopy", { cancelable: true }));
+        document.dispatchEvent(
+          new ClipboardEvent("copy", {
+            cancelable: true,
+            clipboardData: new DataTransfer(),
+          })
+        );
+      });
+      await tab.waitForTimeout(300);
+
+      walkCovered = await tab.evaluate(() => ({
+        list:
+          (document
+            .querySelector('[data-coach="capture-list"]')
+            ?.getBoundingClientRect().width ?? 0) > 0,
+        prompt: document.querySelector('[role="alertdialog"]') !== null,
+        stop: document.querySelector("[data-coach-bubble]")?.textContent ?? "",
+      }));
+
+      walkCovered = {
+        ...walkCovered,
+        stop: walkCovered.stop.includes("1 of 6") ? "1 of 6" : walkCovered.stop,
+      };
+
+      await tab.keyboard.press("Escape");
+    },
+    { hash: `/captures/${EXAMPLE_IDS[0] ?? ""}` }
+  );
+
   const settingsCalls = await calls(
     "settings",
     { view: SETTINGS_VIEW },
@@ -6746,7 +6798,7 @@ const checkOnboarding = async (
   );
 
   expectSame(
-    "setup and tutorial: Welcome's Return and Not now; Allow and Back; Reopen to finish, the tile's drag and Not now; Reopening… asks again; Done's two ways into the library; the checklist tags the examples, asks only for a task's how-to, and removes the examples; a drawn tip is seen and Got it puts it away, in the library and the panel, where the title keeps the keyboard; the walkthrough's Next has focus at stops 1 and 2, and Esc ends it; Settings' Show tips and Reset Tutorial; the panel hands Screen Recording to setup, and an empty image offers the pane and a reopen",
+    "setup and tutorial: Welcome's Return and Not now; Allow and Back; Reopen to finish, the tile's drag and Not now; Reopening… asks again; Done's two ways into the library; the checklist tags the examples, asks only for a task's how-to, and removes the examples; a drawn tip is seen and Got it puts it away, in the library and the panel, where the title keeps the keyboard; the walkthrough's Next has focus at stops 1 and 2, and Esc ends it; menu commands and Edit › Copy act on nothing behind the walkthrough; Settings' Show tips and Reset Tutorial; the panel hands Screen Recording to setup, and an empty image offers the pane and a reopen",
     {
       access,
       addFieldsTip,
@@ -6762,7 +6814,9 @@ const checkOnboarding = async (
       settingsCalls,
       tags,
       titleKept,
+      walkCovered,
       walkFocus,
+      walkMenus,
       walkthrough,
       welcome,
     },
@@ -6790,7 +6844,9 @@ const checkOnboarding = async (
       settingsCalls: ["setTips:false", "resetTutorial"],
       tags: 2,
       titleKept: { focus: "title-field", typed: true },
+      walkCovered: { list: true, prompt: false, stop: "1 of 6" },
       walkFocus: ["Next", "Next"],
+      walkMenus: ["tutorial:spotlightDone:"],
       walkthrough: ["tutorial:spotlightDone:"],
       welcome: ["next", "skip"],
     }

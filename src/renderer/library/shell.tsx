@@ -53,6 +53,7 @@ import {
 } from "./list-model";
 import { Groups, SearchField } from "./recent-list";
 import { ResizeHandle, SidebarToggle, useSidebar } from "./sidebar";
+import { setWalkCovers } from "./walk-cover";
 
 const api = libraryBridge();
 
@@ -286,6 +287,13 @@ export const Shell = () => {
   });
 
   useEffect(() => api.on("tutorial", onTutorial), []);
+
+  // While the walkthrough runs, the menus' commands and Edit › Copy act on nothing behind it.
+  const walking = tutorial.spotlight !== null;
+
+  useEffect(() => {
+    setWalkCovers(walking);
+  }, [walking]);
 
   const navRef = useRef<HTMLElement>(null);
   const hasChecklist = tutorial.checklist !== null;
