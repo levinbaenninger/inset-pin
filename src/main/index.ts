@@ -73,7 +73,6 @@ import { createPinWindows } from "./pin-windows";
 import { handleInsetProtocol, registerInsetScheme } from "./protocol";
 import { createQuitGate } from "./quit-gate";
 import { createQuitPath } from "./quit-path";
-import { serialWrites } from "./serial-writes";
 import { nodeSettingsFs, openSettingsStore } from "./settings-store";
 import { createSettingsWindow } from "./settings-window";
 import { failNextWrite, nodeStoreFs, openCaptureStore } from "./store";
@@ -195,9 +194,6 @@ const start = async (): Promise<void> => {
   const settings = await openSettingsStore(dataDir, nodeSettingsFs);
   const pinnedImage = createPinnedImage(store);
 
-  // Setup's and the tutorial's files, one write at a time: two renames onto one file at once fail on Windows.
-  const stateFs = serialWrites(nodeSettingsFs);
-
   // Set once the windows the tutorial hints in, and their IPC servers, exist.
   const tutorialPages = {
     emit: ignore,
@@ -247,7 +243,10 @@ const start = async (): Promise<void> => {
     },
     pageVisible: (page) => tutorialPages.visible(page),
     spotlight: pinSpotlight(isMac),
-    store: createTutorialStore(path.join(dataDir, "tutorial.json"), stateFs),
+    store: createTutorialStore(
+      path.join(dataDir, "tutorial.json"),
+      nodeSettingsFs
+    ),
     tasks: pinTasks(isMac),
     title: CHECKLIST_TITLE,
     warn: (message) => {
@@ -548,7 +547,7 @@ const start = async (): Promise<void> => {
     setTimer,
     store: createOnboardingStore(
       path.join(dataDir, "onboarding.json"),
-      stateFs
+      nodeSettingsFs
     ),
     tagline: PIN_TAGLINE,
     tile: appTile.view,
