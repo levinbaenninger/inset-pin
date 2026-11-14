@@ -23,6 +23,7 @@ import {
 import { cn } from "@/lib/utils";
 import { afterMenusClose, pickShownItem } from "@/shared/menu-keys";
 import { isMac } from "@/shared/platform";
+import { coach } from "@/tutorial/anchors";
 
 import { DueField, DuePicker } from "./due";
 import { ADD_ROW, newStep, StepsEditor } from "./steps-editor";
@@ -388,7 +389,10 @@ export const EntryFields = ({
       <div className="-mx-1.5 mt-1.5 flex min-h-6 flex-wrap items-center gap-1.5">
         {dueRow}
         {pickerAnchor(
-          <span className="inline-flex flex-wrap items-center gap-0.5">
+          <span
+            className="inline-flex flex-wrap items-center gap-0.5"
+            {...coach("add-fields")}
+          >
             <AddChips fields={addable ? missing : []} onAdd={add} />
           </span>
         )}
@@ -406,6 +410,7 @@ export const EntryFields = ({
           !page && "px-3 pt-2.5"
         )}
         data-testid="title-field"
+        {...coach("title-field")}
         disabled={disabled}
         maxLength={TITLE_MAX}
         onBlur={() => {

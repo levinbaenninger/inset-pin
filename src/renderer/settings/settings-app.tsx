@@ -2,6 +2,7 @@ import type { SettingsView } from "@shared/settings";
 import { useEffect, useId, useRef } from "react";
 import type { ReactNode } from "react";
 
+import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -76,6 +77,7 @@ const SettingsForm = ({ view }: { readonly view: SettingsView }) => {
   const loginId = useId();
   const iconId = useId();
   const copyId = useId();
+  const tipsId = useId();
   const { settings } = view;
   const page = useRef<HTMLElement>(null);
 
@@ -173,6 +175,35 @@ const SettingsForm = ({ view }: { readonly view: SettingsView }) => {
             }}
           />
         </Row>
+      </Group>
+      <Group title="Tips">
+        <Row
+          label="Show tips"
+          labelFor={tipsId}
+          note="A short tip beside a control the first time you meet it."
+        >
+          <Switch
+            checked={view.tips}
+            id={tipsId}
+            onCheckedChange={(checked) => {
+              api.setTips(checked);
+            }}
+          />
+        </Row>
+        <div className="flex min-h-12 items-center justify-between gap-4 px-3 py-2.5">
+          <p className="text-muted-foreground text-xs leading-snug">
+            Getting started and every tip start over.
+          </p>
+          <Button
+            onClick={() => {
+              api.resetTutorial();
+            }}
+            size="sm"
+            variant="outline"
+          >
+            Reset Tutorial
+          </Button>
+        </div>
       </Group>
       {/* macOS has the app menu's About panel; elsewhere it is here. */}
       {isMac ? null : (

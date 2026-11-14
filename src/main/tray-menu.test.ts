@@ -40,6 +40,9 @@ describe(trayMenu, () => {
       "Check for updates",
       "---",
       "Keyboard shortcuts…",
+      "Set Up Permissions…",
+      "Getting Started",
+      "Show Me Around",
       "Settings…",
       "Quit Inset Context Pin",
     ]);
@@ -106,6 +109,8 @@ describe(trayMenu, () => {
       "Check for updates",
       "---",
       "Keyboard shortcuts…",
+      "Getting Started",
+      "Show Me Around",
       "Settings…",
       "Quit Inset Context Pin",
     ]);

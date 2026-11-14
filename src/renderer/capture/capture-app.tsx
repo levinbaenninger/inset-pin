@@ -1,12 +1,25 @@
 import type { CaptureView } from "@shared/contracts";
+import type { TutorialAction, TutorialView } from "@shared/tutorial";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { captureBridge } from "@/shared/bridge";
+import { PageHints } from "@/tutorial/hint-layer";
 
 import { DraftEditor } from "./draft-editor";
 import { ProblemPanel } from "./problem-panel";
 
 const api = captureBridge();
+
+/** The tutorial's one-time hints in the panel (src/renderer/tutorial/): placing pin 1, the title. */
+const tutorialSource = {
+  load: async () => await api.getTutorial(),
+  subscribe: (listener: (view: TutorialView) => void) =>
+    api.on("tutorial", listener),
+};
+
+const actTutorial = (action: TutorialAction): void => {
+  api.tutorial(action);
+};
 
 const useCaptureView = (): CaptureView => {
   const [view, setView] = useState<CaptureView>({ kind: "none" });
@@ -80,13 +93,17 @@ export const CaptureApp = () => {
 
   // Keyed by surface key so every show mounts fresh from main's latest content.
   return (
-    <main className="capture-surface bg-background text-foreground" ref={ref}>
-      {view.kind === "draft" ? (
-        <DraftEditor key={view.surfaceKey} view={view} />
-      ) : null}
-      {view.kind === "problem" ? (
-        <ProblemPanel key={view.surfaceKey} problem={view.problem} />
-      ) : null}
-    </main>
+    <>
+      <main className="capture-surface bg-background text-foreground" ref={ref}>
+        {view.kind === "draft" ? (
+          <DraftEditor key={view.surfaceKey} view={view} />
+        ) : null}
+        {view.kind === "problem" ? (
+          <ProblemPanel key={view.surfaceKey} problem={view.problem} />
+        ) : null}
+      </main>
+      {/* Outside the measured page: a bubble never changes the panel's height. */}
+      <PageHints act={actTutorial} source={tutorialSource} />
+    </>
   );
 };

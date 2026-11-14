@@ -29,6 +29,7 @@ import {
 import { cn } from "@/lib/utils";
 import { PinBadge, PinMarker, pinHeadOffset } from "@/shared/pin-marker";
 import { isMac } from "@/shared/platform";
+import { coach } from "@/tutorial/anchors";
 
 import { percent } from "./saved-image";
 
@@ -362,6 +363,7 @@ export const ImageEditor = ({
             <Button
               aria-label="Copy image with pins"
               onClick={onCopy}
+              {...coach("copy-image")}
               size="icon-sm"
               variant="ghost"
             >
@@ -383,6 +385,7 @@ export const ImageEditor = ({
           pinMode ? "cursor-crosshair" : "cursor-grab active:cursor-grabbing"
         )}
         data-testid="image-editor"
+        {...coach("capture-image")}
         draggable={!pinMode && gesture === null}
         onDragStart={(event) => {
           event.preventDefault();

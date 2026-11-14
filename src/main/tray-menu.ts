@@ -11,6 +11,9 @@ export type TrayAction =
   | "openLibrary"
   | "openSettings"
   | "showShortcuts"
+  | "setUpPermissions"
+  | "gettingStarted"
+  | "showMeAround"
   | "toggleLibraryOnTop"
   | "checkForUpdates"
   | "installUpdate"
@@ -232,6 +235,30 @@ export const trayMenu = (model: TrayModel): readonly TrayItem[] => {
       enabled: true,
       kind: "item",
       label: "Keyboard shortcuts…",
+    },
+    // Setup asks for macOS's Screen Recording; Windows needs nothing.
+    ...(model.isMac
+      ? [
+          {
+            action: "setUpPermissions",
+            enabled: true,
+            kind: "item",
+            label: "Set Up Permissions…",
+          } as const,
+        ]
+      : []),
+    // The tutorial, also here: without a Dock icon the app has no Help menu, and Windows has none at all.
+    {
+      action: "gettingStarted",
+      enabled: true,
+      kind: "item",
+      label: "Getting Started",
+    },
+    {
+      action: "showMeAround",
+      enabled: true,
+      kind: "item",
+      label: "Show Me Around",
     },
     {
       action: "openSettings",

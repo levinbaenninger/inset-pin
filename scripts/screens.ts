@@ -353,9 +353,285 @@ const makeCaptures = (targets: (name: SampleName) => Targets) => {
 
 const READ_ONLY = { id: uuid(9), kind: "readOnly", why: "newerVersion" };
 
+/** The app icon the onboarding's drag tile shows, as main reads it from the bundle. */
+const APP_ICON_PNG = await readFile(path.join(ROOT, "build", "icon.png"));
+
+const APP_ICON = `data:image/png;base64,${APP_ICON_PNG.toString("base64")}`;
+
+type RowState = "allow" | "waiting" | "reopen" | "reopening" | "allowed";
+
+type SetupPage = "welcome" | "access" | "done";
+
+/** Setup's view as main builds it for Inset Context Pin (src/main/pin-onboarding.ts). */
+const onboardingView = (
+  current: SetupPage,
+  state: RowState,
+  steps: readonly SetupPage[] = ["welcome", "access", "done"]
+) => ({
+  appName: "Inset Context Pin",
+  focus: "screen",
+  handOff: {
+    later:
+      "Without screen access ⌥⌘P can’t capture anything. Set Up Permissions… in the Inset Context Pin menu or the pin icon’s menu asks again.",
+    ready:
+      "Inset Context Pin is ready. A short Getting started list in the library shows the rest.",
+    showAround: "Show Me Around",
+    start: "Start Using",
+  },
+  permissions: [
+    {
+      features: ["⌥⌘P"],
+      id: "screen",
+      listName: "Screen & System Audio Recording",
+      purpose:
+        "Lets ⌥⌘P capture the spot you point at. Only the crop you save is kept.",
+      state,
+      title: "Screen Recording",
+    },
+  ],
+  step: { kind: current },
+  steps: steps.map((kind) => ({ kind })),
+  tagline: "Point at a place instead of describing it.",
+  tile: { icon: APP_ICON, name: "Inset Context Pin" },
+});
+
+/** The tutorial's checklist tasks, as src/main/pin-tutorial.ts writes them for the system. */
+const tutorialTasks = (mac: boolean) => {
+  const keys = mac
+    ? { capture: "⌥⌘P", copy: "⇧⌘C", details: "⌥⌘C", save: "⌘↩" }
+    : {
+        capture: "Ctrl+Alt+P",
+        copy: "Ctrl+Shift+C",
+        details: "Ctrl+Alt+C",
+        save: "Ctrl+Enter",
+      };
+
+  return [
+    {
+      anchor: null,
+      how: `Hover over the detail you mean, in any app, and press ${keys.capture}. A panel opens beside the pointer with a crop around that spot.`,
+      id: "capture",
+      keys: keys.capture,
+      title: `Capture with ${keys.capture}`,
+    },
+    {
+      anchor: null,
+      how: "In the capture panel, click the spot that matters to place pin 1. Each click adds the next number.",
+      id: "pin",
+      keys: null,
+      title: "Place a pin",
+    },
+    {
+      anchor: null,
+      how: `Type a title in the panel and press ${keys.save}. Saving needs a title; Esc sets the draft aside.`,
+      id: "save",
+      keys: keys.save,
+      title: "Give it a title and save",
+    },
+    {
+      anchor: "capture-list",
+      how: "Every capture you save lands here, newest first.",
+      id: "library",
+      keys: null,
+      title: "Find it in the library",
+    },
+    {
+      anchor: "copy-image",
+      how: `${keys.copy} copies the image with its pins, ${keys.details} the text with its details. Paste it into a chat, a doc or a ticket.`,
+      id: "copy",
+      keys: keys.copy,
+      title: "Copy it out",
+    },
+  ];
+};
+
+const SPOTLIGHT_STEPS = [
+  {
+    anchor: "capture-list",
+    id: "list",
+    text: "Every capture lands here, by day, newest first. Drag the sidebar’s edge to resize it.",
+    title: "Your captures",
+  },
+  {
+    anchor: "search",
+    id: "search",
+    text: "⌘F searches titles, descriptions, steps and pin labels. Type due: to filter by Due.",
+    title: "Search",
+  },
+  {
+    anchor: "capture-image",
+    id: "image",
+    text: "The spot you captured, with its numbered pins. P places more; drag a pin to move it.",
+    title: "The crop and its pins",
+  },
+  {
+    anchor: "title-field",
+    id: "fields",
+    text: "Title, description, next steps and Due save as you type.",
+    title: "Edit in place",
+  },
+  {
+    anchor: "copy-image",
+    id: "copy",
+    text: "⇧⌘C copies the image with its pins, ⌥⌘C the text with its details. Drag the image into another app to drop it as a file.",
+    title: "Copy it out",
+  },
+  {
+    anchor: "sidebar-foot",
+    id: "settings",
+    text: "Settings and every keyboard shortcut (⌘/) are here.",
+    title: "Settings and keys",
+  },
+];
+
+/** A one-time tip, granted by main to the page it shows on. */
+const shownHint = (
+  id: string,
+  anchor: string,
+  title: string | null,
+  text: string,
+  placement: "below" | "above" | "inside" = "below"
+) => ({ anchor, id, kind: "hint", placement, text, title });
+
+const PLACE_PIN_HINT = shownHint(
+  "place-pin",
+  "pin-preview",
+  "Pin what matters",
+  "Click the spot that matters to place pin 1."
+);
+
+const TITLE_HINT = shownHint(
+  "title",
+  "title-field",
+  "Give it a title",
+  "Say what the pins are about. ⌘↩ saves it to the library; Esc sets the draft aside.",
+  "above"
+);
+
+const LIBRARY_HINT = shownHint(
+  "library",
+  "capture-list",
+  "Your library",
+  "Your captures, newest first. ⌘F searches titles, notes and pin labels.",
+  "inside"
+);
+
+const ADD_FIELDS_HINT = shownHint(
+  "add-fields",
+  "add-fields",
+  null,
+  "Add a description, next steps or a due date here. None of it is needed when you capture."
+);
+
+/** The first run's example captures (src/main/pin-tutorial.ts), on their bundled image. */
+const EXAMPLE_IDS = [uuid(51), uuid(52)];
+
+const exampleImage = {
+  heightPx: 600,
+  pixelsPerDip: 2,
+  url: "/.fixtures/example-capture.png",
+  widthPx: 960,
+};
+
+const exampleCapture = (
+  n: 0 | 1,
+  fields: {
+    title: string;
+    description: string;
+    steps: string[];
+    pins: { x: number; y: number; label: string }[];
+  }
+) => ({
+  capturedAt: ago(0, 9, 1 - n),
+  description: fields.description,
+  due: null,
+  id: EXAMPLE_IDS[n] ?? uuid(51),
+  image: exampleImage,
+  invokedVia: "shortcut",
+  kind: "ok" as const,
+  pins: fields.pins,
+  sourceLabel: "Example",
+  status: { kind: "active" },
+  steps: fields.steps.map((text, index) => step(index + 1, text)),
+  title: fields.title,
+  updatedAt: ago(0, 9, 1 - n),
+});
+
+const EXAMPLE_CAPTURES = [
+  exampleCapture(0, {
+    description:
+      "A panel opens with a crop around the spot you point at. Click to place pin 1, give it a title and press ⌘↩. Your capture lands here, like this one.",
+    pins: [
+      { label: "Pin 1 marks the spot", x: 800, y: 254 },
+      { label: "Each click adds the next number", x: 800, y: 390 },
+    ],
+    steps: [
+      "Capture something of your own",
+      "Remove the examples from Getting started’s ⋯ menu",
+    ],
+    title: "Try it: point at a detail and press ⌥⌘P",
+  }),
+  exampleCapture(1, {
+    description:
+      "⇧⌘C copies the image with its pins. ⌥⌘C copies the title, notes and pin labels as text. Drag the image into another app to drop it as a file.",
+    pins: [{ label: "Copied images keep their pins", x: 440, y: 462 }],
+    steps: [],
+    title: "Copy a capture out with ⇧⌘C",
+  }),
+];
+
+/** The tutorial's view for one page, as main builds it (src/main/tutorial/tutorial.ts). */
+const tutorialView = (options: {
+  readonly mac?: boolean;
+  readonly done?: number;
+  readonly complete?: boolean;
+  readonly examples?: boolean;
+  readonly checklist?: boolean;
+  readonly active?: object | null;
+  readonly spotlight?: number | null;
+}) => {
+  const done = options.done ?? 0;
+  const tasks = tutorialTasks(options.mac ?? true);
+
+  return {
+    active: options.active ?? null,
+    busy: false,
+    checklist:
+      options.checklist === false
+        ? null
+        : {
+            collapsed: false,
+            complete: options.complete ?? false,
+            doneText:
+              "That’s the whole loop. Help › Getting Started, or the pin icon’s menu, brings this back.",
+            done,
+            examples: options.examples ?? false,
+            tasks: tasks.map((task, index) => ({
+              ...task,
+              done: index < done,
+            })),
+            title: "Getting started",
+            total: tasks.length,
+          },
+    examples: options.examples === true ? EXAMPLE_IDS : [],
+    hints: [],
+    spotlight:
+      options.spotlight === undefined || options.spotlight === null
+        ? null
+        : { seq: options.spotlight, steps: SPOTLIGHT_STEPS },
+  };
+};
+
+const problemView = (status: string) => ({
+  kind: "problem",
+  problem: { kind: "screenPermission", status },
+  surfaceKey: "problem",
+});
+
 const SETTINGS_VIEW = {
   openAtLogin: true,
   settings: { copyAfterSave: true, iconIn: "dockAndMenuBar" },
+  tips: true,
   version: "0.2.0",
 };
 
@@ -413,11 +689,13 @@ interface SceneData {
   capture?: object;
   commands?: readonly string[];
   owedFails?: BridgeInput["owedFails"];
+  /** The in-app tutorial's view for the page; without it the page shows none. */
+  tutorial?: object;
 }
 
 interface Scene {
   name: string;
-  page: "capture" | "library" | "settings" | "pin";
+  page: "capture" | "library" | "onboarding" | "settings" | "pin";
   hash?: string;
   data: SceneData;
   platforms?: readonly Platform[];
@@ -426,6 +704,10 @@ interface Scene {
   fit?: boolean;
   /** localStorage the page finds when it loads, such as the sidebar's width. */
   storage?: Readonly<Record<string, string>>;
+  /** "reduce" holds looping pictures still on their last frame, so the shot never catches them mid-loop. */
+  reducedMotion?: "reduce";
+  /** A window size other than the page's usual one, as the onboarding's beside System Settings. */
+  size?: { readonly width: number; readonly height: number };
 }
 
 const mod = (platform: Platform) => (platform === "macos" ? "Meta" : "Control");
@@ -1105,6 +1387,144 @@ const makeScenes = (
       name: "settings",
       page: "settings",
     },
+    // The first-run setup, macOS only: each page is a view main pushes, the window as tall as its page.
+    ...(
+      [
+        ["1-welcome", onboardingView("welcome", "allow")],
+        ["2-access", onboardingView("access", "allow")],
+        ["3-reopen", onboardingView("access", "reopen")],
+        ["4-reopening", onboardingView("access", "reopening")],
+        ["5-allowed", onboardingView("access", "allowed")],
+        ["6-done", onboardingView("done", "allowed")],
+        ["7-done-skipped", onboardingView("done", "reopen")],
+      ] as const
+    ).map(([name, view]): Scene => ({
+      data: { view },
+      fit: true,
+      name: `setup-${name}`,
+      page: "onboarding",
+      platforms: ["macos"],
+      reducedMotion: "reduce",
+    })),
+    // The in-app tutorial: Getting started in the library, with the first run's examples, on both systems.
+    ...(["macos", "windows"] as const).map((platform): Scene => ({
+      data: {
+        captures: EXAMPLE_CAPTURES,
+        tutorial: tutorialView({
+          examples: true,
+          mac: platform === "macos",
+        }),
+      },
+      hash: `/captures/${EXAMPLE_IDS[0] ?? ""}`,
+      name: "tutorial-1-checklist-start",
+      page: "library",
+      platforms: [platform],
+    })),
+    {
+      data: {
+        captures: [...EXAMPLE_CAPTURES, ...structuredClone(captures)],
+        tutorial: tutorialView({ done: 3, examples: true }),
+      },
+      hash: `/captures/${uuid(1)}`,
+      name: "tutorial-2-checklist-progress",
+      page: "library",
+      platforms: ["macos"],
+    },
+    {
+      data: {
+        captures: EXAMPLE_CAPTURES,
+        tutorial: tutorialView({
+          active: {
+            ...shownHint(
+              "copy",
+              "copy-image",
+              "Copy it out",
+              "⇧⌘C copies the image with its pins, ⌥⌘C the text with its details. Paste it into a chat, a doc or a ticket."
+            ),
+            kind: "task",
+          },
+          done: 3,
+          examples: true,
+        }),
+      },
+      hash: `/captures/${EXAMPLE_IDS[0] ?? ""}`,
+      name: "tutorial-3-task-hint",
+      page: "library",
+      platforms: ["macos"],
+    },
+    {
+      data: {
+        captures: EXAMPLE_CAPTURES,
+        tutorial: tutorialView({ active: LIBRARY_HINT, examples: true }),
+      },
+      hash: `/captures/${EXAMPLE_IDS[0] ?? ""}`,
+      name: "tutorial-4-library-tip",
+      page: "library",
+      platforms: ["macos"],
+    },
+    {
+      data: {
+        tutorial: tutorialView({ active: PLACE_PIN_HINT, checklist: false }),
+        view: draftView(desktop, {}),
+      },
+      fit: true,
+      name: "tutorial-5-place-pin-tip",
+      page: "capture",
+      platforms: ["macos"],
+    },
+    {
+      data: {
+        tutorial: tutorialView({ active: TITLE_HINT, checklist: false }),
+        view: draftView(desktop, { pins: pinned.slice(0, 1) }),
+      },
+      fit: true,
+      name: "tutorial-6-title-tip",
+      page: "capture",
+      platforms: ["macos"],
+    },
+    ...[1, 3, 5].map((stop): Scene => ({
+      act: async (page) => {
+        await page.waitForSelector("[data-spotlight-dimmer]");
+
+        for (let press = 1; press < stop; press += 1) {
+          // Each step waits for the one before.
+          // oxlint-disable-next-line no-await-in-loop
+          await page
+            .locator("[data-coach-bubble]")
+            .getByRole("button", { exact: true, name: "Next" })
+            .click();
+        }
+      },
+      data: {
+        captures: EXAMPLE_CAPTURES,
+        tutorial: tutorialView({ examples: true, spotlight: 1 }),
+      },
+      hash: `/captures/${EXAMPLE_IDS[0] ?? ""}`,
+      name: `tutorial-7-spotlight-${stop}`,
+      page: "library",
+      platforms: ["macos"],
+      reducedMotion: "reduce",
+    })),
+    {
+      data: { captures: [] },
+      hash: "/",
+      name: "tutorial-8-empty-library",
+      page: "library",
+    },
+    {
+      data: { view: problemView("denied") },
+      fit: true,
+      name: "problem-screen-permission",
+      page: "capture",
+      platforms: ["macos"],
+    },
+    {
+      data: { view: problemView("granted-but-empty") },
+      fit: true,
+      name: "problem-granted-but-empty",
+      page: "capture",
+      platforms: ["macos"],
+    },
     {
       data: { capture: captures[0] },
       name: "float-on-top",
@@ -1131,6 +1551,8 @@ const SIZES = {
   capture: { height: 760, width: 380 },
   library: { height: 720, width: 1100 },
   // pinSize() of a 480×300 crop: the floating window's own size.
+  // src/main/onboarding-window.ts: 460 wide, as tall as its page.
+  onboarding: { height: 400, width: 460 },
   pin: { height: 263, width: 420 },
   settings: { height: 400, width: 440 },
 } as const;
@@ -1193,11 +1615,12 @@ const shoot = async (
   platform: Platform,
   theme: Theme
 ) => {
-  const size = SIZES[scene.page];
+  const size = scene.size ?? SIZES[scene.page];
 
   const context = await browser.newContext({
     colorScheme: theme,
     deviceScaleFactor: 2,
+    reducedMotion: scene.reducedMotion ?? "no-preference",
     userAgent: USER_AGENT[platform],
     viewport: size,
   });
@@ -6006,6 +6429,376 @@ const checkPanelClickAway = async (
   return failures;
 };
 
+/**
+ * The onboarding's controls and the problem panel's hand-off ask main for
+ * the right thing: the page only reports, and main moves the flow on.
+ */
+/** The focused element's text when it is inside the tutorial's bubble, else where focus is. */
+const focusInBubble = async (tab: Page): Promise<string> =>
+  await tab.evaluate(() => {
+    const focused = document.activeElement;
+
+    return focused instanceof HTMLElement &&
+      focused.closest("[data-coach-bubble]") !== null
+      ? (focused.textContent ?? "")
+      : `outside: ${focused?.tagName ?? "none"}`;
+  });
+
+/** Clicks a button by its exact name. */
+const click = async (tab: Page, name: string): Promise<void> => {
+  await tab.getByRole("button", { exact: true, name }).click();
+};
+
+/** What the fake bridge was asked: the library's and the setup's calls, or the panel's. */
+const bridgeCalls = async (tab: Page, key: "__calls" | "__panelCalls") =>
+  await tab.evaluate((name) => globalThis[name] ?? [], key);
+
+/**
+ * Setup and the in-app tutorial ask main for the right thing: the pages
+ * only report, and main moves the flow on and ticks tasks off.
+ */
+const checkOnboarding = async (
+  browser: Browser,
+  origin: string,
+  platform: Platform
+): Promise<string[]> => {
+  const { expectSame, failures } = makeReport(platform);
+
+  const open = async (
+    page: "onboarding" | "capture" | "library" | "settings",
+    data: SceneData,
+    hash = ""
+  ) => {
+    const context = await browser.newContext({
+      userAgent: USER_AGENT[platform],
+      viewport: SIZES[page],
+    });
+
+    const tab = await context.newPage();
+    const input: BridgeInput = { ...data, page };
+
+    await tab.addInitScript(installBridge, input);
+    await tab.goto(`${origin}/${page}.html${hash === "" ? "" : `#${hash}`}`);
+    await tab.waitForLoadState("networkidle");
+
+    return { context, tab };
+  };
+
+  const calls = async (
+    page: "onboarding" | "capture" | "library" | "settings",
+    data: SceneData,
+    run: (tab: Page) => Promise<void>,
+    options: { readonly hash?: string; readonly panel?: boolean } = {}
+  ): Promise<string[]> => {
+    const { context, tab } = await open(page, data, options.hash);
+
+    await run(tab);
+    await tab.waitForTimeout(150);
+
+    const got = await bridgeCalls(
+      tab,
+      options.panel === true ? "__panelCalls" : "__calls"
+    );
+
+    await context.close();
+
+    return got;
+  };
+
+  const welcome = await calls(
+    "onboarding",
+    { view: onboardingView("welcome", "allow") },
+    async (tab) => {
+      await tab.keyboard.press("Enter");
+      await click(tab, "Not now");
+    }
+  );
+
+  const access = await calls(
+    "onboarding",
+    { view: onboardingView("access", "allow") },
+    async (tab) => {
+      await click(tab, "Allow Screen Recording");
+      await click(tab, "Back");
+    }
+  );
+
+  const reopen = await calls(
+    "onboarding",
+    { view: onboardingView("access", "reopen") },
+    async (tab) => {
+      await click(tab, "Reopen to finish");
+      await tab
+        .getByRole("button", { name: /^Drag /u })
+        .dispatchEvent("dragstart");
+      await click(tab, "Not now");
+    }
+  );
+
+  const reopening = await calls(
+    "onboarding",
+    { view: onboardingView("access", "reopening") },
+    async (tab) => {
+      await click(tab, "Reopening…");
+    }
+  );
+
+  const done = await calls(
+    "onboarding",
+    { view: onboardingView("done", "allowed") },
+    async (tab) => {
+      await click(tab, "Show Me Around");
+      await click(tab, "Start Using");
+    }
+  );
+
+  const examplesLibrary: SceneData = {
+    captures: EXAMPLE_CAPTURES,
+    tutorial: tutorialView({ examples: true }),
+  };
+
+  let tags = 0;
+
+  const checklist = await calls(
+    "library",
+    examplesLibrary,
+    async (tab) => {
+      await tab.getByText("Getting started").waitFor();
+      tags = await tab.getByText("Example", { exact: true }).count();
+      await tab.getByRole("button", { name: /^Place a pin/u }).click();
+      await tab.getByRole("button", { name: "Getting started menu" }).click();
+      await tab.getByRole("menuitem", { name: "Remove Examples" }).click();
+    },
+    { hash: `/captures/${EXAMPLE_IDS[0] ?? ""}` }
+  );
+
+  const libraryTip = await calls(
+    "library",
+    {
+      ...examplesLibrary,
+      tutorial: tutorialView({ active: LIBRARY_HINT, examples: true }),
+    },
+    async (tab) => {
+      await tab.getByText("Your library").waitFor();
+      await click(tab, "Got it");
+    },
+    { hash: `/captures/${EXAMPLE_IDS[0] ?? ""}` }
+  );
+
+  // The library's fields tip points at its add chips, which a capture without a Due shows.
+  const addFieldsTip = await calls(
+    "library",
+    {
+      ...examplesLibrary,
+      tutorial: tutorialView({ active: ADD_FIELDS_HINT, examples: true }),
+    },
+    async (tab) => {
+      await tab.getByText("None of it is needed when you capture.").waitFor();
+      await click(tab, "Got it");
+    },
+    { hash: `/captures/${EXAMPLE_IDS[0] ?? ""}` }
+  );
+
+  // A tip never takes the keyboard from the title: typing after ⌥⌘P still lands there.
+  let titleKept = { focus: "", typed: false };
+
+  const panelCalls = await calls(
+    "capture",
+    {
+      tutorial: tutorialView({ active: PLACE_PIN_HINT, checklist: false }),
+      view: draftView({}, {}),
+    },
+    async (tab) => {
+      await tab.getByText("Pin what matters").waitFor();
+
+      const focus = await tab.evaluate(() =>
+        document.activeElement instanceof HTMLElement
+          ? (document.activeElement.dataset.testid ?? "")
+          : ""
+      );
+
+      await tab.keyboard.type("abc");
+      await tab.waitForTimeout(150);
+
+      const sent = await bridgeCalls(tab, "__panelCalls");
+
+      titleKept = { focus, typed: sent.includes("edit") };
+      await tab.keyboard.press("Escape");
+    },
+    { panel: true }
+  );
+
+  const panelTip = panelCalls.filter((call) => call.startsWith("tutorial:"));
+
+  // In the app the panel is exactly as tall as its page before a tip shows: the tip must fit beside the preview, not over it.
+  const fitted = await open("capture", { view: draftView({}, {}) });
+
+  await fitted.tab.waitForTimeout(300);
+
+  const panelHeight = await fitted.tab.evaluate(() => globalThis.__fitted ?? 0);
+
+  await fitted.context.close();
+
+  const sized = await browser.newContext({
+    userAgent: USER_AGENT[platform],
+    viewport: { height: panelHeight, width: SIZES.capture.width },
+  });
+
+  const sizedTab = await sized.newPage();
+
+  const sizedInput: BridgeInput = {
+    page: "capture",
+    tutorial: tutorialView({ active: PLACE_PIN_HINT, checklist: false }),
+    view: draftView({}, {}),
+  };
+
+  await sizedTab.addInitScript(installBridge, sizedInput);
+  await sizedTab.goto(`${origin}/capture.html`);
+  await sizedTab.locator("[data-coach-bubble]").waitFor();
+  await sizedTab.waitForTimeout(300);
+
+  const pinTipPlace = await sizedTab.evaluate(() => {
+    const bubble = document
+      .querySelector("[data-coach-bubble]")
+      ?.getBoundingClientRect();
+
+    const preview = document
+      .querySelector("[data-testid='pin-preview']")
+      ?.getBoundingClientRect();
+
+    if (bubble === undefined || preview === undefined) {
+      return "missing";
+    }
+
+    const covered =
+      Math.max(
+        0,
+        Math.min(bubble.bottom, preview.bottom) -
+          Math.max(bubble.top, preview.top)
+      ) *
+      Math.max(
+        0,
+        Math.min(bubble.right, preview.right) -
+          Math.max(bubble.left, preview.left)
+      );
+
+    const side =
+      document.querySelector<HTMLElement>(".coach-arrow")?.dataset.side ??
+      "inside";
+
+    return `${side}, covers ${Math.round((covered / (preview.width * preview.height)) * 100)}% of the preview`;
+  });
+
+  await sizedTab.screenshot({
+    path: path.join(OUT, `check-pin-tip-${platform}.png`),
+  });
+  await sized.close();
+
+  // The walkthrough's bubble takes the keyboard: Next has focus at every stop.
+  const walkFocus: string[] = [];
+
+  const walkthrough = await calls(
+    "library",
+    {
+      ...examplesLibrary,
+      tutorial: tutorialView({ examples: true, spotlight: 1 }),
+    },
+    async (tab) => {
+      await tab.waitForSelector("[data-spotlight-dimmer]");
+      await tab.getByText("1 of 6").waitFor();
+      await tab.waitForTimeout(300);
+      walkFocus.push(await focusInBubble(tab));
+      await tab.keyboard.press("Enter");
+      await tab.getByText("2 of 6").waitFor();
+      await tab.waitForTimeout(300);
+      walkFocus.push(await focusInBubble(tab));
+      await tab.keyboard.press("Escape");
+    },
+    { hash: `/captures/${EXAMPLE_IDS[0] ?? ""}` }
+  );
+
+  const settingsCalls = await calls(
+    "settings",
+    { view: SETTINGS_VIEW },
+    async (tab) => {
+      await tab.getByRole("switch", { name: "Show tips" }).click();
+      await click(tab, "Reset Tutorial");
+    }
+  );
+
+  const panel = await calls(
+    "capture",
+    { view: problemView("denied") },
+    async (tab) => {
+      await click(tab, "Set Up Screen Recording…");
+    },
+    { panel: true }
+  );
+
+  const empty = await calls(
+    "capture",
+    { view: problemView("granted-but-empty") },
+    async (tab) => {
+      await click(tab, "Open System Settings");
+      await click(tab, "Quit and Reopen");
+    },
+    { panel: true }
+  );
+
+  expectSame(
+    "setup and tutorial: Welcome's Return and Not now; Allow and Back; Reopen to finish, the tile's drag and Not now; Reopening… asks again; Done's two ways into the library; the checklist tags the examples, asks only for a task's how-to, and removes the examples; a drawn tip is seen and Got it puts it away, in the library and the panel, where the title keeps the keyboard; the walkthrough's Next has focus at stops 1 and 2, and Esc ends it; Settings' Show tips and Reset Tutorial; the panel hands Screen Recording to setup, and an empty image offers the pane and a reopen",
+    {
+      access,
+      addFieldsTip,
+      checklist,
+      done,
+      empty,
+      libraryTip,
+      panel,
+      panelTip,
+      pinTipPlace,
+      reopen,
+      reopening,
+      settingsCalls,
+      tags,
+      titleKept,
+      walkFocus,
+      walkthrough,
+      welcome,
+    },
+    {
+      access: ["allow:screen", "back"],
+      addFieldsTip: [
+        "tutorial:hintShown:add-fields",
+        "tutorial:dismissHint:add-fields",
+      ],
+      checklist: ["tutorial:taskHint:pin", "tutorial:removeExamples:"],
+      done: ["finish:showAround", "finish:start"],
+      empty: ["openScreenSettings", "relaunch"],
+      libraryTip: [
+        "tutorial:hintShown:library",
+        "tutorial:dismissHint:library",
+      ],
+      panel: ["setUpScreenRecording"],
+      panelTip: [
+        "tutorial:hintShown:place-pin",
+        "tutorial:dismissHint:place-pin",
+      ],
+      pinTipPlace: "below, covers 0% of the preview",
+      reopen: ["reopen", "startDrag", "next"],
+      reopening: ["reopen"],
+      settingsCalls: ["setTips:false", "resetTutorial"],
+      tags: 2,
+      titleKept: { focus: "title-field", typed: true },
+      walkFocus: ["Next", "Next"],
+      walkthrough: ["tutorial:spotlightDone:"],
+      welcome: ["next", "skip"],
+    }
+  );
+
+  return failures;
+};
+
 const runChecks = async (
   browser: Browser,
   origin: string,
@@ -6037,6 +6830,12 @@ const runChecks = async (
     };
 
     return [
+      ...(platform === "macos"
+        ? await guarded(
+            "onboarding",
+            async () => await checkOnboarding(browser, origin, platform)
+          )
+        : []),
       ...(await guarded(
         "add menu",
         async () => await checkAddMenu(browser, origin, desktop, platform)
@@ -6166,6 +6965,12 @@ const main = async () => {
   });
 
   const captures = makeCaptures(sampleTargets);
+
+  // The tutorial's example captures show the image the app ships (resources/).
+  await writeFile(
+    path.join(FIXTURES, "example-capture.png"),
+    await readFile(path.join(ROOT, "resources", "example-capture.png"))
+  );
 
   // The sample data, for anyone driving the pages by hand.
   await writeFile(

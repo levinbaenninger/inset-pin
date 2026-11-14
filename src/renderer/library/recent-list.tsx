@@ -18,7 +18,7 @@ import {
 import { keyLabels, rowKeyAction } from "@shared/shortcuts";
 import type { RowKeyAction } from "@shared/shortcuts";
 import { Link } from "@tanstack/react-router";
-import { Fragment, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, use, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -50,6 +50,7 @@ import { MenuEntries, onMenuKey, useCaptureCommands } from "./capture-commands";
 import type { RowFocus } from "./capture-commands";
 import { useCopyEntry } from "./copy-entry";
 import { snapshotOf } from "./draft-lifecycle";
+import { ExamplesContext } from "./examples";
 import { dayLabel, readOnlyText, timeOfDay } from "./format";
 import { drafts, useDraft } from "./library-drafts";
 import { useLibraryState } from "./library-state";
@@ -183,6 +184,7 @@ const CaptureRow = ({
   const { now, parsed } = useLibraryState();
   const rowRef = useRef<HTMLAnchorElement>(null);
   const landing = useRef<HTMLElement | null>(null);
+  const example = use(ExamplesContext).has(capture.id);
 
   // The row's menu and delete dialog hand the focus back to the row, or to its neighbour once the row leaves the list.
   const focus: RowFocus = {
@@ -289,6 +291,11 @@ const CaptureRow = ({
                     <Highlighted terms={parsed.terms} text={snippet} />
                   </span>
                 )}
+                {example ? (
+                  <span className="bg-foreground/5 text-muted-foreground w-fit rounded-sm px-1.5 text-xs">
+                    Example
+                  </span>
+                ) : null}
                 <RowMeta
                   capture={capture}
                   chip={fits ? chip : null}

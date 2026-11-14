@@ -4,6 +4,7 @@ import { captureContract } from "@shared/contracts";
 import type { CaptureContract, DraftContent } from "@shared/contracts";
 import { methodChannel } from "@shared/ipc";
 import type { Handlers } from "@shared/ipc";
+import { NO_TUTORIAL } from "@shared/tutorial";
 import { describe, expect, it } from "vitest";
 
 import { serveContract } from "./ipc-kit";
@@ -72,6 +73,9 @@ const setup = (
     save: (input, sender) => {
       saved.push({ ...input, from: sender.id });
     },
+    setUpScreenRecording: noop,
+    tutorial: noop,
+    getTutorial: () => NO_TUTORIAL,
     ...overrides,
   };
 
