@@ -50,7 +50,7 @@ import { appBundlePath, createAppTile } from "./permissions/bundle";
 import { createOnboarding } from "./permissions/onboarding";
 import { createOnboardingStore } from "./permissions/store";
 import { createPermissionChecks } from "./permissions/system";
-import { createPinExamples } from "./pin-examples";
+import { createPinExamples, holdsOwnCapture } from "./pin-examples";
 import {
   osMajor,
   PIN_HANDOFF,
@@ -220,9 +220,7 @@ const start = async (): Promise<void> => {
     store: {
       has: (id) => store.get(id) !== undefined,
       publish: async (record, png) => await store.publish(record, png),
-      remove: async (id) => {
-        await store.remove(id);
-      },
+      remove: async (id) => await store.remove(id),
     },
     warn: (message) => {
       console.warn(message);
@@ -258,17 +256,8 @@ const start = async (): Promise<void> => {
 
   await tutorial.load();
 
-  /**
-   * One of the first run's example captures, while it is still in the
-   * library: Remove Examples drops them from the tutorial at once, and from
-   * the store a moment later.
-   */
-  const isExample = (id: string): boolean =>
-    tutorial.view(HOME_PAGE).examples.includes(id) || examples.removing(id);
-
-  /** A capture the user made: the library has more than the examples. */
-  const hasOwnCapture = (): boolean =>
-    store.list().some((entry) => !isExample(entry.id));
+  /** A capture the user made: the library has more than the examples, told by their records. */
+  const hasOwnCapture = (): boolean => holdsOwnCapture(store.list());
 
   // The library saves its typing before every copy; it is created further down, and has nothing typed until then.
   const libraryEdits = {

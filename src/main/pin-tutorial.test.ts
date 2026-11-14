@@ -3,7 +3,11 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 import { CaptureIdSchema, CaptureRecordSchema } from "@shared/capture-record";
-import type { CaptureId, CaptureRecord } from "@shared/capture-record";
+import type {
+  CaptureId,
+  CaptureRecord,
+  StoredEntry,
+} from "@shared/capture-record";
 import { shortcutLabel } from "@shared/shortcut";
 import { libraryShortcuts, panelShortcuts } from "@shared/shortcuts";
 import { describe, expect, it } from "vitest";
@@ -12,6 +16,7 @@ import {
   createPinExamples,
   EXAMPLE_SOURCE,
   exampleRecord,
+  holdsOwnCapture,
 } from "./pin-examples";
 import {
   CAPTURE_PAGE,
@@ -60,6 +65,14 @@ const markedAnchors = (): ReadonlySet<string> =>
 
 const ID = (n: number): CaptureId =>
   CaptureIdSchema.parse(`00000000-0000-4000-8000-00000000000${n}`);
+
+/** A capture as the store lists it. */
+const entry = (record: CaptureRecord): StoredEntry => ({
+  id: record.id,
+  kind: "ok",
+  migratedFrom: null,
+  record,
+});
 
 const taskKeys = (mac: boolean): string[] =>
   pinTasks(mac).flatMap((task) => (task.keys === null ? [] : [task.keys]));
@@ -180,7 +193,8 @@ describe("Inset Context Pin's tutorial", () => {
         },
         remove: async (id) => {
           removed.push(id);
-          await Promise.resolve();
+
+          return await Promise.resolve({ ok: true });
         },
       },
       warn: () => {},
@@ -216,8 +230,29 @@ describe("Inset Context Pin's tutorial", () => {
     ).toStrictEqual([{ id: "title", task: PIN_TASK_IDS.save }]);
   });
 
-  it("still counts an example on its way out as one, until the store has deleted it", async () => {
-    const deleting: (() => void)[] = [];
+  it("tells examples from the user's own captures by their record: while a deletion is queued, after one failed, and after a restart", () => {
+    const at = new Date("2026-11-11T09:00:00.000Z");
+
+    // What Remove Examples can leave in the library, whatever the tutorial remembers.
+    const left = pinExamples(true).map((example, index) =>
+      exampleRecord(example, ID(index + 1), at)
+    );
+
+    const own = CaptureRecordSchema.parse({
+      ...left[0],
+      id: ID(3),
+      source: { kind: "display", label: "Studio Display" },
+      title: "chairs over the cap",
+    });
+
+    expect({
+      examplesLeft: holdsOwnCapture(left.map(entry)),
+      withOwn: holdsOwnCapture([...left, own].map(entry)),
+    }).toStrictEqual({ examplesLeft: false, withOwn: true });
+  });
+
+  it("warns when an example can't be deleted", async () => {
+    const warned: string[] = [];
 
     const examples = createPinExamples({
       examples: pinExamples(true),
@@ -227,29 +262,16 @@ describe("Inset Context Pin's tutorial", () => {
       store: {
         has: () => true,
         publish: async () => await Promise.resolve({ ok: true }),
-        remove: async () => {
-          // oxlint-disable-next-line promise/avoid-new -- the test finishes the delete by hand.
-          await new Promise<void>((resolve) => {
-            deleting.push(resolve);
-          });
-        },
+        remove: async () => await Promise.resolve({ ok: false }),
       },
-      warn: () => {},
+      warn: (message) => {
+        warned.push(message);
+      },
     });
 
     examples.remove([ID(1)]);
-
-    const during = examples.removing(ID(1));
-
-    for (const finish of deleting) {
-      finish();
-    }
-
     await delay(0);
 
-    expect({ after: examples.removing(ID(1)), during }).toStrictEqual({
-      after: false,
-      during: true,
-    });
+    expect(warned).toStrictEqual([`Example capture not removed: ${ID(1)}`]);
   });
 });

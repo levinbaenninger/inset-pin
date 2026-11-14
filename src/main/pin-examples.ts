@@ -4,7 +4,11 @@ import {
   CaptureRecordSchema,
   SCHEMA_VERSION,
 } from "@shared/capture-record";
-import type { CaptureId, CaptureRecord } from "@shared/capture-record";
+import type {
+  CaptureId,
+  CaptureRecord,
+  StoredEntry,
+} from "@shared/capture-record";
 
 import { EXAMPLE_IMAGE } from "./pin-tutorial";
 import type { ExampleCapture } from "./pin-tutorial";
@@ -51,12 +55,27 @@ export const exampleRecord = (
     updatedAt: at.toISOString(),
   });
 
+/** An example, by its own record: the source line no display has. */
+export const isExampleRecord = (record: CaptureRecord): boolean =>
+  record.source.kind === "display" && record.source.label === EXAMPLE_SOURCE;
+
+/**
+ * Whether the library holds a capture of the user's own. Examples are told
+ * by their record, not by the tutorial's list, which forgets them as soon as
+ * Remove Examples is chosen: one whose deletion is still queued, or failed,
+ * is an example still, also after a restart.
+ */
+export const holdsOwnCapture = (entries: readonly StoredEntry[]): boolean =>
+  entries.some(
+    (entry) => entry.kind !== "ok" || !isExampleRecord(entry.record)
+  );
+
 export interface ExampleStore {
   readonly publish: (
     record: CaptureRecord,
     png: Uint8Array
   ) => Promise<{ readonly ok: boolean }>;
-  readonly remove: (id: CaptureId) => Promise<void>;
+  readonly remove: (id: CaptureId) => Promise<{ readonly ok: boolean }>;
   readonly has: (id: CaptureId) => boolean;
 }
 
@@ -65,15 +84,6 @@ const parse = (id: string): CaptureId | null => {
 
   return parsed.success ? parsed.data : null;
 };
-
-export interface PinExamples extends TutorialExamples {
-  /**
-   * An example on its way out: the tutorial forgets it at once, the store
-   * deletes it a moment later. Until then it is still an example, not a
-   * capture of the user's own.
-   */
-  readonly removing: (id: string) => boolean;
-}
 
 /**
  * The tutorial's example captures (src/main/tutorial/): saved like any
@@ -87,16 +97,12 @@ export const createPinExamples = (deps: {
   readonly newId: () => CaptureId;
   readonly now: () => Date;
   readonly warn: (message: string) => void;
-}): PinExamples => {
-  const leaving = new Set<string>();
-
+}): TutorialExamples => {
   const removeOne = async (id: CaptureId): Promise<void> => {
-    leaving.add(id);
+    const result = await deps.store.remove(id);
 
-    try {
-      await deps.store.remove(id);
-    } finally {
-      leaving.delete(id);
+    if (!result.ok) {
+      deps.warn(`Example capture not removed: ${id}`);
     }
   };
 
@@ -115,7 +121,6 @@ export const createPinExamples = (deps: {
         }
       }
     },
-    removing: (id) => leaving.has(id),
     seed: () => {
       const start = deps.now().getTime();
 
