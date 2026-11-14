@@ -23,6 +23,7 @@ import {
 import { cn } from "@/lib/utils";
 import { afterMenusClose, pickShownItem } from "@/shared/menu-keys";
 import { isMac } from "@/shared/platform";
+import { coach } from "@/tutorial/anchors";
 
 import { DueField, DuePicker } from "./due";
 import { ADD_ROW, newStep, StepsEditor } from "./steps-editor";
@@ -287,6 +288,12 @@ const leaveOnEscape = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
   }
 };
 
+/** A tutorial anchor only where the tutorial may point. */
+const onlyIf = (
+  on: boolean,
+  anchor: Readonly<Record<string, string>>
+): Readonly<Record<string, string>> => (on ? anchor : {});
+
 export interface EntryFieldsProps {
   readonly value: FieldsValue;
   readonly onChange: FieldsChange;
@@ -302,6 +309,10 @@ export interface EntryFieldsProps {
   /** The title was left blank: the library puts the saved one back. */
   readonly onTitleBlur?: () => void;
   readonly autoFocusTitle?: boolean;
+  /** The tutorial may point at the title: the panel's title tip waits for pin 1, as the preview says where to click until then. */
+  readonly coachTitle?: boolean;
+  /** The tutorial may point at the add chips: on the user's own captures, not on an example, which would use the tip up. */
+  readonly coachAddFields?: boolean;
 }
 
 /**
@@ -312,6 +323,8 @@ export interface EntryFieldsProps {
 export const EntryFields = ({
   addable = true,
   autoFocusTitle = false,
+  coachAddFields = true,
+  coachTitle = true,
   disabled = false,
   now,
   onChange,
@@ -388,7 +401,10 @@ export const EntryFields = ({
       <div className="-mx-1.5 mt-1.5 flex min-h-6 flex-wrap items-center gap-1.5">
         {dueRow}
         {pickerAnchor(
-          <span className="inline-flex flex-wrap items-center gap-0.5">
+          <span
+            className="inline-flex flex-wrap items-center gap-0.5"
+            {...onlyIf(coachAddFields, coach("add-fields"))}
+          >
             <AddChips fields={addable ? missing : []} onAdd={add} />
           </span>
         )}
@@ -406,6 +422,7 @@ export const EntryFields = ({
           !page && "px-3 pt-2.5"
         )}
         data-testid="title-field"
+        {...onlyIf(coachTitle, coach("title-field"))}
         disabled={disabled}
         maxLength={TITLE_MAX}
         onBlur={() => {

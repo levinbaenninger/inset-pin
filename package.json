@@ -19,7 +19,8 @@
     "package:mac": "electron-vite build && electron-builder --mac --publish never",
     "package:win": "electron-vite build && electron-builder --win --publish never",
     "package:dir": "electron-vite build && electron-builder --dir --publish never",
-    "icons": "node scripts/generate-icons.ts"
+    "icons": "node scripts/generate-icons.ts",
+    "postinstall": "install-electron"
   },
   "dependencies": {
     "electron-updater": "6.8.11"

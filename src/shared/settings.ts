@@ -45,4 +45,6 @@ export interface SettingsView {
   readonly settings: Settings;
   readonly openAtLogin: boolean;
   readonly version: string;
+  /** The tutorial's one-time hints show (kept with the tutorial, in tutorial.json). */
+  readonly tips: boolean;
 }

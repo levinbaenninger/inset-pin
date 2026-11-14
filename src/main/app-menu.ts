@@ -24,6 +24,12 @@ export interface AppMenuActions {
   readonly captureAfterDelay: () => void;
   readonly openLibrary: () => void;
   readonly openSettings: () => void;
+  /** Setup, at Allow access: Screen Recording. */
+  readonly setUpPermissions: () => void;
+  /** Help › Getting Started: the checklist comes back in the library. */
+  readonly gettingStarted: () => void;
+  /** Help › Show Me Around: the spotlight walkthrough of the library. */
+  readonly showMeAround: () => void;
   readonly libraryCommand: (command: LibraryCommand) => void;
   readonly setFloatOnTop: (on: boolean) => void;
   readonly openHelp: () => void;
@@ -154,6 +160,7 @@ export const appMenuTemplate = (
         click: unlessPageMenu(actions, actions.openSettings),
         label: "Settings…",
       },
+      { click: actions.setUpPermissions, label: "Set Up Permissions…" },
       SEPARATOR,
       { role: "services" },
       SEPARATOR,
@@ -242,6 +249,8 @@ export const appMenuTemplate = (
         // The page takes ⌘/ itself; the menu opens the library first.
         registerAccelerator: false,
       },
+      { click: actions.gettingStarted, label: "Getting Started" },
+      { click: actions.showMeAround, label: "Show Me Around" },
       SEPARATOR,
       { click: actions.openHelp, label: "Inset Context Pin Help" },
     ],

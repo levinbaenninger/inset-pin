@@ -13,6 +13,8 @@
   /* Text and tints in the pin's colour that stay readable in each theme: pressed tools, due today, search matches. */
   --color-pin-ink: var(--pin-ink);
   --color-pin-soft: var(--pin-soft);
+  /* A granted permission in the onboarding (src/renderer/onboarding/): Allowed, and Try it's success. */
+  --color-granted: var(--granted);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -90,6 +92,7 @@
   --sidebar-ring: oklch(0.708 0 0);
   --pin-ink: oklch(0.5 0.134 242.749);
   --pin-soft: oklch(0.588 0.158 241.966 / 13%);
+  --granted: oklch(0.508 0.118 165.612);
 }
 
 .dark {
@@ -127,6 +130,7 @@
   --sidebar-ring: oklch(0.556 0 0);
   --pin-ink: oklch(0.828 0.111 230.318);
   --pin-soft: oklch(0.685 0.169 237.323 / 22%);
+  --granted: oklch(0.845 0.143 164.978);
 }
 
 /* Windows draws the library's caption buttons over the page (src/main/library-window.ts); 0 elsewhere. */
@@ -264,5 +268,35 @@
     transition-property: left, top, width, height;
     transition-duration: 200ms;
     transition-timing-function: ease-out;
+  }
+}
+
+/* The tutorial's bubble and its arrow (src/renderer/tutorial/bubble.tsx), placed from measured values. */
+@layer components {
+  .coach-bubble {
+    left: var(--coach-x);
+    top: var(--coach-y);
+    right: auto;
+  }
+
+  .coach-arrow {
+    left: var(--coach-arrow-x);
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    background: var(--popover);
+    transform: rotate(45deg);
+  }
+
+  .coach-arrow[data-side="below"] {
+    top: -5px;
+    box-shadow: -1px -1px 0
+      color-mix(in oklab, var(--foreground) 10%, transparent);
+  }
+
+  .coach-arrow[data-side="above"] {
+    bottom: -5px;
+    box-shadow: 1px 1px 0
+      color-mix(in oklab, var(--foreground) 10%, transparent);
   }
 }

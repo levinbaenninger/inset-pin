@@ -14,8 +14,11 @@ const actions = (): AppMenuActions => ({
   openHelp: vi.fn<() => void>(),
   openLibrary: vi.fn<() => void>(),
   openSettings: vi.fn<() => void>(),
+  gettingStarted: vi.fn<() => void>(),
   pageMenuOpen: () => false,
   setFloatOnTop: vi.fn<(on: boolean) => void>(),
+  setUpPermissions: vi.fn<() => void>(),
+  showMeAround: vi.fn<() => void>(),
   showShortcuts: vi.fn<() => void>(),
 });
 

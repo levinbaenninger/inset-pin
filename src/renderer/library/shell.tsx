@@ -16,13 +16,14 @@ import {
   keyLabels,
   libraryShortcuts,
 } from "@shared/shortcuts";
+import type { TutorialAction, TutorialView } from "@shared/tutorial";
 import {
   getRouteApi,
   Outlet,
   useNavigate,
   useParams,
 } from "@tanstack/react-router";
-import { useEffect, useEffectEvent, useMemo } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef } from "react";
 import { flushSync } from "react-dom";
 
 import { Button } from "@/components/ui/button";
@@ -33,8 +34,14 @@ import { IconButton, SHORTCUTS_ICON } from "@/shared/icon-button";
 import { inLayer, isTextField, promptOpen } from "@/shared/key-targets";
 import { isMac } from "@/shared/platform";
 import { ShortcutSheet } from "@/shared/shortcut-sheet";
+import { coach } from "@/tutorial/anchors";
+import { Checklist } from "@/tutorial/checklist";
+import { HintLayer } from "@/tutorial/hint-layer";
+import { Spotlight } from "@/tutorial/spotlight";
+import { useTutorial } from "@/tutorial/use-tutorial";
 
 import { onCommand } from "./command-bus";
+import { ExamplesContext, removeExamplesHere } from "./examples";
 import { useLibraryState } from "./library-state";
 import type { ListKind } from "./list-model";
 import {
@@ -46,8 +53,25 @@ import {
 } from "./list-model";
 import { Groups, SearchField } from "./recent-list";
 import { ResizeHandle, SidebarToggle, useSidebar } from "./sidebar";
+import { setWalkCovers } from "./walk-cover";
 
 const api = libraryBridge();
+
+/** The in-app tutorial (src/renderer/tutorial/), over the library's contract. */
+const tutorialSource = {
+  load: async () => await api.getTutorial(),
+  subscribe: (listener: (view: TutorialView) => void) =>
+    api.on("tutorial", listener),
+};
+
+const actTutorial = (action: TutorialAction): void => {
+  api.tutorial(action);
+};
+
+const endWalk = (): void => {
+  api.tutorial({ kind: "spotlightDone" });
+};
+
 const rootRoute = getRouteApi("__root__");
 const KEYS = keyLabels(isMac);
 
@@ -231,8 +255,57 @@ export const Shell = () => {
   const { captureId } = useParams({ strict: false });
   const sidebar = useSidebar();
 
-  const { list, now, parsed, query, setList, setSheetOpen, sheetOpen } =
-    useLibraryState();
+  const {
+    list,
+    now,
+    parsed,
+    query,
+    setList,
+    setQuery,
+    setSheetOpen,
+    sheetOpen,
+  } = useLibraryState();
+
+  const tutorial = useTutorial(tutorialSource);
+
+  const examples = useMemo(
+    () => new Set(tutorial.examples),
+    [tutorial.examples]
+  );
+
+  // The walkthrough starts on the list as it is: a search and the Done list close with it.
+  const walked = useRef<number | null>(null);
+
+  const onTutorial = useEffectEvent((next: TutorialView) => {
+    const seq = next.spotlight?.seq ?? null;
+
+    if (seq !== null && seq !== walked.current) {
+      walked.current = seq;
+      setQuery("");
+      setList("active");
+    }
+  });
+
+  useEffect(() => api.on("tutorial", onTutorial), []);
+
+  // While the walkthrough runs, the menus' commands and Edit › Copy act on nothing behind it.
+  const walking = tutorial.spotlight !== null;
+
+  useEffect(() => {
+    setWalkCovers(walking);
+  }, [walking]);
+
+  const navRef = useRef<HTMLElement>(null);
+  const hasChecklist = tutorial.checklist !== null;
+
+  // The checklist coming up, at launch or from Getting Started, brings the list back to it.
+  useEffect(() => {
+    if (hasChecklist) {
+      requestAnimationFrame(() => {
+        navRef.current?.scrollTo({ top: 0 });
+      });
+    }
+  }, [hasChecklist]);
 
   const searching = !isEmptyQuery(parsed) || query.trim() !== "";
   const ordered = useMemo(() => listOrder(captures), [captures]);
@@ -286,129 +359,153 @@ export const Shell = () => {
     [setList]
   );
 
+  // Remove Examples: an example still open moves on once it's gone (CapturePage), instead of saying it no longer exists.
+  const actChecklist = (action: TutorialAction): void => {
+    if (action.kind === "removeExamples") {
+      removeExamplesHere(tutorial.examples);
+    }
+
+    actTutorial(action);
+  };
+
   return (
-    <TooltipProvider delayDuration={500}>
-      <div className="text-foreground flex h-svh in-data-[platform=mac]:bg-transparent">
-        <aside
-          aria-label="Captures"
-          className="in-data-[platform=windows]:bg-muted/50 relative flex w-(--sidebar-width) shrink-0 flex-col data-[collapsed=true]:hidden"
-          data-collapsed={sidebar.state.collapsed}
-          data-material=""
-          style={{ "--sidebar-width": `${sidebar.state.width}px` }}
-        >
-          <header className="app-drag [&_button]:app-no-drag flex h-11 shrink-0 items-center gap-0.5 px-2 in-data-[platform=mac]:pl-23">
-            <h1 className="sr-only">Captures</h1>
-            <SidebarToggle />
-            <span className="flex-1" />
-            <IconButton
-              icon={Add01Icon}
-              label="New capture in 3 seconds"
-              onClick={() => {
-                api.captureSoon();
-              }}
-            />
-          </header>
-          <div className="px-2.5 pb-2">
-            <SearchField />
-          </div>
-          {/* A due: still being typed filters nothing, so it gets no count. */}
-          {!isEmptyQuery(parsed) && shown.length > 0 ? (
-            <p className="text-muted-foreground px-4 pb-1 text-xs tabular-nums">
-              {shown.length} of {inList} {list === "done" ? "done" : ""}
-            </p>
-          ) : null}
-          <nav
-            aria-label={list === "done" ? "Done" : "Captures"}
-            className="min-h-0 flex-1 [scrollbar-gutter:stable] overflow-y-auto px-2 pb-3"
+    <ExamplesContext value={examples}>
+      <TooltipProvider delayDuration={500}>
+        <div className="text-foreground flex h-svh in-data-[platform=mac]:bg-transparent">
+          <aside
+            aria-label="Captures"
+            className="in-data-[platform=windows]:bg-muted/50 relative flex w-(--sidebar-width) shrink-0 flex-col data-[collapsed=true]:hidden"
+            data-collapsed={sidebar.state.collapsed}
+            data-material=""
+            style={{ "--sidebar-width": `${sidebar.state.width}px` }}
           >
-            {list === "done" ? (
-              <button
-                className={cn(ROW, "mb-1")}
-                data-testid="back-to-list"
-                onClick={() => {
-                  setList("active");
-                }}
-                type="button"
-              >
-                <HugeiconsIcon icon={ArrowLeft01Icon} size={14} />
-                <span className="font-medium">Done</span>
-                <span className="text-muted-foreground ml-auto text-xs tabular-nums">
-                  {doneCount}
-                </span>
-              </button>
-            ) : null}
-            {shown.length === 0 ? (
-              <EmptyList
-                elsewhere={elsewhere}
-                list={list}
-                total={captures.length}
-              />
-            ) : (
-              <Groups activeId={captureId} groups={groups} />
-            )}
-          </nav>
-          <footer className="border-foreground/5 flex shrink-0 flex-col gap-1 border-t px-2 pt-1.5 pb-2">
-            {list === "active" && doneCount > 0 ? (
-              <button
-                className={ROW}
-                data-testid="open-done"
-                onClick={() => {
-                  setList("done");
-                }}
-                type="button"
-              >
-                <HugeiconsIcon
-                  className="text-muted-foreground"
-                  icon={CheckmarkCircle02Icon}
-                  size={14}
-                />
-                <span className="flex-1 text-left">Done</span>
-                <span className="text-muted-foreground text-xs tabular-nums">
-                  {doneCount}
-                </span>
-                <HugeiconsIcon
-                  className="text-muted-foreground"
-                  icon={ArrowRight01Icon}
-                  size={14}
-                />
-              </button>
-            ) : null}
-            <div className="flex items-center gap-0.5">
+            <header className="app-drag [&_button]:app-no-drag flex h-11 shrink-0 items-center gap-0.5 px-2 in-data-[platform=mac]:pl-23">
+              <h1 className="sr-only">Captures</h1>
+              <SidebarToggle />
+              <span className="flex-1" />
               <IconButton
-                icon={Settings01Icon}
-                keys={KEYS.settings}
-                label="Settings"
+                icon={Add01Icon}
+                label="New capture in 3 seconds"
                 onClick={() => {
-                  api.openSettings();
+                  api.captureSoon();
                 }}
-                side="top"
               />
-              <IconButton
-                icon={SHORTCUTS_ICON}
-                keys={KEYS.shortcuts}
-                label="Keyboard shortcuts"
-                onClick={() => {
-                  setSheetOpen(true);
-                }}
-                side="top"
-              />
+            </header>
+            <div className="px-2.5 pb-2" {...coach("search")}>
+              <SearchField />
             </div>
-          </footer>
-          <ResizeHandle />
-        </aside>
-        <div
-          className="bg-background border-foreground/10 in-data-[platform=mac]:dark:bg-card flex min-w-0 flex-1 flex-col border-l data-[collapsed=true]:border-l-0"
-          data-collapsed={sidebar.state.collapsed}
-        >
-          <Outlet />
+            {/* A due: still being typed filters nothing, so it gets no count. */}
+            {!isEmptyQuery(parsed) && shown.length > 0 ? (
+              <p className="text-muted-foreground px-4 pb-1 text-xs tabular-nums">
+                {shown.length} of {inList} {list === "done" ? "done" : ""}
+              </p>
+            ) : null}
+            <nav
+              aria-label={list === "done" ? "Done" : "Captures"}
+              className="min-h-0 flex-1 [scrollbar-gutter:stable] overflow-y-auto px-2 pb-3"
+              ref={navRef}
+              {...coach("capture-list")}
+            >
+              {/* Getting started at the top of the list, out of the way of a search and the Done list. */}
+              {tutorial.checklist === null ||
+              searching ||
+              list === "done" ? null : (
+                <Checklist act={actChecklist} view={tutorial.checklist} />
+              )}
+              {list === "done" ? (
+                <button
+                  className={cn(ROW, "mb-1")}
+                  data-testid="back-to-list"
+                  onClick={() => {
+                    setList("active");
+                  }}
+                  type="button"
+                >
+                  <HugeiconsIcon icon={ArrowLeft01Icon} size={14} />
+                  <span className="font-medium">Done</span>
+                  <span className="text-muted-foreground ml-auto text-xs tabular-nums">
+                    {doneCount}
+                  </span>
+                </button>
+              ) : null}
+              {shown.length === 0 ? (
+                <EmptyList
+                  elsewhere={elsewhere}
+                  list={list}
+                  total={captures.length}
+                />
+              ) : (
+                <Groups activeId={captureId} groups={groups} />
+              )}
+            </nav>
+            <footer className="border-foreground/5 flex shrink-0 flex-col gap-1 border-t px-2 pt-1.5 pb-2">
+              {list === "active" && doneCount > 0 ? (
+                <button
+                  className={ROW}
+                  data-testid="open-done"
+                  onClick={() => {
+                    setList("done");
+                  }}
+                  type="button"
+                >
+                  <HugeiconsIcon
+                    className="text-muted-foreground"
+                    icon={CheckmarkCircle02Icon}
+                    size={14}
+                  />
+                  <span className="flex-1 text-left">Done</span>
+                  <span className="text-muted-foreground text-xs tabular-nums">
+                    {doneCount}
+                  </span>
+                  <HugeiconsIcon
+                    className="text-muted-foreground"
+                    icon={ArrowRight01Icon}
+                    size={14}
+                  />
+                </button>
+              ) : null}
+              <div
+                className="flex items-center gap-0.5"
+                {...coach("sidebar-foot")}
+              >
+                <IconButton
+                  icon={Settings01Icon}
+                  keys={KEYS.settings}
+                  label="Settings"
+                  onClick={() => {
+                    api.openSettings();
+                  }}
+                  side="top"
+                />
+                <IconButton
+                  icon={SHORTCUTS_ICON}
+                  keys={KEYS.shortcuts}
+                  label="Keyboard shortcuts"
+                  onClick={() => {
+                    setSheetOpen(true);
+                  }}
+                  side="top"
+                />
+              </div>
+            </footer>
+            <ResizeHandle />
+          </aside>
+          <div
+            className="bg-background border-foreground/10 in-data-[platform=mac]:dark:bg-card flex min-w-0 flex-1 flex-col border-l data-[collapsed=true]:border-l-0"
+            data-collapsed={sidebar.state.collapsed}
+          >
+            <Outlet />
+          </div>
         </div>
-      </div>
-      <ShortcutSheet
-        groups={libraryShortcuts(isMac)}
-        onOpenChange={setSheetOpen}
-        open={sheetOpen}
-        shortcut={KEYS.shortcuts}
-      />
-    </TooltipProvider>
+        <ShortcutSheet
+          groups={libraryShortcuts(isMac)}
+          onOpenChange={setSheetOpen}
+          open={sheetOpen}
+          shortcut={KEYS.shortcuts}
+        />
+        <HintLayer act={actTutorial} view={tutorial} />
+        <Spotlight onDone={endWalk} run={tutorial.spotlight} />
+      </TooltipProvider>
+    </ExamplesContext>
   );
 };
