@@ -42,15 +42,15 @@ const row = (
 
 /**
  * The tutorial's example captures' image (src/main/pin-tutorial.ts): a
- * budget table, 480 × 300 points at 2 pixels per point. Its numbers sit
- * where the examples' pins point.
+ * budget table, 480 × 300 points at 2 pixels per point, in a plain title
+ * bar that belongs to no system. Its numbers sit where the examples' pins
+ * point.
  */
 const exampleSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 300" font-family="${FONT}" font-size="14" fill="#1d1d1f">
 <rect width="480" height="300" fill="#ffffff"/>
 <rect width="480" height="34" fill="#f1f1f3"/>
 <rect y="34" width="480" height="1" fill="#dedee2"/>
-<circle cx="18" cy="17" r="5.5" fill="#ff5f57"/><circle cx="36" cy="17" r="5.5" fill="#febc2e"/><circle cx="54" cy="17" r="5.5" fill="#28c840"/>
-<text x="72" y="21.5" font-size="12" font-weight="600" fill="#555555">Office move budget.numbers</text>
+<text x="16" y="21.5" font-size="12" font-weight="600" fill="#555555">Office move budget</text>
 <rect x="16" y="50" width="448" height="26" fill="#fafafb"/>
 <g font-size="12" font-weight="600" fill="#6e6e73">
 <text x="28" y="68">Item</text><text x="262" y="68" text-anchor="end">Quote</text><text x="342" y="68" text-anchor="end">Cap</text><text x="436" y="68" text-anchor="end">Diff</text>

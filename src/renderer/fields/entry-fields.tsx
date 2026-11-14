@@ -193,7 +193,6 @@ const AddMenu = ({
           className={ADD_ROW}
           data-due-home=""
           data-testid="add-menu"
-          {...coach("add-menu")}
           disabled={disabled}
           type="button"
         >
@@ -390,7 +389,10 @@ export const EntryFields = ({
       <div className="-mx-1.5 mt-1.5 flex min-h-6 flex-wrap items-center gap-1.5">
         {dueRow}
         {pickerAnchor(
-          <span className="inline-flex flex-wrap items-center gap-0.5">
+          <span
+            className="inline-flex flex-wrap items-center gap-0.5"
+            {...coach("add-fields")}
+          >
             <AddChips fields={addable ? missing : []} onAdd={add} />
           </span>
         )}

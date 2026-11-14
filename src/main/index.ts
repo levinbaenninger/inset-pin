@@ -60,6 +60,7 @@ import {
 import {
   CAPTURE_PAGE,
   CHECKLIST_TITLE,
+  EXAMPLE_IMAGE,
   checklistDoneText,
   HOME_PAGE,
   PIN_TASK_IDS,
@@ -72,6 +73,7 @@ import { createPinWindows } from "./pin-windows";
 import { handleInsetProtocol, registerInsetScheme } from "./protocol";
 import { createQuitGate } from "./quit-gate";
 import { createQuitPath } from "./quit-path";
+import { serialWrites } from "./serial-writes";
 import { nodeSettingsFs, openSettingsStore } from "./settings-store";
 import { createSettingsWindow } from "./settings-window";
 import { failNextWrite, nodeStoreFs, openCaptureStore } from "./store";
@@ -128,15 +130,11 @@ const explainFailure = async <T>(
   }
 };
 
-/** The app's resources folder: packed beside the asar, or the repo's in development. */
-const resourcesDir = (): string =>
-  app.isPackaged
-    ? path.join(process.resourcesPath, "resources")
-    : path.join(app.getAppPath(), "resources");
-
 /** macOS tints the template; Windows needs the glyph that contrasts with its taskbar, which has its own theme. */
 const trayIconPath = (): string => {
-  const base = resourcesDir();
+  const base = app.isPackaged
+    ? path.join(process.resourcesPath, "resources")
+    : path.join(app.getAppPath(), "resources");
 
   if (isMac) {
     return path.join(base, "trayTemplate.png");
@@ -197,6 +195,9 @@ const start = async (): Promise<void> => {
   const settings = await openSettingsStore(dataDir, nodeSettingsFs);
   const pinnedImage = createPinnedImage(store);
 
+  // Setup's and the tutorial's files, one write at a time: two renames onto one file at once fail on Windows.
+  const stateFs = serialWrites(nodeSettingsFs);
+
   // Set once the windows the tutorial hints in, and their IPC servers, exist.
   const tutorialPages = {
     emit: ignore,
@@ -214,8 +215,19 @@ const start = async (): Promise<void> => {
       examples: pinExamples(isMac),
       newId: () => CaptureIdSchema.parse(randomUUID()),
       now: () => new Date(),
+      // Found from this file in development, so a start with the script's path (out/main/index.js) finds it too.
       readImage: async () =>
-        await readFile(path.join(resourcesDir(), "example-capture.png")),
+        await readFile(
+          app.isPackaged
+            ? path.join(process.resourcesPath, "resources", EXAMPLE_IMAGE.file)
+            : path.join(
+                import.meta.dirname,
+                "..",
+                "..",
+                "resources",
+                EXAMPLE_IMAGE.file
+              )
+        ),
       store: {
         has: (id) => store.get(id) !== undefined,
         publish: async (record, png) => await store.publish(record, png),
@@ -235,10 +247,7 @@ const start = async (): Promise<void> => {
     },
     pageVisible: (page) => tutorialPages.visible(page),
     spotlight: pinSpotlight(isMac),
-    store: createTutorialStore(
-      path.join(dataDir, "tutorial.json"),
-      nodeSettingsFs
-    ),
+    store: createTutorialStore(path.join(dataDir, "tutorial.json"), stateFs),
     tasks: pinTasks(isMac),
     title: CHECKLIST_TITLE,
     warn: (message) => {
@@ -341,6 +350,9 @@ const start = async (): Promise<void> => {
       menus.refresh();
     },
     onFocusChange: () => {
+      // The library coming to the front again, from Recent captures… or the taskbar: Find it in the library.
+      // oxlint-disable-next-line no-use-before-define -- defined once the library exists.
+      findInLibrary();
       menus.refresh();
     },
     onRejected: logRejected,
@@ -536,7 +548,7 @@ const start = async (): Promise<void> => {
     setTimer,
     store: createOnboardingStore(
       path.join(dataDir, "onboarding.json"),
-      nodeSettingsFs
+      stateFs
     ),
     tagline: PIN_TAGLINE,
     tile: appTile.view,

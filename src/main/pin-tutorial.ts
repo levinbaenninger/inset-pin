@@ -127,12 +127,13 @@ export const pinHints = (mac: boolean): readonly TutorialHint[] => {
       title: "Your library",
     },
     {
-      anchor: "add-menu",
+      // The library's chips for the fields a capture doesn't have yet; the panel's Add menu isn't in the library.
+      anchor: "add-fields",
       id: "add-fields",
       page: HOME_PAGE,
       placement: "below",
       task: null,
-      text: "Add a description, next steps or a due date. None of it is needed when you capture.",
+      text: "Add a description, next steps or a due date here. None of it is needed when you capture.",
       title: null,
     },
   ];

@@ -516,6 +516,13 @@ const LIBRARY_HINT = shownHint(
   "inside"
 );
 
+const ADD_FIELDS_HINT = shownHint(
+  "add-fields",
+  "add-fields",
+  null,
+  "Add a description, next steps or a due date here. None of it is needed when you capture."
+);
+
 /** The first run's example captures (src/main/pin-tutorial.ts), on their bundled image. */
 const EXAMPLE_IDS = [uuid(51), uuid(52)];
 
@@ -6578,6 +6585,20 @@ const checkOnboarding = async (
     { hash: `/captures/${EXAMPLE_IDS[0] ?? ""}` }
   );
 
+  // The library's fields tip points at its add chips, which a capture without a Due shows.
+  const addFieldsTip = await calls(
+    "library",
+    {
+      ...examplesLibrary,
+      tutorial: tutorialView({ active: ADD_FIELDS_HINT, examples: true }),
+    },
+    async (tab) => {
+      await tab.getByText("None of it is needed when you capture.").waitFor();
+      await click(tab, "Got it");
+    },
+    { hash: `/captures/${EXAMPLE_IDS[0] ?? ""}` }
+  );
+
   // A tip never takes the keyboard from the title: typing after ⌥⌘P still lands there.
   let titleKept = { focus: "", typed: false };
 
@@ -6728,6 +6749,7 @@ const checkOnboarding = async (
     "setup and tutorial: Welcome's Return and Not now; Allow and Back; Reopen to finish, the tile's drag and Not now; Reopening… asks again; Done's two ways into the library; the checklist tags the examples, asks only for a task's how-to, and removes the examples; a drawn tip is seen and Got it puts it away, in the library and the panel, where the title keeps the keyboard; the walkthrough's Next has focus at stops 1 and 2, and Esc ends it; Settings' Show tips and Reset Tutorial; the panel hands Screen Recording to setup, and an empty image offers the pane and a reopen",
     {
       access,
+      addFieldsTip,
       checklist,
       done,
       empty,
@@ -6746,6 +6768,10 @@ const checkOnboarding = async (
     },
     {
       access: ["allow:screen", "back"],
+      addFieldsTip: [
+        "tutorial:hintShown:add-fields",
+        "tutorial:dismissHint:add-fields",
+      ],
       checklist: ["tutorial:taskHint:pin", "tutorial:removeExamples:"],
       done: ["finish:showAround", "finish:start"],
       empty: ["openScreenSettings", "relaunch"],
