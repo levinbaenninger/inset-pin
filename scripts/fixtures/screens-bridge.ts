@@ -357,7 +357,7 @@ export const installBridge = (input: BridgeInput): void => {
       tutorial: (action: { readonly kind: string; readonly id?: string }) => {
         record(`tutorial:${action.kind}:${action.id ?? ""}`);
 
-        // As main: the examples leave the tutorial's view at once, and the list once their files are deleted.
+        // As main: the examples leave the tutorial's view at once, and the list once their files are deleted, a few hundred ms later.
         if (action.kind === "removeExamples") {
           const view = input.tutorial;
 
@@ -381,7 +381,7 @@ export const installBridge = (input: BridgeInput): void => {
             }
 
             emit("changed", null);
-          }, 50);
+          }, 400);
         }
       },
       copyDetails: gated("copyDetails"),

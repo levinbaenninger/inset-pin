@@ -115,7 +115,8 @@ const Unavailable = ({
  */
 const CaptureView = ({ capture }: { readonly capture: SavedCapture }) => {
   const { id } = capture;
-  const example = use(ExamplesContext).has(id);
+  // Remove Examples drops an example from the list at once and from the store a moment later: until then it is still one.
+  const example = use(ExamplesContext).has(id) || removedHere(id);
   const { now } = useLibraryState();
   const { commands, dialog, entries } = useCaptureCommands(capture);
   const draft = useDraft(id);

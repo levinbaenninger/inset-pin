@@ -6582,18 +6582,24 @@ const checkOnboarding = async (
     { hash: `/captures/${EXAMPLE_IDS[0] ?? ""}` }
   );
 
-  // Remove Examples with an example open: the library moves on to what is left, not to "This capture no longer exists".
+  // Remove Examples with an example open: the library moves on to what is left, not to "This capture no longer exists",
+  // and the example on its way out never counts as the user's own, so it can't use up the add-chips tip.
   const afterRemoval = async (captures: SceneData["captures"]) => {
     const { context, tab } = await open(
       "library",
-      { captures, tutorial: tutorialView({ examples: true }) },
+      {
+        captures,
+        tutorial: tutorialView({ examples: true, offered: [ADD_FIELDS_HINT] }),
+      },
       `/captures/${EXAMPLE_IDS[0] ?? ""}`
     );
 
     await tab.getByText("Getting started").waitFor();
     await tab.getByRole("button", { name: "Getting started menu" }).click();
     await tab.getByRole("menuitem", { name: "Remove Examples" }).click();
-    await tab.waitForTimeout(600);
+    await tab.waitForTimeout(1200);
+
+    const asked = await bridgeCalls(tab, "__calls");
 
     const shows = await tab.evaluate(() => ({
       gone:
@@ -6604,7 +6610,10 @@ const checkOnboarding = async (
 
     await context.close();
 
-    return shows;
+    return {
+      ...shows,
+      tipAsked: asked.includes("tutorial:requestHint:add-fields"),
+    };
   };
 
   const removedBesideOwn = await afterRemoval([
@@ -7000,8 +7009,13 @@ const checkOnboarding = async (
       ],
       panel: ["setUpScreenRecording"],
       panelTip: ["tutorial:hintShown:title", "tutorial:dismissHint:title"],
-      removedAll: { gone: false, open: "#/" },
-      removedBesideOwn: { gone: false, open: `#/captures/${OWN_CAPTURE.id}` },
+      removedAll: { gone: false, open: "#/", tipAsked: false },
+      // Asked for on the user's own capture, once the pane has moved there.
+      removedBesideOwn: {
+        gone: false,
+        open: `#/captures/${OWN_CAPTURE.id}`,
+        tipAsked: true,
+      },
       reopen: ["reopen", "startDrag", "next"],
       reopening: ["reopen"],
       settingsCalls: ["setTips:false", "resetTutorial"],
