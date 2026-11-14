@@ -14,13 +14,19 @@ import {
   exampleRecord,
 } from "./pin-examples";
 import {
+  CHECKLIST_TITLE,
   EXAMPLE_IMAGE,
+  HOME_PAGE,
   PIN_TASK_IDS,
   pinExamples,
   pinHints,
   pinSpotlight,
   pinTasks,
 } from "./pin-tutorial";
+import { freshRecord } from "./tutorial/store";
+import type { TutorialRecord } from "./tutorial/store";
+import { createTutorial } from "./tutorial/tutorial";
+import type { Tutorial } from "./tutorial/tutorial";
 
 /** Every key the app answers, as its Keyboard Shortcuts sheets write them for the system. */
 const realKeys = (mac: boolean): ReadonlySet<string> =>
@@ -155,6 +161,153 @@ describe("Inset Context Pin's tutorial", () => {
       windows: ["Ctrl+Alt+P", "Ctrl+Shift+C", "Ctrl+Enter"],
     });
   });
+
+  it.each([false, true])(
+    "keeps queued and failed removals tagged without completing the library task (failure: %s)",
+    async (fail) => {
+      const ids = [ID(1), ID(2)];
+      const items = new Set(ids);
+
+      const pending: {
+        readonly id: CaptureId;
+        readonly finish: (removed: boolean) => void;
+      }[] = [];
+
+      let saved: TutorialRecord = {
+        ...freshRecord(),
+        examples: ids,
+        examplesSeeded: true,
+      };
+
+      let tutorial: Tutorial;
+
+      // As the library's store subscription: only a non-example ticks this task.
+      const findInLibrary = (): void => {
+        if (
+          [...items].some(
+            (id) => !tutorial.view(HOME_PAGE).examples.includes(id)
+          )
+        ) {
+          tutorial.complete(PIN_TASK_IDS.library);
+        }
+      };
+
+      const examples = createPinExamples({
+        examples: pinExamples(true),
+        newId: () => ID(3),
+        now: () => new Date(),
+        readImage: async () => await Promise.resolve(new Uint8Array()),
+        store: {
+          has: (id) => items.has(id),
+          publish: async () => await Promise.resolve({ ok: true }),
+          remove: async (id) => {
+            // oxlint-disable-next-line promise/avoid-new -- the test finishes each queued deletion through this callback.
+            await new Promise<void>((resolve) => {
+              pending.push({
+                finish: (removed) => {
+                  if (removed) {
+                    items.delete(id);
+                    findInLibrary();
+                  }
+
+                  resolve();
+                },
+                id,
+              });
+            });
+          },
+        },
+        warn: () => {},
+      });
+
+      const deps = {
+        doneText: "All done.",
+        examples,
+        firstRun: async () => await Promise.resolve(false),
+        hints: pinHints(true),
+        home: HOME_PAGE,
+        onChange: () => {},
+        pageVisible: () => true,
+        spotlight: pinSpotlight(true),
+        store: {
+          read: async () => await Promise.resolve(saved),
+          write: async (next: typeof saved) => {
+            saved = next;
+            await Promise.resolve();
+          },
+        },
+        tasks: pinTasks(true),
+        title: CHECKLIST_TITLE,
+      };
+
+      tutorial = createTutorial(deps);
+
+      const state = () => ({
+        examples: tutorial.view(HOME_PAGE).examples,
+        libraryDone: tutorial
+          .view(HOME_PAGE)
+          .checklist?.tasks.find((task) => task.id === PIN_TASK_IDS.library)
+          ?.done,
+        retry: tutorial.view(HOME_PAGE).checklist?.examples,
+      });
+
+      await tutorial.load();
+      tutorial.act(HOME_PAGE, { kind: "removeExamples" });
+
+      expect(state()).toStrictEqual({
+        examples: ids,
+        libraryDone: false,
+        retry: true,
+      });
+
+      pending[0]?.finish(true);
+
+      expect(state()).toStrictEqual({
+        examples: [ID(2)],
+        libraryDone: false,
+        retry: true,
+      });
+
+      pending[1]?.finish(!fail);
+      await tutorial.settled();
+
+      // A failed deletion keeps its tag and retry action even after a restart.
+      tutorial = createTutorial(deps);
+      await tutorial.load();
+
+      expect(state()).toStrictEqual({
+        examples: fail ? [ID(2)] : [],
+        libraryDone: false,
+        retry: fail,
+      });
+
+      if (fail) {
+        tutorial.act(HOME_PAGE, { kind: "removeExamples" });
+
+        pending[2]?.finish(true);
+      }
+
+      expect({
+        ...state(),
+        removed: pending.map((item) => item.id),
+      }).toStrictEqual({
+        examples: [],
+        libraryDone: false,
+        retry: false,
+        removed: fail ? [...ids, ID(2)] : ids,
+      });
+
+      items.add(ID(3));
+      findInLibrary();
+
+      expect(state()).toStrictEqual({
+        examples: [],
+        libraryDone: true,
+        retry: false,
+      });
+      await tutorial.settled();
+    }
+  );
 
   it("saves the examples through the store, newest first, and removes them by id", async () => {
     const published: CaptureRecord[] = [];
