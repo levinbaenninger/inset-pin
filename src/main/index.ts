@@ -200,6 +200,35 @@ const start = async (): Promise<void> => {
     visible: (_page: string): boolean => false,
   };
 
+  const examples = createPinExamples({
+    examples: pinExamples(isMac),
+    newId: () => CaptureIdSchema.parse(randomUUID()),
+    now: () => new Date(),
+    // Found from this file in development, so a start with the script's path (out/main/index.js) finds it too.
+    readImage: async () =>
+      await readFile(
+        app.isPackaged
+          ? path.join(process.resourcesPath, "resources", EXAMPLE_IMAGE.file)
+          : path.join(
+              import.meta.dirname,
+              "..",
+              "..",
+              "resources",
+              EXAMPLE_IMAGE.file
+            )
+      ),
+    store: {
+      has: (id) => store.get(id) !== undefined,
+      publish: async (record, png) => await store.publish(record, png),
+      remove: async (id) => {
+        await store.remove(id);
+      },
+    },
+    warn: (message) => {
+      console.warn(message);
+    },
+  });
+
   /**
    * The in-app tutorial (src/main/tutorial/): the Getting started checklist,
    * one-time hints, the walkthrough and the example captures, on macOS and
@@ -207,34 +236,7 @@ const start = async (): Promise<void> => {
    */
   const tutorial = createTutorial({
     doneText: checklistDoneText(isMac),
-    examples: createPinExamples({
-      examples: pinExamples(isMac),
-      newId: () => CaptureIdSchema.parse(randomUUID()),
-      now: () => new Date(),
-      // Found from this file in development, so a start with the script's path (out/main/index.js) finds it too.
-      readImage: async () =>
-        await readFile(
-          app.isPackaged
-            ? path.join(process.resourcesPath, "resources", EXAMPLE_IMAGE.file)
-            : path.join(
-                import.meta.dirname,
-                "..",
-                "..",
-                "resources",
-                EXAMPLE_IMAGE.file
-              )
-        ),
-      store: {
-        has: (id) => store.get(id) !== undefined,
-        publish: async (record, png) => await store.publish(record, png),
-        remove: async (id) => {
-          await store.remove(id);
-        },
-      },
-      warn: (message) => {
-        console.warn(message);
-      },
-    }),
+    examples,
     firstRun: async () => await Promise.resolve(!ranBefore),
     hints: pinHints(isMac),
     home: HOME_PAGE,
@@ -256,9 +258,13 @@ const start = async (): Promise<void> => {
 
   await tutorial.load();
 
-  /** One of the first run's example captures, while it is still in the library. */
+  /**
+   * One of the first run's example captures, while it is still in the
+   * library: Remove Examples drops them from the tutorial at once, and from
+   * the store a moment later.
+   */
   const isExample = (id: string): boolean =>
-    tutorial.view(HOME_PAGE).examples.includes(id);
+    tutorial.view(HOME_PAGE).examples.includes(id) || examples.removing(id);
 
   /** A capture the user made: the library has more than the examples. */
   const hasOwnCapture = (): boolean =>

@@ -66,6 +66,15 @@ const parse = (id: string): CaptureId | null => {
   return parsed.success ? parsed.data : null;
 };
 
+export interface PinExamples extends TutorialExamples {
+  /**
+   * An example on its way out: the tutorial forgets it at once, the store
+   * deletes it a moment later. Until then it is still an example, not a
+   * capture of the user's own.
+   */
+  readonly removing: (id: string) => boolean;
+}
+
 /**
  * The tutorial's example captures (src/main/tutorial/): saved like any
  * capture, through the store, on the very first run only. The ids come back
@@ -78,50 +87,69 @@ export const createPinExamples = (deps: {
   readonly newId: () => CaptureId;
   readonly now: () => Date;
   readonly warn: (message: string) => void;
-}): TutorialExamples => ({
-  exists: (id) => {
-    const parsed = parse(id);
+}): PinExamples => {
+  const leaving = new Set<string>();
 
-    return parsed !== null && deps.store.has(parsed);
-  },
-  remove: (ids) => {
-    for (const id of ids) {
+  const removeOne = async (id: CaptureId): Promise<void> => {
+    leaving.add(id);
+
+    try {
+      await deps.store.remove(id);
+    } finally {
+      leaving.delete(id);
+    }
+  };
+
+  return {
+    exists: (id) => {
       const parsed = parse(id);
 
-      if (parsed !== null) {
-        void deps.store.remove(parsed);
-      }
-    }
-  },
-  seed: () => {
-    const start = deps.now().getTime();
+      return parsed !== null && deps.store.has(parsed);
+    },
+    remove: (ids) => {
+      for (const id of ids) {
+        const parsed = parse(id);
 
-    const records = deps.examples.map((example, index) =>
-      exampleRecord(example, deps.newId(), new Date(start - index * MINUTE_MS))
-    );
-
-    const write = async (): Promise<void> => {
-      try {
-        const png = await deps.readImage();
-
-        for (const record of records) {
-          // One at a time, as the store queues its writes anyway.
-          // oxlint-disable-next-line no-await-in-loop
-          const result = await deps.store.publish(record, png);
-
-          if (!result.ok) {
-            deps.warn(`Example capture not saved: ${record.title}`);
-          }
+        if (parsed !== null) {
+          void removeOne(parsed);
         }
-      } catch (error) {
-        deps.warn(
-          `Example captures not saved: ${error instanceof Error ? error.message : String(error)}`
-        );
       }
-    };
+    },
+    removing: (id) => leaving.has(id),
+    seed: () => {
+      const start = deps.now().getTime();
 
-    void write();
+      const records = deps.examples.map((example, index) =>
+        exampleRecord(
+          example,
+          deps.newId(),
+          new Date(start - index * MINUTE_MS)
+        )
+      );
 
-    return records.map((record) => record.id);
-  },
-});
+      const write = async (): Promise<void> => {
+        try {
+          const png = await deps.readImage();
+
+          for (const record of records) {
+            // One at a time, as the store queues its writes anyway.
+            // oxlint-disable-next-line no-await-in-loop
+            const result = await deps.store.publish(record, png);
+
+            if (!result.ok) {
+              deps.warn(`Example capture not saved: ${record.title}`);
+            }
+          }
+        } catch (error) {
+          deps.warn(
+            `Example captures not saved: ${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+      };
+
+      void write();
+
+      return records.map((record) => record.id);
+    },
+  };
+};

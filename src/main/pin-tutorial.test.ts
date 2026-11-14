@@ -14,6 +14,7 @@ import {
   exampleRecord,
 } from "./pin-examples";
 import {
+  CAPTURE_PAGE,
   EXAMPLE_IMAGE,
   PIN_TASK_IDS,
   pinExamples,
@@ -204,6 +205,51 @@ describe("Inset Context Pin's tutorial", () => {
       newestFirst: ["2026-11-11T09:00:00.000Z", "2026-11-11T08:59:00.000Z"],
       removed: [ID(2)],
       task: "capture",
+    });
+  });
+
+  it("gives the panel only the title tip: the preview says where to click, and a pin tip has no room beside it", () => {
+    expect(
+      pinHints(true)
+        .filter((hint) => hint.page === CAPTURE_PAGE)
+        .map((hint) => ({ id: hint.id, task: hint.task }))
+    ).toStrictEqual([{ id: "title", task: PIN_TASK_IDS.save }]);
+  });
+
+  it("still counts an example on its way out as one, until the store has deleted it", async () => {
+    const deleting: (() => void)[] = [];
+
+    const examples = createPinExamples({
+      examples: pinExamples(true),
+      newId: () => ID(1),
+      now: () => new Date("2026-11-11T09:00:00.000Z"),
+      readImage: async () => await Promise.resolve(new Uint8Array([1])),
+      store: {
+        has: () => true,
+        publish: async () => await Promise.resolve({ ok: true }),
+        remove: async () => {
+          // oxlint-disable-next-line promise/avoid-new -- the test finishes the delete by hand.
+          await new Promise<void>((resolve) => {
+            deleting.push(resolve);
+          });
+        },
+      },
+      warn: () => {},
+    });
+
+    examples.remove([ID(1)]);
+
+    const during = examples.removing(ID(1));
+
+    for (const finish of deleting) {
+      finish();
+    }
+
+    await delay(0);
+
+    expect({ after: examples.removing(ID(1)), during }).toStrictEqual({
+      after: false,
+      during: true,
     });
   });
 });

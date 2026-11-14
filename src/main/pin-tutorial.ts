@@ -96,18 +96,11 @@ export const pinTasks = (mac: boolean): readonly TutorialTask[] => {
 export const pinHints = (mac: boolean): readonly TutorialHint[] => {
   const keys = keysFor(mac);
 
+  // No tip for the first pin: the preview itself says "Click to place pin 1", and the panel, only as tall as its page,
+  // has no room for a bubble that covers neither the preview nor the title, Add, Discard and Save.
   return [
     {
-      anchor: "pin-preview",
-      id: "place-pin",
-      page: CAPTURE_PAGE,
-      placement: "below",
-      task: PIN_TASK_IDS.pin,
-      // Short: the panel is only as tall as its page, and a longer tip has no room below the preview but over it.
-      text: "Click the spot that matters to place pin 1.",
-      title: "Pin what matters",
-    },
-    {
+      // The panel marks its title only once a pin is placed, so this waits for pin 1.
       anchor: "title-field",
       id: "title",
       page: CAPTURE_PAGE,
@@ -127,7 +120,7 @@ export const pinHints = (mac: boolean): readonly TutorialHint[] => {
       title: "Your library",
     },
     {
-      // The library's chips for the fields a capture doesn't have yet; the panel's Add menu isn't in the library.
+      // The library's chips for the fields a capture doesn't have yet, on the user's own captures only; the panel's Add menu isn't in the library.
       anchor: "add-fields",
       id: "add-fields",
       page: HOME_PAGE,

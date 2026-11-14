@@ -493,13 +493,6 @@ const shownHint = (
   placement: "below" | "above" | "inside" = "below"
 ) => ({ anchor, id, kind: "hint", placement, text, title });
 
-const PLACE_PIN_HINT = shownHint(
-  "place-pin",
-  "pin-preview",
-  "Pin what matters",
-  "Click the spot that matters to place pin 1."
-);
-
 const TITLE_HINT = shownHint(
   "title",
   "title-field",
@@ -580,6 +573,20 @@ const EXAMPLE_CAPTURES = [
   }),
 ];
 
+/** A capture of the user's own beside the examples: a title and a pin, so the library offers every field to add. */
+const OWN_CAPTURE = {
+  ...exampleCapture(0, {
+    description: "",
+    pins: [{ label: "", x: 800, y: 254 }],
+    steps: [],
+    title: "chairs over the cap",
+  }),
+  capturedAt: ago(0, 9, 5),
+  id: uuid(53),
+  sourceLabel: "Studio Display",
+  updatedAt: ago(0, 9, 5),
+};
+
 /** The tutorial's view for one page, as main builds it (src/main/tutorial/tutorial.ts). */
 const tutorialView = (options: {
   readonly mac?: boolean;
@@ -588,6 +595,8 @@ const tutorialView = (options: {
   readonly examples?: boolean;
   readonly checklist?: boolean;
   readonly active?: object | null;
+  /** Hints main offers the page, which asks for one once its control is there. */
+  readonly offered?: readonly object[];
   readonly spotlight?: number | null;
 }) => {
   const done = options.done ?? 0;
@@ -614,7 +623,7 @@ const tutorialView = (options: {
             total: tasks.length,
           },
     examples: options.examples === true ? EXAMPLE_IDS : [],
-    hints: [],
+    hints: options.offered ?? [],
     spotlight:
       options.spotlight === undefined || options.spotlight === null
         ? null
@@ -1463,12 +1472,13 @@ const makeScenes = (
       platforms: ["macos"],
     },
     {
+      // Before the first pin no tip shows: the preview says where to click, and the title tip waits for a pin.
       data: {
-        tutorial: tutorialView({ active: PLACE_PIN_HINT, checklist: false }),
+        tutorial: tutorialView({ active: TITLE_HINT, checklist: false }),
         view: draftView(desktop, {}),
       },
       fit: true,
-      name: "tutorial-5-place-pin-tip",
+      name: "tutorial-5-panel-before-a-pin",
       page: "capture",
       platforms: ["macos"],
     },
@@ -6572,6 +6582,38 @@ const checkOnboarding = async (
     { hash: `/captures/${EXAMPLE_IDS[0] ?? ""}` }
   );
 
+  // Remove Examples with an example open: the library moves on to what is left, not to "This capture no longer exists".
+  const afterRemoval = async (captures: SceneData["captures"]) => {
+    const { context, tab } = await open(
+      "library",
+      { captures, tutorial: tutorialView({ examples: true }) },
+      `/captures/${EXAMPLE_IDS[0] ?? ""}`
+    );
+
+    await tab.getByText("Getting started").waitFor();
+    await tab.getByRole("button", { name: "Getting started menu" }).click();
+    await tab.getByRole("menuitem", { name: "Remove Examples" }).click();
+    await tab.waitForTimeout(600);
+
+    const shows = await tab.evaluate(() => ({
+      gone:
+        document.body.textContent?.includes("This capture no longer exists") ??
+        false,
+      open: location.hash,
+    }));
+
+    await context.close();
+
+    return shows;
+  };
+
+  const removedBesideOwn = await afterRemoval([
+    OWN_CAPTURE,
+    ...EXAMPLE_CAPTURES,
+  ]);
+
+  const removedAll = await afterRemoval(EXAMPLE_CAPTURES);
+
   const libraryTip = await calls(
     "library",
     {
@@ -6585,31 +6627,126 @@ const checkOnboarding = async (
     { hash: `/captures/${EXAMPLE_IDS[0] ?? ""}` }
   );
 
-  // The library's fields tip points at its add chips, which a capture without a Due shows.
+  // The library's fields tip points at its add chips on a capture of the user's own: on an example it would be used up.
+  const asksFor = async (
+    page: "capture" | "library",
+    data: SceneData,
+    hash?: string
+  ): Promise<string[]> => [
+    ...new Set(
+      await calls(
+        page,
+        data,
+        async (tab) => {
+          await tab.waitForTimeout(1000);
+        },
+        { hash, panel: page === "capture" }
+      )
+    ),
+  ];
+
+  const addFieldsOffered = {
+    example: await asksFor(
+      "library",
+      {
+        ...examplesLibrary,
+        tutorial: tutorialView({ examples: true, offered: [ADD_FIELDS_HINT] }),
+      },
+      `/captures/${EXAMPLE_IDS[0] ?? ""}`
+    ),
+    own: await asksFor(
+      "library",
+      {
+        captures: [OWN_CAPTURE, ...EXAMPLE_CAPTURES],
+        tutorial: tutorialView({ examples: true, offered: [ADD_FIELDS_HINT] }),
+      },
+      `/captures/${OWN_CAPTURE.id}`
+    ),
+  };
+
+  let addFieldsPlace = { chips: -1, spill: -1 };
+
   const addFieldsTip = await calls(
     "library",
     {
-      ...examplesLibrary,
+      captures: [OWN_CAPTURE, ...EXAMPLE_CAPTURES],
       tutorial: tutorialView({ active: ADD_FIELDS_HINT, examples: true }),
     },
     async (tab) => {
       await tab.getByText("None of it is needed when you capture.").waitFor();
+      await tab.waitForTimeout(300);
+
+      // Overlap with the chips, and how far the bubble reaches into the sidebar, in pixels.
+      addFieldsPlace = await tab.evaluate(() => {
+        const bubble = document
+          .querySelector("[data-coach-bubble]")
+          ?.getBoundingClientRect();
+
+        const chips = document
+          .querySelector("[data-coach='add-fields']")
+          ?.getBoundingClientRect();
+
+        const sidebar = document
+          .querySelector("aside[aria-label='Captures']")
+          ?.getBoundingClientRect();
+
+        if (
+          bubble === undefined ||
+          chips === undefined ||
+          sidebar === undefined
+        ) {
+          return { chips: -1, spill: -1 };
+        }
+
+        const overlap =
+          Math.max(
+            0,
+            Math.min(bubble.bottom, chips.bottom) -
+              Math.max(bubble.top, chips.top)
+          ) *
+          Math.max(
+            0,
+            Math.min(bubble.right, chips.right) -
+              Math.max(bubble.left, chips.left)
+          );
+
+        return {
+          chips: Math.round(overlap),
+          spill: Math.max(0, Math.round(sidebar.right - bubble.left)),
+        };
+      });
+
       await click(tab, "Got it");
     },
-    { hash: `/captures/${EXAMPLE_IDS[0] ?? ""}` }
+    { hash: `/captures/${OWN_CAPTURE.id}` }
   );
 
-  // A tip never takes the keyboard from the title: typing after ⌥⌘P still lands there.
+  // Pin 1, at the middle of the crop.
+  const panelPin = { x: 1440, y: 900 };
+
+  // Before the first pin the panel asks for no tip: the preview says where to click, and the title tip waits for a pin.
+  const titleOffered = {
+    afterPin: await asksFor("capture", {
+      tutorial: tutorialView({ checklist: false, offered: [TITLE_HINT] }),
+      view: draftView({}, { pins: [panelPin] }),
+    }),
+    beforePin: await asksFor("capture", {
+      tutorial: tutorialView({ checklist: false, offered: [TITLE_HINT] }),
+      view: draftView({}, {}),
+    }),
+  };
+
+  // A tip never takes the keyboard from the title: typing after the first pin still lands there.
   let titleKept = { focus: "", typed: false };
 
   const panelCalls = await calls(
     "capture",
     {
-      tutorial: tutorialView({ active: PLACE_PIN_HINT, checklist: false }),
-      view: draftView({}, {}),
+      tutorial: tutorialView({ active: TITLE_HINT, checklist: false }),
+      view: draftView({}, { pins: [panelPin] }),
     },
     async (tab) => {
-      await tab.getByText("Pin what matters").waitFor();
+      await tab.getByText("Give it a title").waitFor();
 
       const focus = await tab.evaluate(() =>
         document.activeElement instanceof HTMLElement
@@ -6648,8 +6785,8 @@ const checkOnboarding = async (
 
   const sizedInput: BridgeInput = {
     page: "capture",
-    tutorial: tutorialView({ active: PLACE_PIN_HINT, checklist: false }),
-    view: draftView({}, {}),
+    tutorial: tutorialView({ active: TITLE_HINT, checklist: false }),
+    view: draftView({}, { pins: [panelPin] }),
   };
 
   await sizedTab.addInitScript(installBridge, sizedInput);
@@ -6657,40 +6794,58 @@ const checkOnboarding = async (
   await sizedTab.locator("[data-coach-bubble]").waitFor();
   await sizedTab.waitForTimeout(300);
 
-  const pinTipPlace = await sizedTab.evaluate(() => {
+  // How much of each control the title tip covers, in percent of the control.
+  const titleTipPlace = await sizedTab.evaluate(() => {
     const bubble = document
       .querySelector("[data-coach-bubble]")
       ?.getBoundingClientRect();
 
-    const preview = document
-      .querySelector("[data-testid='pin-preview']")
-      ?.getBoundingClientRect();
+    const buttons = [...document.querySelectorAll("button")];
 
-    if (bubble === undefined || preview === undefined) {
+    const controls = {
+      add: document.querySelector("[data-testid='add-menu']"),
+      discard: buttons.find((button) =>
+        (button.textContent ?? "").startsWith("Discard")
+      ),
+      save: buttons.find((button) =>
+        (button.textContent ?? "").startsWith("Save")
+      ),
+      title: document.querySelector("[data-testid='title-field']"),
+    };
+
+    if (bubble === undefined) {
       return "missing";
     }
 
-    const covered =
-      Math.max(
-        0,
-        Math.min(bubble.bottom, preview.bottom) -
-          Math.max(bubble.top, preview.top)
-      ) *
-      Math.max(
-        0,
-        Math.min(bubble.right, preview.right) -
-          Math.max(bubble.left, preview.left)
-      );
+    const covered = Object.entries(controls).map(([name, control]) => {
+      const box = control?.getBoundingClientRect();
+
+      if (box === undefined) {
+        return `${name} missing`;
+      }
+
+      const area =
+        Math.max(
+          0,
+          Math.min(bubble.bottom, box.bottom) - Math.max(bubble.top, box.top)
+        ) *
+        Math.max(
+          0,
+          Math.min(bubble.right, box.right) - Math.max(bubble.left, box.left)
+        );
+
+      return `${name} ${Math.round((area / (box.width * box.height)) * 100)}%`;
+    });
 
     const side =
       document.querySelector<HTMLElement>(".coach-arrow")?.dataset.side ??
       "inside";
 
-    return `${side}, covers ${Math.round((covered / (preview.width * preview.height)) * 100)}% of the preview`;
+    return `${side}; covers ${covered.join(", ")}`;
   });
 
   await sizedTab.screenshot({
-    path: path.join(OUT, `check-pin-tip-${platform}.png`),
+    path: path.join(OUT, `check-title-tip-${platform}.png`),
   });
   await sized.close();
 
@@ -6798,9 +6953,11 @@ const checkOnboarding = async (
   );
 
   expectSame(
-    "setup and tutorial: Welcome's Return and Not now; Allow and Back; Reopen to finish, the tile's drag and Not now; Reopening… asks again; Done's two ways into the library; the checklist tags the examples, asks only for a task's how-to, and removes the examples; a drawn tip is seen and Got it puts it away, in the library and the panel, where the title keeps the keyboard; the walkthrough's Next has focus at stops 1 and 2, and Esc ends it; menu commands and Edit › Copy act on nothing behind the walkthrough; Settings' Show tips and Reset Tutorial; the panel hands Screen Recording to setup, and an empty image offers the pane and a reopen",
+    "setup and tutorial: Welcome's Return and Not now; Allow and Back; Reopen to finish, the tile's drag and Not now; Reopening… asks again; Done's two ways into the library; the checklist tags the examples, asks only for a task's how-to, and removes the examples, moving off an open one; a drawn tip is seen and Got it puts it away, in the library and the panel, where the title keeps the keyboard; the panel asks for no tip before its first pin, and its title tip covers none of its controls; the library asks for the add-chips tip on the user's own capture, not an example, and it stays out of the sidebar; the walkthrough's Next has focus at stops 1 and 2, and Esc ends it; menu commands and Edit › Copy act on nothing behind the walkthrough; Settings' Show tips and Reset Tutorial; the panel hands Screen Recording to setup, and an empty image offers the pane and a reopen",
     {
       access,
+      addFieldsOffered,
+      addFieldsPlace,
       addFieldsTip,
       checklist,
       done,
@@ -6808,12 +6965,15 @@ const checkOnboarding = async (
       libraryTip,
       panel,
       panelTip,
-      pinTipPlace,
+      removedAll,
+      removedBesideOwn,
       reopen,
       reopening,
       settingsCalls,
       tags,
       titleKept,
+      titleOffered,
+      titleTipPlace,
       walkCovered,
       walkFocus,
       walkMenus,
@@ -6822,6 +6982,11 @@ const checkOnboarding = async (
     },
     {
       access: ["allow:screen", "back"],
+      addFieldsOffered: {
+        example: [],
+        own: ["tutorial:requestHint:add-fields"],
+      },
+      addFieldsPlace: { chips: 0, spill: 0 },
       addFieldsTip: [
         "tutorial:hintShown:add-fields",
         "tutorial:dismissHint:add-fields",
@@ -6834,16 +6999,16 @@ const checkOnboarding = async (
         "tutorial:dismissHint:library",
       ],
       panel: ["setUpScreenRecording"],
-      panelTip: [
-        "tutorial:hintShown:place-pin",
-        "tutorial:dismissHint:place-pin",
-      ],
-      pinTipPlace: "below, covers 0% of the preview",
+      panelTip: ["tutorial:hintShown:title", "tutorial:dismissHint:title"],
+      removedAll: { gone: false, open: "#/" },
+      removedBesideOwn: { gone: false, open: `#/captures/${OWN_CAPTURE.id}` },
       reopen: ["reopen", "startDrag", "next"],
       reopening: ["reopen"],
       settingsCalls: ["setTips:false", "resetTutorial"],
       tags: 2,
       titleKept: { focus: "title-field", typed: true },
+      titleOffered: { afterPin: ["tutorial:requestHint:title"], beforePin: [] },
+      titleTipPlace: "above; covers add 0%, discard 0%, save 0%, title 0%",
       walkCovered: { list: true, prompt: false, stop: "1 of 6" },
       walkFocus: ["Next", "Next"],
       walkMenus: ["tutorial:spotlightDone:"],

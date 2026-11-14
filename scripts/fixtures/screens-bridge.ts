@@ -107,12 +107,13 @@ export interface OwedFixture {
   readonly message: string;
 }
 
-/** What the page's events carry here: nothing for "changed", a command name, or a flush request. */
+/** What the page's events carry here: nothing for "changed", a command name, a flush request, or the tutorial's view. */
 type Payload =
   | string
   | null
   | { readonly id: string; readonly retry: boolean; readonly token: string }
-  | { readonly id: null; readonly leaving: string; readonly token: string };
+  | { readonly id: null; readonly leaving: string; readonly token: string }
+  | { readonly examples: readonly string[] };
 
 type Listener = (payload: Payload) => void;
 
@@ -355,6 +356,33 @@ export const installBridge = (input: BridgeInput): void => {
       getTutorial: async () => await respond(input.tutorial),
       tutorial: (action: { readonly kind: string; readonly id?: string }) => {
         record(`tutorial:${action.kind}:${action.id ?? ""}`);
+
+        // As main: the examples leave the tutorial's view at once, and the list once their files are deleted.
+        if (action.kind === "removeExamples") {
+          const view = input.tutorial;
+
+          const gone = new Set(
+            view !== undefined &&
+              "examples" in view &&
+              Array.isArray(view.examples)
+              ? view.examples.filter(
+                  (id): id is string => typeof id === "string"
+                )
+              : []
+          );
+
+          emit("tutorial", { ...input.tutorial, examples: [] });
+
+          setTimeout(() => {
+            for (let index = captures.length - 1; index >= 0; index -= 1) {
+              if (gone.has(captures[index]?.id ?? "")) {
+                captures.splice(index, 1);
+              }
+            }
+
+            emit("changed", null);
+          }, 50);
+        }
       },
       copyDetails: gated("copyDetails"),
       // As main: the save on its way is dropped, or what it replaced is renamed back; nothing is written. One that can't be stays owed.
