@@ -103,9 +103,10 @@ const explainFailure = async <T>(
 
 /** macOS tints the template; Windows needs the glyph that contrasts with its taskbar, which has its own theme. */
 const trayIconPath = (): string => {
+  // In development, found from this file (out/main/index.js), not the app path: started with the script's path, `electron out/main/index.js`, the app path is out/main.
   const base = app.isPackaged
     ? path.join(process.resourcesPath, "resources")
-    : path.join(app.getAppPath(), "resources");
+    : path.join(import.meta.dirname, "..", "..", "resources");
 
   if (isMac) {
     return path.join(base, "trayTemplate.png");
